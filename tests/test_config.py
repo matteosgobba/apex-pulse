@@ -14,6 +14,7 @@ def test_load_data_config_resolves_project_relative_paths(tmp_path: Path) -> Non
 paths:
   fastf1_cache_dir: data/raw/cache
   lap_output_dir: data/raw/laps
+  session_metadata_output_dir: data/raw/metadata
 fastf1:
   load_telemetry: false
   load_weather: true
@@ -26,6 +27,7 @@ fastf1:
 
     assert config.fastf1_cache_dir == (tmp_path / "data/raw/cache").resolve()
     assert config.lap_output_dir == (tmp_path / "data/raw/laps").resolve()
+    assert config.session_metadata_output_dir == (tmp_path / "data/raw/metadata").resolve()
     assert config.load_telemetry is False
     assert config.load_weather is True
     assert config.load_messages is False

@@ -19,8 +19,10 @@ class ConfigError(ValueError):
 class DataConfig:
     """Resolved paths and FastF1 loading options."""
 
+    project_root: Path
     fastf1_cache_dir: Path
     lap_output_dir: Path
+    session_metadata_output_dir: Path
     load_telemetry: bool = False
     load_weather: bool = False
     load_messages: bool = False
@@ -58,10 +60,13 @@ def load_data_config(
 
     cache_value = _required_string(paths, "fastf1_cache_dir", path)
     output_value = _required_string(paths, "lap_output_dir", path)
+    metadata_output_value = _required_string(paths, "session_metadata_output_dir", path)
 
     return DataConfig(
+        project_root=root,
         fastf1_cache_dir=resolve_project_path(cache_value, root),
         lap_output_dir=resolve_project_path(output_value, root),
+        session_metadata_output_dir=resolve_project_path(metadata_output_value, root),
         load_telemetry=_boolean_option(fastf1_options, "load_telemetry", path),
         load_weather=_boolean_option(fastf1_options, "load_weather", path),
         load_messages=_boolean_option(fastf1_options, "load_messages", path),

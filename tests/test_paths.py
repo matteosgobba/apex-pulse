@@ -35,3 +35,4 @@ def test_ensure_directory_creates_nested_directory(tmp_path: Path) -> None:
 
 def test_slugify_builds_safe_path_component() -> None:
     assert slugify(" Emilia-Romagna GP ") == "emilia-romagna-gp"
+    assert slugify("São Paulo") == "sao-paulo"

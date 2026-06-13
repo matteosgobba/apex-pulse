@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 PROJECT_ROOT_ENV = "F1_PREDICTION_PROJECT_ROOT"
@@ -48,7 +49,8 @@ def ensure_directory(path: Path) -> Path:
 
 def slugify(value: str) -> str:
     """Convert a user-facing identifier to a filesystem-safe lowercase slug."""
-    slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+    normalized = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode()
+    slug = re.sub(r"[^a-z0-9]+", "-", normalized.strip().lower()).strip("-")
     if not slug:
         raise ValueError("Cannot create a path from an empty identifier")
     return slug

@@ -13,7 +13,7 @@ from fastf1.exceptions import DataNotLoadedError
 
 from f1_prediction.config import DataConfig
 from f1_prediction.data.cache import initialize_fastf1_cache
-from f1_prediction.data.schema import select_basic_lap_data
+from f1_prediction.data.schema import select_basic_lap_data, validate_lap_schema
 from f1_prediction.utils.paths import ensure_directory, slugify
 
 LOGGER = logging.getLogger(__name__)
@@ -21,6 +21,19 @@ LOGGER = logging.getLogger(__name__)
 
 class SessionDataUnavailableError(RuntimeError):
     """Raised when FastF1 cannot provide lap timing data for a session."""
+
+
+@dataclass(frozen=True)
+class FastF1SessionData:
+    """Normalized lap data and identifiers loaded from one FastF1 session."""
+
+    season: int
+    event_input: str
+    event_name: str
+    session_input: str
+    session_name: str
+    laps: pd.DataFrame
+    drivers: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -42,6 +55,43 @@ def load_fastf1_session(
     config: DataConfig,
 ) -> SessionLoadResult:
     """Load one historical session and save its basic laps as Parquet."""
+    session_data = load_fastf1_session_data(
+        season=season,
+        event=event,
+        session_identifier=session_identifier,
+        config=config,
+    )
+    output_path = build_lap_output_path(
+        output_dir=config.lap_output_dir,
+        season=season,
+        event=event,
+        session_identifier=session_identifier,
+    )
+    save_laps(session_data.laps, output_path)
+    LOGGER.info(
+        "Saved %s laps for %s drivers to %s",
+        len(session_data.laps),
+        len(session_data.drivers),
+        output_path,
+    )
+
+    return SessionLoadResult(
+        season=season,
+        event=session_data.event_name,
+        session=_session_label(session_data.session_name, session_identifier),
+        driver_count=len(session_data.drivers),
+        lap_count=len(session_data.laps),
+        output_path=output_path,
+    )
+
+
+def load_fastf1_session_data(
+    season: int,
+    event: str,
+    session_identifier: str,
+    config: DataConfig,
+) -> FastF1SessionData:
+    """Load and normalize one FastF1 session without persisting outputs."""
     cache_dir = initialize_fastf1_cache(config.fastf1_cache_dir)
     LOGGER.info("FastF1 cache initialized at %s", cache_dir)
     LOGGER.info("Loading %s %s %s", season, event, session_identifier)
@@ -64,27 +114,18 @@ def load_fastf1_session(
         ) from exc
 
     laps = select_basic_lap_data(raw_laps)
-    output_path = build_lap_output_path(
-        output_dir=config.lap_output_dir,
-        season=season,
-        event=event,
-        session_identifier=session_identifier,
-    )
-    save_laps(laps, output_path)
+    validate_lap_schema(laps)
 
     event_name = _event_name(fastf1_session, event)
     session_name = str(getattr(fastf1_session, "name", session_identifier))
-    session_label = _session_label(session_name, session_identifier)
-    driver_count = _count_drivers(laps)
-    LOGGER.info("Saved %s laps for %s drivers to %s", len(laps), driver_count, output_path)
-
-    return SessionLoadResult(
+    return FastF1SessionData(
         season=season,
-        event=event_name,
-        session=session_label,
-        driver_count=driver_count,
-        lap_count=len(laps),
-        output_path=output_path,
+        event_input=event,
+        event_name=event_name,
+        session_input=session_identifier,
+        session_name=session_name,
+        laps=laps,
+        drivers=_driver_codes(laps),
     )
 
 
@@ -105,11 +146,11 @@ def save_laps(laps: pd.DataFrame, output_path: Path) -> None:
     laps.to_parquet(output_path, engine="pyarrow", index=False)
 
 
-def _count_drivers(laps: pd.DataFrame) -> int:
+def _driver_codes(laps: pd.DataFrame) -> tuple[str, ...]:
     if "Driver" not in laps:
-        return 0
+        return ()
     drivers = laps["Driver"].dropna().astype(str)
-    return int(drivers[drivers.str.len() > 0].nunique())
+    return tuple(drivers[drivers.str.len() > 0].drop_duplicates())
 
 
 def _event_name(session: Any, fallback: str) -> str:
