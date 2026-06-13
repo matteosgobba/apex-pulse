@@ -1,0 +1,5 @@
+# Feature engineering is intentionally deferred until the data-loading foundation is stable.
+push_lap:
+  enabled: false
+  driver_best_threshold_seconds: 2.0
+  session_best_threshold_seconds: 5.0

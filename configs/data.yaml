@@ -1,0 +1,8 @@
+paths:
+  fastf1_cache_dir: data/raw/fastf1_cache
+  lap_output_dir: data/raw/laps
+
+fastf1:
+  load_telemetry: false
+  load_weather: false
+  load_messages: false

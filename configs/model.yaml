@@ -1,0 +1,4 @@
+# Modeling is intentionally deferred beyond Milestone 1.
+model:
+  enabled: false
+  random_state: 42

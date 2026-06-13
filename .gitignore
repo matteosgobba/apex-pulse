@@ -1,2 +1,39 @@
-README.md
-AGENTS.md
+.Rhistory
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local configuration
+.venv/
+venv/
+.env
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+# Generated project artifacts
+data/raw/*
+data/interim/*
+data/processed/*
+data/external/*
+models/*
+reports/figures/*
+reports/metrics/*
+
+# Keep the directory structure in Git
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep
+!models/.gitkeep
+!reports/figures/.gitkeep
+!reports/metrics/.gitkeep
