@@ -151,6 +151,8 @@ def _data_config(project_root: Path) -> DataConfig:
         fastf1_cache_dir=project_root / "cache",
         lap_output_dir=project_root / "laps",
         session_metadata_output_dir=project_root / "metadata",
+        clean_lap_output_dir=project_root / "clean_laps",
+        session_features_output_dir=project_root / "session_features",
     )
 
 

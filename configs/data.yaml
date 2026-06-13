@@ -2,6 +2,8 @@ paths:
   fastf1_cache_dir: data/raw/fastf1_cache
   lap_output_dir: data/raw/laps
   session_metadata_output_dir: data/raw/session_metadata
+  clean_lap_output_dir: data/interim/clean_laps
+  session_features_output_dir: data/processed/session_features
 
 fastf1:
   load_telemetry: false
