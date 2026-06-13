@@ -25,6 +25,7 @@ class DataConfig:
     session_metadata_output_dir: Path
     clean_lap_output_dir: Path
     session_features_output_dir: Path
+    modeling_output_dir: Path
     load_telemetry: bool = False
     load_weather: bool = False
     load_messages: bool = False
@@ -81,6 +82,7 @@ def load_data_config(
     metadata_output_value = _required_string(paths, "session_metadata_output_dir", path)
     clean_output_value = _required_string(paths, "clean_lap_output_dir", path)
     features_output_value = _required_string(paths, "session_features_output_dir", path)
+    modeling_output_value = _required_string(paths, "modeling_output_dir", path)
 
     return DataConfig(
         project_root=root,
@@ -89,6 +91,7 @@ def load_data_config(
         session_metadata_output_dir=resolve_project_path(metadata_output_value, root),
         clean_lap_output_dir=resolve_project_path(clean_output_value, root),
         session_features_output_dir=resolve_project_path(features_output_value, root),
+        modeling_output_dir=resolve_project_path(modeling_output_value, root),
         load_telemetry=_boolean_option(fastf1_options, "load_telemetry", path),
         load_weather=_boolean_option(fastf1_options, "load_weather", path),
         load_messages=_boolean_option(fastf1_options, "load_messages", path),

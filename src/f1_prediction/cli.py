@@ -18,6 +18,10 @@ from f1_prediction.features.build import (
     SessionFeatureBuildSummary,
 )
 from f1_prediction.features.build import build_session_features as run_feature_build
+from f1_prediction.features.modeling_dataset import ModelingDatasetBuildSummary
+from f1_prediction.features.modeling_dataset import (
+    build_modeling_dataset_files as run_modeling_dataset_build,
+)
 from f1_prediction.utils.logging import configure_logging
 
 app = typer.Typer(
@@ -161,6 +165,37 @@ def build_session_features_command(
     _print_feature_build_summary(summary, data_config.project_root)
 
 
+@app.command("build-modeling-dataset")
+def build_modeling_dataset_command(
+    season: Annotated[int, typer.Option(min=1950, help="Championship season.")],
+    event: Annotated[str, typer.Option(help="Event name or circuit location, e.g. Monza.")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Rebuild and overwrite an existing modeling dataset."),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Build qualifying targets and checkpoint-level modeling rows."""
+    configure_logging(verbose=verbose)
+    config = load_data_config(config_path=config_path)
+    try:
+        summary = run_modeling_dataset_build(
+            season=season,
+            event=event,
+            config=config,
+            force=force,
+            progress=typer.echo,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_modeling_dataset_summary(summary, config.project_root)
+
+
 def _print_summary(result: SessionLoadResult) -> None:
     typer.echo("Session loaded successfully")
     typer.echo(f"Season: {result.season}")
@@ -197,6 +232,24 @@ def _display_path(path: Path, project_root: Path) -> str:
         return path.resolve().relative_to(project_root.resolve()).as_posix()
     except ValueError:
         return str(path.resolve())
+
+
+def _print_modeling_dataset_summary(
+    summary: ModelingDatasetBuildSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("")
+    typer.echo("Modeling dataset built successfully")
+    typer.echo(f"Season: {summary.season}")
+    typer.echo(f"Event: {summary.event}")
+    typer.echo(f"Rows: {summary.rows}")
+    typer.echo(f"Drivers: {summary.drivers}")
+    typer.echo(f"Checkpoints: {', '.join(summary.checkpoints)}")
+    typer.echo(f"Output: {_display_path(summary.output_path, project_root)}")
+    if summary.practice_only_drivers:
+        typer.echo(f"Practice-only drivers: {', '.join(summary.practice_only_drivers)}")
+    if summary.qualifying_only_drivers:
+        typer.echo(f"Qualifying-only drivers: {', '.join(summary.qualifying_only_drivers)}")
 
 
 if __name__ == "__main__":
