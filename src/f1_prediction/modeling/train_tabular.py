@@ -275,6 +275,9 @@ def _baseline_comparison(
             best_by_checkpoint[checkpoint] = {
                 "baseline_name": baseline_name,
                 "mae_gap_sec": mae,
+                "mean_abs_position_error": holdout_metrics[baseline_name][checkpoint].get(
+                    "mean_abs_position_error"
+                ),
             }
     deltas: dict[str, dict[str, float | None]] = {}
     for model_name, checkpoint_metrics in model_metrics.items():

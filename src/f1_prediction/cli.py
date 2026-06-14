@@ -13,7 +13,7 @@ from f1_prediction.data.fastf1_loader import (
 )
 from f1_prediction.data.ingest import DEFAULT_EVENT_SESSIONS, EventIngestionSummary
 from f1_prediction.data.ingest import ingest_event as run_event_ingestion
-from f1_prediction.data.season_builder import SeasonDatasetBuildSummary
+from f1_prediction.data.season_builder import SeasonDatasetBuildSummary, resolve_event_selection
 from f1_prediction.data.season_builder import build_season_dataset as run_season_dataset_build
 from f1_prediction.features.build import (
     DEFAULT_PRACTICE_SESSIONS,
@@ -24,6 +24,8 @@ from f1_prediction.features.modeling_dataset import ModelingDatasetBuildSummary
 from f1_prediction.features.modeling_dataset import (
     build_modeling_dataset_files as run_modeling_dataset_build,
 )
+from f1_prediction.modeling.backtest_report import BacktestReportSummary
+from f1_prediction.modeling.backtest_report import create_backtest_report as run_backtest_report
 from f1_prediction.modeling.dataset_report import DatasetQualitySummary
 from f1_prediction.modeling.dataset_report import (
     create_dataset_quality_report as run_dataset_quality_report,
@@ -218,6 +220,14 @@ def build_season_dataset_command(
         list[str] | None,
         typer.Option("--events", help="Optional event filter. Repeat for multiple events."),
     ] = None,
+    additional_events: Annotated[
+        list[str] | None,
+        typer.Argument(hidden=True),
+    ] = None,
+    preset: Annotated[
+        str | None,
+        typer.Option("--preset", help="Optional documented event-list preset."),
+    ] = None,
     force: Annotated[
         bool,
         typer.Option("--force", help="Rebuild existing event pipeline outputs."),
@@ -244,11 +254,16 @@ def build_season_dataset_command(
         project_root=data_config.project_root,
     )
     try:
+        requested_events = resolve_event_selection(
+            seasons,
+            [*(events or []), *(additional_events or [])],
+            preset,
+        )
         summary = run_season_dataset_build(
             seasons=seasons,
             data_config=data_config,
             feature_config=feature_config,
-            events=events,
+            events=requested_events,
             force=force,
             fail_fast=fail_fast,
             progress=typer.echo,
@@ -400,6 +415,47 @@ def train_tabular_models_command(
     _print_tabular_training_summary(summary, config.project_root)
 
 
+@app.command("backtest-report")
+def backtest_report_command(
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    baseline_metrics_path: Annotated[
+        Path | None,
+        typer.Option("--baseline-metrics", help="Optional baseline metrics JSON path."),
+    ] = None,
+    tabular_metrics_path: Annotated[
+        Path | None,
+        typer.Option("--tabular-metrics", help="Optional tabular metrics JSON path."),
+    ] = None,
+    quality_report_path: Annotated[
+        Path | None,
+        typer.Option("--quality-report", help="Optional dataset quality JSON path."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Create a compact model-versus-baseline backtesting report."""
+    configure_logging(verbose=verbose)
+    config = load_data_config(config_path=config_path)
+    try:
+        summary = run_backtest_report(
+            config,
+            dataset_path=dataset_path,
+            baseline_metrics_path=baseline_metrics_path,
+            tabular_metrics_path=tabular_metrics_path,
+            quality_report_path=quality_report_path,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_backtest_report_summary(summary, config.project_root)
+
+
 def _print_summary(result: SessionLoadResult) -> None:
     typer.echo("Session loaded successfully")
     typer.echo(f"Season: {result.season}")
@@ -523,6 +579,20 @@ def _print_tabular_training_summary(
     typer.echo(f"Metrics: {_display_path(summary.metrics_path, project_root)}")
     if summary.predictions_path is not None:
         typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
+
+
+def _print_backtest_report_summary(
+    summary: BacktestReportSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Backtest report complete")
+    typer.echo(f"Dataset rows: {summary.dataset_rows}")
+    typer.echo(f"Events: {summary.n_events}")
+    typer.echo(f"Training status: {summary.training_status}")
+    typer.echo(
+        f"Tabular models: {', '.join(summary.tabular_models) if summary.tabular_models else 'none'}"
+    )
+    typer.echo(f"Report: {_display_path(summary.output_path, project_root)}")
 
 
 if __name__ == "__main__":

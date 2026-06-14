@@ -22,6 +22,27 @@ from f1_prediction.features.modeling_dataset import (
 from f1_prediction.utils.paths import ensure_directory, slugify
 
 ProgressCallback = Callable[[str], None]
+CONVENTIONAL_2024_EVENTS: tuple[str, ...] = (
+    "Bahrain",
+    "Australia",
+    "Japan",
+    "Imola",
+    "Monaco",
+    "Canada",
+    "Spain",
+    "Silverstone",
+    "Hungary",
+    "Netherlands",
+    "Monza",
+    "Abu Dhabi",
+)
+EVENT_PRESETS: dict[str, tuple[str, ...]] = {
+    "conventional_2024": CONVENTIONAL_2024_EVENTS,
+}
+COMMON_EVENT_ALIASES: dict[str, tuple[str, ...]] = {
+    "abu-dhabi": ("yas-island", "united-arab-emirates"),
+    "emilia-romagna": ("imola",),
+}
 
 
 @dataclass(frozen=True)
@@ -32,6 +53,8 @@ class EventReference:
     event: str
     event_name: str
     round_number: int
+    country: str = ""
+    official_event_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -68,6 +91,9 @@ class SeasonDatasetBuildSummary:
     checkpoints: tuple[str, ...]
     output_path: Path
     report_path: Path
+    n_columns: int = 0
+    rows_by_checkpoint: tuple[tuple[str, int], ...] = ()
+    events_by_checkpoint: tuple[tuple[str, int], ...] = ()
 
     @property
     def n_events_successful(self) -> int:
@@ -93,13 +119,35 @@ def discover_season_events(
     for requested in requested_events:
         requested_slug = slugify(requested)
         matches = [
-            reference for reference in references if requested_slug in _event_aliases(reference)
+            reference
+            for reference in references
+            if requested_slug in _event_aliases(reference)
+            or _common_alias_matches(requested_slug, reference)
         ]
         if not matches:
             raise ValueError(f"Event '{requested}' was not found in the {season} FastF1 schedule")
         if matches[0] not in selected:
             selected.append(matches[0])
     return tuple(selected)
+
+
+def resolve_event_selection(
+    seasons: Sequence[int],
+    events: Sequence[str] | None = None,
+    preset: str | None = None,
+) -> tuple[str, ...] | None:
+    """Resolve explicit events or a documented convenience preset."""
+    if events and preset:
+        raise ValueError("Use either explicit --events values or --preset, not both")
+    if not preset:
+        return tuple(events) if events else None
+    if preset not in EVENT_PRESETS:
+        available = ", ".join(sorted(EVENT_PRESETS))
+        raise ValueError(f"Unknown event preset '{preset}'. Available presets: {available}")
+    unique_seasons = tuple(dict.fromkeys(seasons))
+    if preset == "conventional_2024" and unique_seasons != (2024,):
+        raise ValueError("The conventional_2024 preset requires exactly --season 2024")
+    return EVENT_PRESETS[preset]
 
 
 def build_season_dataset(
@@ -192,6 +240,8 @@ def build_season_dataset(
     if not combined.empty:
         ensure_directory(output_path.parent)
         combined.to_parquet(output_path, engine="pyarrow", index=False)
+    else:
+        output_path.unlink(missing_ok=True)
 
     report_path = data_config.metrics_output_dir / "dataset_build_report.json"
     summary = SeasonDatasetBuildSummary(
@@ -204,6 +254,9 @@ def build_season_dataset(
         checkpoints=tuple(CHECKPOINT_SESSIONS),
         output_path=output_path,
         report_path=report_path,
+        n_columns=len(combined.columns),
+        rows_by_checkpoint=_checkpoint_counts(combined),
+        events_by_checkpoint=_checkpoint_event_counts(combined),
     )
     save_dataset_build_report(summary, data_config.project_root)
     return summary
@@ -248,8 +301,11 @@ def build_dataset_report_payload(
         "successful_events": [asdict(event) for event in summary.successful_events],
         "failed_events": [asdict(event) for event in summary.failed_events],
         "n_rows": summary.n_rows,
+        "n_columns": summary.n_columns,
         "n_drivers": summary.n_drivers,
         "checkpoints": list(summary.checkpoints),
+        "rows_by_checkpoint": dict(summary.rows_by_checkpoint),
+        "events_by_checkpoint": dict(summary.events_by_checkpoint),
         "output_path": _portable_path(summary.output_path, project_root),
         "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
@@ -270,17 +326,69 @@ def save_dataset_build_report(
 def _event_reference(season: int, row: pd.Series) -> EventReference:
     location = str(row.get("Location") or "").strip()
     event_name = str(row.get("EventName") or location).strip()
+    country = str(row.get("Country") or "").strip()
+    official_event_name = str(row.get("OfficialEventName") or "").strip()
     event = location or event_name
     return EventReference(
         season=season,
         event=event,
         event_name=event_name,
         round_number=int(row["RoundNumber"]),
+        country=country,
+        official_event_name=official_event_name,
     )
 
 
 def _event_aliases(reference: EventReference) -> set[str]:
-    return {slugify(reference.event), slugify(reference.event_name)}
+    aliases = {
+        slugify(value)
+        for value in (
+            reference.event,
+            reference.event_name,
+            reference.country,
+            reference.official_event_name,
+        )
+        if value
+    }
+    aliases.update(_event_name_bases(aliases))
+    return aliases
+
+
+def _event_name_bases(aliases: set[str]) -> set[str]:
+    suffixes = ("-grand-prix", "-gp")
+    bases: set[str] = set()
+    for alias in aliases:
+        for suffix in suffixes:
+            if alias.endswith(suffix):
+                bases.add(alias.removesuffix(suffix))
+    return bases
+
+
+def _common_alias_matches(requested_slug: str, reference: EventReference) -> bool:
+    reference_aliases = _event_aliases(reference)
+    for common_name, aliases in COMMON_EVENT_ALIASES.items():
+        alias_group = {common_name, *aliases}
+        if requested_slug in alias_group and reference_aliases & alias_group:
+            return True
+    return False
+
+
+def _checkpoint_counts(dataset: pd.DataFrame) -> tuple[tuple[str, int], ...]:
+    if dataset.empty or "checkpoint" not in dataset:
+        return ()
+    return tuple(
+        (str(checkpoint), int(count))
+        for checkpoint, count in dataset.groupby("checkpoint", sort=False).size().items()
+    )
+
+
+def _checkpoint_event_counts(dataset: pd.DataFrame) -> tuple[tuple[str, int], ...]:
+    if dataset.empty or "checkpoint" not in dataset:
+        return ()
+    counts = dataset.groupby("checkpoint", sort=False)[["season", "event_slug"]].apply(
+        lambda rows: len(rows.drop_duplicates())
+    )
+    return tuple((str(checkpoint), int(count)) for checkpoint, count in counts.items())
 
 
 def _portable_path(path: Path, project_root: Path) -> str:

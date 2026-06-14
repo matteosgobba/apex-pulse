@@ -184,7 +184,87 @@ def test_build_season_dataset_accepts_repeated_seasons_and_event_filter(
 
     assert result.exit_code == 0
     assert captured["seasons"] == [2023, 2024]
-    assert captured["events"] == ["Monza"]
+    assert captured["events"] == ("Monza",)
+
+
+def test_build_season_dataset_accepts_preset(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    feature_config = FeatureConfig(push_lap=PushLapConfig(1.03, 1.07, ("SOFT",)))
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_feature_config",
+        lambda config_path=None, project_root=None: feature_config,
+    )
+
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        return SeasonDatasetBuildSummary(
+            requested_seasons=(2024,),
+            n_events_requested=12,
+            successful_events=(),
+            failed_events=(),
+            n_rows=0,
+            n_drivers=0,
+            checkpoints=("after_fp1", "after_fp2", "after_fp3"),
+            output_path=tmp_path / "modeling/combined/modeling_dataset.parquet",
+            report_path=tmp_path / "metrics/dataset_build_report.json",
+        )
+
+    monkeypatch.setattr("f1_prediction.cli.run_season_dataset_build", fake_build)
+    result = CliRunner().invoke(
+        app,
+        ["build-season-dataset", "--season", "2024", "--preset", "conventional_2024"],
+    )
+
+    assert result.exit_code == 0
+    assert "Bahrain" in captured["events"]
+    assert "Abu Dhabi" in captured["events"]
+
+
+def test_build_season_dataset_accepts_multiple_events_after_one_option(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    feature_config = FeatureConfig(push_lap=PushLapConfig(1.03, 1.07, ("SOFT",)))
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_feature_config",
+        lambda config_path=None, project_root=None: feature_config,
+    )
+
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        return SeasonDatasetBuildSummary(
+            requested_seasons=(2024,),
+            n_events_requested=3,
+            successful_events=(),
+            failed_events=(),
+            n_rows=0,
+            n_drivers=0,
+            checkpoints=("after_fp1", "after_fp2", "after_fp3"),
+            output_path=tmp_path / "modeling/combined/modeling_dataset.parquet",
+            report_path=tmp_path / "metrics/dataset_build_report.json",
+        )
+
+    monkeypatch.setattr("f1_prediction.cli.run_season_dataset_build", fake_build)
+    result = CliRunner().invoke(
+        app,
+        [
+            "build-season-dataset",
+            "--season",
+            "2024",
+            "--events",
+            "Bahrain",
+            "Australia",
+            "Japan",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["events"] == ("Bahrain", "Australia", "Japan")
 
 
 def test_evaluate_baselines_command(monkeypatch, tmp_path: Path) -> None:
