@@ -47,6 +47,28 @@ def test_backtest_delta_uses_holdout_comparable_baseline() -> None:
     assert report["model_vs_baseline_delta_mae_by_checkpoint"]["after_fp1"] == pytest.approx(-0.15)
 
 
+def test_backtest_report_prefers_walk_forward_over_repeated_holdout() -> None:
+    repeated = _multi_fold_metrics("repeated_event_holdout", 7)
+    walk_forward = _multi_fold_metrics("walk_forward", 4)
+
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        repeated_metrics=repeated,
+        walk_forward_metrics=walk_forward,
+    )
+
+    assert report["available_backtests"] == [
+        "walk_forward",
+        "repeated_event_holdout",
+        "single_event_holdout",
+    ]
+    assert report["preferred_backtest_strategy"] == "walk_forward"
+    assert report["n_folds_successful"] == 4
+    assert report["best_model_by_checkpoint"]["after_fp1"]["model_name"] == "ridge"
+
+
 def _quality() -> dict[str, object]:
     return {
         "n_rows": 120,
@@ -96,6 +118,30 @@ def _trained_metrics() -> dict[str, object]:
                     "mean_abs_position_error": 5.0,
                 }
             },
+        },
+        "best_baseline_by_checkpoint": {
+            "after_fp1": {
+                "baseline_name": "push",
+                "mae_gap_sec": 0.4,
+                "mean_abs_position_error": 3.0,
+            }
+        },
+    }
+
+
+def _multi_fold_metrics(strategy: str, folds: int) -> dict[str, object]:
+    return {
+        "status": "complete",
+        "strategy": strategy,
+        "n_folds_successful": folds,
+        "n_folds_failed": 0,
+        "tabular_models": ["ridge", "random_forest"],
+        "best_model_by_checkpoint": {
+            "after_fp1": {
+                "model_name": "ridge",
+                "mae_gap_sec": 0.3,
+                "mean_abs_position_error": 2.0,
+            }
         },
         "best_baseline_by_checkpoint": {
             "after_fp1": {

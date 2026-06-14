@@ -26,6 +26,11 @@ from f1_prediction.features.modeling_dataset import (
 )
 from f1_prediction.modeling.backtest_report import BacktestReportSummary
 from f1_prediction.modeling.backtest_report import create_backtest_report as run_backtest_report
+from f1_prediction.modeling.backtest_tabular import (
+    BacktestStrategy,
+    TabularBacktestSummary,
+    run_tabular_backtest,
+)
 from f1_prediction.modeling.dataset_report import DatasetQualitySummary
 from f1_prediction.modeling.dataset_report import (
     create_dataset_quality_report as run_dataset_quality_report,
@@ -456,6 +461,68 @@ def backtest_report_command(
     _print_backtest_report_summary(summary, config.project_root)
 
 
+@app.command("backtest-tabular-models")
+def backtest_tabular_models_command(
+    strategy: Annotated[BacktestStrategy, typer.Option(help="Repeated backtesting strategy.")],
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    test_events: Annotated[
+        list[str] | None,
+        typer.Option("--test-events", help="Repeated-holdout test event filter."),
+    ] = None,
+    additional_test_events: Annotated[
+        list[str] | None,
+        typer.Argument(hidden=True),
+    ] = None,
+    min_events: Annotated[
+        int,
+        typer.Option(min=2, help="Minimum unique events required for backtesting."),
+    ] = 5,
+    min_train_events: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum prior events before walk-forward testing."),
+    ] = 5,
+    fail_fast: Annotated[
+        bool,
+        typer.Option("--fail-fast", help="Stop after the first failed fold."),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Backtest simple tabular models across repeated event-safe folds."""
+    configure_logging(verbose=verbose)
+    config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=config.project_root,
+    )
+    requested_test_events = [*(test_events or []), *(additional_test_events or [])]
+    try:
+        summary = run_tabular_backtest(
+            config,
+            strategy=strategy,
+            dataset_path=dataset_path,
+            test_events=requested_test_events or None,
+            min_events=min_events,
+            min_train_events=min_train_events,
+            fail_fast=fail_fast,
+            model_config=model_config,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_tabular_backtest_summary(summary, config.project_root)
+
+
 def _print_summary(result: SessionLoadResult) -> None:
     typer.echo("Session loaded successfully")
     typer.echo(f"Season: {result.season}")
@@ -593,6 +660,23 @@ def _print_backtest_report_summary(
         f"Tabular models: {', '.join(summary.tabular_models) if summary.tabular_models else 'none'}"
     )
     typer.echo(f"Report: {_display_path(summary.output_path, project_root)}")
+
+
+def _print_tabular_backtest_summary(
+    summary: TabularBacktestSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Tabular backtest complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Strategy: {summary.strategy}")
+    typer.echo(f"Events: {summary.n_events}")
+    typer.echo(f"Folds successful: {summary.n_folds_successful}")
+    typer.echo(f"Folds failed: {summary.n_folds_failed}")
+    typer.echo(f"Prediction rows: {summary.prediction_rows}")
+    typer.echo(f"Metrics: {_display_path(summary.metrics_path, project_root)}")
+    typer.echo(f"Folds: {_display_path(summary.folds_path, project_root)}")
+    if summary.predictions_path is not None:
+        typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
 
 
 if __name__ == "__main__":

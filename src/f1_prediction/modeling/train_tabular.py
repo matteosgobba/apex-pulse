@@ -122,8 +122,8 @@ def train_tabular_models(
     test = dataset.loc[list(split.test_indices)].copy()
     if train.empty:
         raise ValueError("The selected holdout leaves no events available for training")
-    predictions, fitted_models = _fit_and_predict(train, test, model_config=settings)
-    metrics = _metrics_by_model_checkpoint(predictions)
+    predictions, fitted_models = fit_and_predict(train, test, model_config=settings)
+    metrics = metrics_by_model_checkpoint(predictions)
     predictions_path = config.metrics_output_dir / "tabular_model_predictions.parquet"
     predictions.to_parquet(predictions_path, engine="pyarrow", index=False)
 
@@ -189,7 +189,7 @@ def _training_split(
     return latest_event_holdout(dataset)
 
 
-def _fit_and_predict(
+def fit_and_predict(
     train: pd.DataFrame,
     test: pd.DataFrame,
     *,
@@ -244,7 +244,7 @@ def _finish_predictions(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def _metrics_by_model_checkpoint(
+def metrics_by_model_checkpoint(
     predictions: pd.DataFrame,
 ) -> dict[str, dict[str, dict[str, float | None]]]:
     metrics: dict[str, dict[str, dict[str, float | None]]] = {}

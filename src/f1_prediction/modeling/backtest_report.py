@@ -36,6 +36,8 @@ def create_backtest_report(
     baseline_metrics_path: Path | None = None,
     tabular_metrics_path: Path | None = None,
     quality_report_path: Path | None = None,
+    repeated_metrics_path: Path | None = None,
+    walk_forward_metrics_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -55,6 +57,14 @@ def create_backtest_report(
         quality_report_path or config.metrics_output_dir / "dataset_quality_report.json",
         config.project_root,
     )
+    repeated_path = _resolve_path(
+        repeated_metrics_path or config.metrics_output_dir / "repeated_event_holdout_metrics.json",
+        config.project_root,
+    )
+    walk_forward_path = _resolve_path(
+        walk_forward_metrics_path or config.metrics_output_dir / "walk_forward_metrics.json",
+        config.project_root,
+    )
     dataset = pd.read_parquet(source_path)
     quality = (
         _read_json(quality_path)
@@ -63,7 +73,15 @@ def create_backtest_report(
     )
     baseline_metrics = _read_json(baseline_path) if baseline_path.is_file() else {}
     tabular_metrics = _read_json(tabular_path) if tabular_path.is_file() else None
-    payload = build_backtest_report_payload(quality, baseline_metrics, tabular_metrics)
+    repeated_metrics = _read_json(repeated_path) if repeated_path.is_file() else None
+    walk_forward_metrics = _read_json(walk_forward_path) if walk_forward_path.is_file() else None
+    payload = build_backtest_report_payload(
+        quality,
+        baseline_metrics,
+        tabular_metrics,
+        repeated_metrics=repeated_metrics,
+        walk_forward_metrics=walk_forward_metrics,
+    )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
     ensure_directory(output_path.parent)
@@ -83,8 +101,28 @@ def build_backtest_report_payload(
     quality: dict[str, Any],
     baseline_metrics: dict[str, Any],
     tabular_metrics: dict[str, Any] | None,
+    *,
+    repeated_metrics: dict[str, Any] | None = None,
+    walk_forward_metrics: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
+    available_backtests = _available_backtests(
+        walk_forward_metrics,
+        repeated_metrics,
+        tabular_metrics,
+    )
+    preferred_strategy, preferred_metrics = _preferred_backtest(
+        walk_forward_metrics,
+        repeated_metrics,
+    )
+    if preferred_metrics is not None:
+        return _multi_fold_report_payload(
+            quality,
+            preferred_strategy,
+            preferred_metrics,
+            available_backtests,
+        )
+
     training_status = (
         str(tabular_metrics.get("status", "unavailable")) if tabular_metrics else "unavailable"
     )
@@ -115,11 +153,86 @@ def build_backtest_report_payload(
         "best_baseline_by_checkpoint": best_baselines,
         "tabular_models_available": tabular_models,
         "best_tabular_model_by_checkpoint": best_models,
+        "training_status": training_status,
+        "available_backtests": available_backtests,
+        "preferred_backtest_strategy": (
+            "single_event_holdout" if training_status == "trained" else None
+        ),
+        "best_model_by_checkpoint": best_models,
         "model_vs_baseline_delta_mae_by_checkpoint": mae_deltas,
         "model_vs_baseline_delta_position_error_by_checkpoint": position_deltas,
-        "training_status": training_status,
+        "n_folds_successful": 1 if training_status == "trained" else 0,
+        "n_folds_failed": 0,
         "created_at_utc": _utc_now(),
     }
+
+
+def _multi_fold_report_payload(
+    quality: dict[str, Any],
+    strategy: str,
+    metrics: dict[str, Any],
+    available_backtests: list[str],
+) -> dict[str, object]:
+    best_models = metrics.get("best_model_by_checkpoint", {})
+    best_baselines = metrics.get("best_baseline_by_checkpoint", {})
+    checkpoints = [str(value) for value in quality.get("checkpoints", [])]
+    mae_deltas: dict[str, float | None] = {}
+    position_deltas: dict[str, float | None] = {}
+    for checkpoint in checkpoints:
+        model = best_models.get(checkpoint, {})
+        baseline = best_baselines.get(checkpoint, {})
+        mae_deltas[checkpoint] = _delta(model.get("mae_gap_sec"), baseline.get("mae_gap_sec"))
+        position_deltas[checkpoint] = _delta(
+            model.get("mean_abs_position_error"),
+            baseline.get("mean_abs_position_error"),
+        )
+    tabular_models = list(metrics.get("tabular_models", []))
+    return {
+        "dataset_rows": int(quality.get("n_rows", 0)),
+        "n_events": int(quality.get("n_events", 0)),
+        "events": list(quality.get("events", [])),
+        "n_drivers": int(quality.get("n_drivers", 0)),
+        "checkpoints": checkpoints,
+        "best_baseline_by_checkpoint": best_baselines,
+        "tabular_models_available": tabular_models,
+        "best_tabular_model_by_checkpoint": best_models,
+        "best_model_by_checkpoint": best_models,
+        "model_vs_baseline_delta_mae_by_checkpoint": mae_deltas,
+        "model_vs_baseline_delta_position_error_by_checkpoint": position_deltas,
+        "training_status": str(metrics.get("status", "unavailable")),
+        "available_backtests": available_backtests,
+        "preferred_backtest_strategy": strategy,
+        "n_folds_successful": int(metrics.get("n_folds_successful", 0)),
+        "n_folds_failed": int(metrics.get("n_folds_failed", 0)),
+        "created_at_utc": _utc_now(),
+    }
+
+
+def _available_backtests(
+    walk_forward: dict[str, Any] | None,
+    repeated: dict[str, Any] | None,
+    single: dict[str, Any] | None,
+) -> list[str]:
+    available: list[str] = []
+    if walk_forward is not None:
+        available.append("walk_forward")
+    if repeated is not None:
+        available.append("repeated_event_holdout")
+    if single is not None:
+        available.append("single_event_holdout")
+    return available
+
+
+def _preferred_backtest(
+    walk_forward: dict[str, Any] | None,
+    repeated: dict[str, Any] | None,
+) -> tuple[str | None, dict[str, Any] | None]:
+    usable_statuses = {"complete", "partial"}
+    if walk_forward and walk_forward.get("status") in usable_statuses:
+        return "walk_forward", walk_forward
+    if repeated and repeated.get("status") in usable_statuses:
+        return "repeated_event_holdout", repeated
+    return None, None
 
 
 def _best_baselines(
