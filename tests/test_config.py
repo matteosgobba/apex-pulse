@@ -6,6 +6,7 @@ from f1_prediction.config import (
     ConfigError,
     load_data_config,
     load_feature_config,
+    load_model_config,
     load_yaml_config,
 )
 
@@ -74,3 +75,27 @@ push_lap:
     assert config.push_lap.driver_best_pct_threshold == 1.03
     assert config.push_lap.session_best_pct_threshold == 1.07
     assert config.push_lap.allowed_compounds == ("SOFT", "MEDIUM")
+
+
+def test_load_model_config_reads_tabular_settings(tmp_path: Path) -> None:
+    config_path = tmp_path / "model.yaml"
+    config_path.write_text(
+        """
+model:
+  min_events: 6
+  random_state: 7
+  ridge_alpha: 2.0
+  random_forest:
+    n_estimators: 50
+    max_depth: 4
+    min_samples_leaf: 3
+""".strip(),
+        encoding="utf-8",
+    )
+
+    config = load_model_config(config_path=config_path, project_root=tmp_path)
+
+    assert config.min_events == 6
+    assert config.random_state == 7
+    assert config.ridge_alpha == 2.0
+    assert config.random_forest.n_estimators == 50

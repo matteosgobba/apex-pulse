@@ -50,17 +50,23 @@ def compute_prediction_metrics(predictions: pd.DataFrame) -> dict[str, float | N
 
 
 def _spearman(ranking: pd.DataFrame) -> float | None:
-    if len(ranking) < 2:
-        return None
-    correlation = (
-        ranking["predicted_quali_position"]
-        .astype(float)
-        .corr(
-            ranking["quali_position"].astype(float),
-            method="spearman",
+    event_correlations: list[float] = []
+    for _, event_rows in ranking.groupby(["season", "event_slug"], sort=False):
+        if len(event_rows) < 2:
+            continue
+        correlation = (
+            event_rows["predicted_quali_position"]
+            .astype(float)
+            .corr(
+                event_rows["quali_position"].astype(float),
+                method="spearman",
+            )
         )
-    )
-    return _finite_or_none(correlation)
+        if pd.notna(correlation):
+            event_correlations.append(float(correlation))
+    if not event_correlations:
+        return None
+    return float(sum(event_correlations) / len(event_correlations))
 
 
 def _top_k_recall(ranking: pd.DataFrame, k: int) -> float | None:

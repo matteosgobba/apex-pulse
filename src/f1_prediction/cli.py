@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from f1_prediction.config import load_data_config, load_feature_config
+from f1_prediction.config import load_data_config, load_feature_config, load_model_config
 from f1_prediction.data.fastf1_loader import (
     SessionDataUnavailableError,
     SessionLoadResult,
@@ -24,8 +24,16 @@ from f1_prediction.features.modeling_dataset import ModelingDatasetBuildSummary
 from f1_prediction.features.modeling_dataset import (
     build_modeling_dataset_files as run_modeling_dataset_build,
 )
+from f1_prediction.modeling.dataset_report import DatasetQualitySummary
+from f1_prediction.modeling.dataset_report import (
+    create_dataset_quality_report as run_dataset_quality_report,
+)
 from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
 from f1_prediction.modeling.evaluate_baselines import evaluate_baselines as run_baseline_evaluation
+from f1_prediction.modeling.splits import DatasetSplitSummary, SplitStrategy
+from f1_prediction.modeling.splits import write_dataset_split_report as run_dataset_split
+from f1_prediction.modeling.train_tabular import TabularTrainingSummary
+from f1_prediction.modeling.train_tabular import train_tabular_models as run_tabular_training
 from f1_prediction.utils.logging import configure_logging
 
 app = typer.Typer(
@@ -276,6 +284,122 @@ def evaluate_baselines_command(
     _print_baseline_evaluation_summary(summary, config.project_root)
 
 
+@app.command("dataset-report")
+def dataset_report_command(
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Report modeling dataset coverage and missingness."""
+    configure_logging(verbose=verbose)
+    config = load_data_config(config_path=config_path)
+    try:
+        summary = run_dataset_quality_report(config, dataset_path=dataset_path)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_dataset_quality_summary(summary, config.project_root)
+
+
+@app.command("split-dataset")
+def split_dataset_command(
+    strategy: Annotated[SplitStrategy, typer.Option(help="Time-aware split strategy.")],
+    test_events: Annotated[
+        list[str] | None,
+        typer.Option("--test-events", help="Test event. Repeat for multiple events."),
+    ] = None,
+    test_seasons: Annotated[
+        list[int] | None,
+        typer.Option("--test-seasons", help="Test season. Repeat for multiple seasons."),
+    ] = None,
+    min_train_events: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum prior events for walk-forward folds."),
+    ] = 3,
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Create leakage-safe event, season, or walk-forward split metadata."""
+    configure_logging(verbose=verbose)
+    config = load_data_config(config_path=config_path)
+    try:
+        summary = run_dataset_split(
+            config,
+            strategy=strategy,
+            dataset_path=dataset_path,
+            test_events=test_events,
+            test_seasons=test_seasons,
+            min_train_events=min_train_events,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_dataset_split_summary(summary, config.project_root)
+
+
+@app.command("train-tabular-models")
+def train_tabular_models_command(
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    test_season: Annotated[
+        int | None,
+        typer.Option(min=1950, help="Season held out from all training rows."),
+    ] = None,
+    test_events: Annotated[
+        list[str] | None,
+        typer.Option("--test-events", help="Test event. Repeat for multiple events."),
+    ] = None,
+    min_events: Annotated[
+        int | None,
+        typer.Option(min=2, help="Minimum unique events required before training."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Train simple checkpoint-safe Ridge and Random Forest regressors."""
+    configure_logging(verbose=verbose)
+    config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=config.project_root,
+    )
+    try:
+        summary = run_tabular_training(
+            config,
+            dataset_path=dataset_path,
+            test_season=test_season,
+            test_events=test_events,
+            min_events=min_events,
+            model_config=model_config,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_tabular_training_summary(summary, config.project_root)
+
+
 def _print_summary(result: SessionLoadResult) -> None:
     typer.echo("Session loaded successfully")
     typer.echo(f"Season: {result.season}")
@@ -359,6 +483,46 @@ def _print_baseline_evaluation_summary(
     typer.echo(f"Prediction rows: {summary.prediction_rows}")
     typer.echo(f"Metrics: {_display_path(summary.metrics_path, project_root)}")
     typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
+
+
+def _print_dataset_quality_summary(summary: DatasetQualitySummary, project_root: Path) -> None:
+    typer.echo("Dataset quality report complete")
+    typer.echo(f"Rows: {summary.n_rows}")
+    typer.echo(f"Seasons: {summary.n_seasons}")
+    typer.echo(f"Events: {summary.n_events}")
+    typer.echo(f"Drivers: {summary.n_drivers}")
+    typer.echo(f"Checkpoints: {', '.join(summary.checkpoints)}")
+    typer.echo(f"Report: {_display_path(summary.report_path, project_root)}")
+
+
+def _print_dataset_split_summary(summary: DatasetSplitSummary, project_root: Path) -> None:
+    typer.echo("Dataset split report complete")
+    typer.echo(f"Strategy: {summary.strategy}")
+    typer.echo(f"Train rows: {summary.train_rows}")
+    typer.echo(f"Test rows: {summary.test_rows}")
+    if summary.folds:
+        typer.echo(f"Walk-forward folds: {summary.folds}")
+    typer.echo(f"Report: {_display_path(summary.report_path, project_root)}")
+
+
+def _print_tabular_training_summary(
+    summary: TabularTrainingSummary,
+    project_root: Path,
+) -> None:
+    if summary.status == "skipped":
+        typer.echo("Tabular model training skipped")
+        typer.echo(f"Reason: {summary.reason}")
+        typer.echo(f"Report: {_display_path(summary.metrics_path, project_root)}")
+        return
+    typer.echo("Tabular model training complete")
+    typer.echo(f"Events: {summary.n_events}")
+    typer.echo(f"Train events: {summary.train_events}")
+    typer.echo(f"Test events: {summary.test_events}")
+    typer.echo(f"Models: {', '.join(summary.models)}")
+    typer.echo(f"Prediction rows: {summary.prediction_rows}")
+    typer.echo(f"Metrics: {_display_path(summary.metrics_path, project_root)}")
+    if summary.predictions_path is not None:
+        typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
 
 
 if __name__ == "__main__":

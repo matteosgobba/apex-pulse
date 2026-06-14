@@ -48,6 +48,25 @@ class FeatureConfig:
     push_lap: PushLapConfig
 
 
+@dataclass(frozen=True)
+class RandomForestConfig:
+    """Conservative Random Forest settings for the first tabular model."""
+
+    n_estimators: int
+    max_depth: int
+    min_samples_leaf: int
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """Simple tabular model and dataset-size settings."""
+
+    min_events: int
+    random_state: int
+    ridge_alpha: float
+    random_forest: RandomForestConfig
+
+
 def load_yaml_config(path: Path) -> dict[str, Any]:
     """Load a YAML file and require a mapping at its root."""
     if not path.is_file():
@@ -129,6 +148,39 @@ def load_feature_config(
     )
 
 
+def load_model_config(
+    config_path: Path | None = None,
+    project_root: Path | None = None,
+) -> ModelConfig:
+    """Load conservative first-model settings from YAML."""
+    root = (project_root or get_project_root()).resolve()
+    path = config_path or root / "configs" / "model.yaml"
+    if not path.is_absolute():
+        path = root / path
+    raw_config = load_yaml_config(path)
+    model = _required_mapping(raw_config, "model", path)
+    random_forest = _required_mapping(model, "random_forest", path)
+    config = ModelConfig(
+        min_events=_required_integer(model, "min_events", path),
+        random_state=_required_integer(model, "random_state", path),
+        ridge_alpha=_required_number(model, "ridge_alpha", path),
+        random_forest=RandomForestConfig(
+            n_estimators=_required_integer(random_forest, "n_estimators", path),
+            max_depth=_required_integer(random_forest, "max_depth", path),
+            min_samples_leaf=_required_integer(random_forest, "min_samples_leaf", path),
+        ),
+    )
+    if config.min_events < 2 or config.ridge_alpha <= 0:
+        raise ConfigError(f"Model min_events and ridge_alpha must be positive in {path}")
+    if (
+        config.random_forest.n_estimators < 1
+        or config.random_forest.max_depth < 1
+        or config.random_forest.min_samples_leaf < 1
+    ):
+        raise ConfigError(f"Random Forest settings must be positive in {path}")
+    return config
+
+
 def _required_mapping(config: dict[str, Any], key: str, path: Path) -> dict[str, Any]:
     value = config.get(key)
     if not isinstance(value, dict):
@@ -155,6 +207,13 @@ def _required_number(config: dict[str, Any], key: str, path: Path) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise ConfigError(f"'{key}' must be a number in {path}")
     return float(value)
+
+
+def _required_integer(config: dict[str, Any], key: str, path: Path) -> int:
+    value = config.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConfigError(f"'{key}' must be an integer in {path}")
+    return value
 
 
 def _required_string_list(config: dict[str, Any], key: str, path: Path) -> list[str]:

@@ -125,7 +125,7 @@ def build_season_dataset(
     )
     successful: list[SuccessfulEventBuild] = []
     failed: list[FailedEventBuild] = []
-    event_paths: list[Path] = []
+    event_frames: list[pd.DataFrame] = []
 
     for reference in event_references:
         _report(
@@ -161,7 +161,8 @@ def build_season_dataset(
                 progress=progress,
             )
             frame = pd.read_parquet(modeling.output_path)
-            event_paths.append(modeling.output_path)
+            frame["event_order"] = reference.round_number
+            event_frames.append(frame)
             successful.append(
                 SuccessfulEventBuild(
                     season=reference.season,
@@ -186,7 +187,7 @@ def build_season_dataset(
             if fail_fast:
                 break
 
-    combined = combine_event_dataset_files(event_paths)
+    combined = combine_event_datasets(event_frames)
     output_path = build_combined_dataset_path(data_config.modeling_output_dir)
     if not combined.empty:
         ensure_directory(output_path.parent)
@@ -215,10 +216,12 @@ def combine_event_datasets(event_frames: Sequence[pd.DataFrame]) -> pd.DataFrame
     combined = pd.concat(event_frames, ignore_index=True, sort=False)
     checkpoint_order = {name: index for index, name in enumerate(CHECKPOINT_SESSIONS)}
     combined["_checkpoint_order"] = combined["checkpoint"].map(checkpoint_order)
+    event_sort_column = "event_order" if "event_order" in combined else "_event_appearance"
+    combined["_event_appearance"] = combined.groupby(["season", "event_slug"], sort=False).ngroup()
     combined = combined.sort_values(
-        ["season", "event_slug", "_checkpoint_order", "quali_position", "driver"],
+        ["season", event_sort_column, "_checkpoint_order", "quali_position", "driver"],
         kind="stable",
-    ).drop(columns="_checkpoint_order")
+    ).drop(columns=["_checkpoint_order", "_event_appearance"])
     return combined.reset_index(drop=True)
 
 

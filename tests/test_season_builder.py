@@ -42,7 +42,7 @@ def test_combine_event_datasets_concatenates_and_orders_synthetic_events() -> No
     combined = combine_event_datasets((spa, monza))
 
     assert len(combined) == 6
-    assert combined["event"].tolist()[:3] == ["Monza"] * 3
+    assert combined["event"].tolist()[:3] == ["Spa"] * 3
     assert combined["checkpoint"].tolist()[:3] == [
         "after_fp1",
         "after_fp2",
@@ -98,6 +98,7 @@ def _event_frame(event: str, round_number: int) -> pd.DataFrame:
             "season": [2024] * 3,
             "event": [event] * 3,
             "event_slug": [event.lower()] * 3,
+            "event_order": [round_number] * 3,
             "checkpoint": ["after_fp3", "after_fp1", "after_fp2"],
             "driver": ["NOR"] * 3,
             "quali_position": [round_number] * 3,

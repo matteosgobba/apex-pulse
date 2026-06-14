@@ -1,4 +1,8 @@
-# Modeling is intentionally deferred beyond Milestone 1.
 model:
-  enabled: false
+  min_events: 5
   random_state: 42
+  ridge_alpha: 1.0
+  random_forest:
+    n_estimators: 200
+    max_depth: 8
+    min_samples_leaf: 2
