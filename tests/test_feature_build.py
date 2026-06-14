@@ -55,6 +55,7 @@ def _data_config(project_root: Path) -> DataConfig:
         clean_lap_output_dir=project_root / "clean_laps",
         session_features_output_dir=project_root / "session_features",
         modeling_output_dir=project_root / "modeling",
+        metrics_output_dir=project_root / "metrics",
     )
 
 

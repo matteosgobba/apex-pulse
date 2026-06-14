@@ -23,6 +23,7 @@ paths:
   clean_lap_output_dir: data/interim/clean_laps
   session_features_output_dir: data/processed/session_features
   modeling_output_dir: data/processed/modeling
+  metrics_output_dir: reports/metrics
 fastf1:
   load_telemetry: false
   load_weather: true
@@ -42,6 +43,7 @@ fastf1:
         == (tmp_path / "data/processed/session_features").resolve()
     )
     assert config.modeling_output_dir == (tmp_path / "data/processed/modeling").resolve()
+    assert config.metrics_output_dir == (tmp_path / "reports/metrics").resolve()
     assert config.load_telemetry is False
     assert config.load_weather is True
     assert config.load_messages is False

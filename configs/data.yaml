@@ -5,6 +5,7 @@ paths:
   clean_lap_output_dir: data/interim/clean_laps
   session_features_output_dir: data/processed/session_features
   modeling_output_dir: data/processed/modeling
+  metrics_output_dir: reports/metrics
 
 fastf1:
   load_telemetry: false

@@ -13,6 +13,8 @@ from f1_prediction.data.fastf1_loader import (
 )
 from f1_prediction.data.ingest import DEFAULT_EVENT_SESSIONS, EventIngestionSummary
 from f1_prediction.data.ingest import ingest_event as run_event_ingestion
+from f1_prediction.data.season_builder import SeasonDatasetBuildSummary
+from f1_prediction.data.season_builder import build_season_dataset as run_season_dataset_build
 from f1_prediction.features.build import (
     DEFAULT_PRACTICE_SESSIONS,
     SessionFeatureBuildSummary,
@@ -22,6 +24,8 @@ from f1_prediction.features.modeling_dataset import ModelingDatasetBuildSummary
 from f1_prediction.features.modeling_dataset import (
     build_modeling_dataset_files as run_modeling_dataset_build,
 )
+from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
+from f1_prediction.modeling.evaluate_baselines import evaluate_baselines as run_baseline_evaluation
 from f1_prediction.utils.logging import configure_logging
 
 app = typer.Typer(
@@ -196,6 +200,82 @@ def build_modeling_dataset_command(
     _print_modeling_dataset_summary(summary, config.project_root)
 
 
+@app.command("build-season-dataset")
+def build_season_dataset_command(
+    seasons: Annotated[
+        list[int],
+        typer.Option("--season", min=1950, help="Season to build. Repeat for multiple seasons."),
+    ],
+    events: Annotated[
+        list[str] | None,
+        typer.Option("--events", help="Optional event filter. Repeat for multiple events."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Rebuild existing event pipeline outputs."),
+    ] = False,
+    fail_fast: Annotated[
+        bool,
+        typer.Option("--fail-fast", help="Stop after the first failed event."),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional path to the features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Build and combine modeling datasets across scheduled events."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_season_dataset_build(
+            seasons=seasons,
+            data_config=data_config,
+            feature_config=feature_config,
+            events=events,
+            force=force,
+            fail_fast=fail_fast,
+            progress=typer.echo,
+        )
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_season_dataset_summary(summary, data_config.project_root)
+    if summary.n_events_failed:
+        raise typer.Exit(code=1)
+
+
+@app.command("evaluate-baselines")
+def evaluate_baselines_command(
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Evaluate transparent non-ML practice pace baselines."""
+    configure_logging(verbose=verbose)
+    config = load_data_config(config_path=config_path)
+    try:
+        summary = run_baseline_evaluation(config, dataset_path=dataset_path)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_baseline_evaluation_summary(summary, config.project_root)
+
+
 def _print_summary(result: SessionLoadResult) -> None:
     typer.echo("Session loaded successfully")
     typer.echo(f"Season: {result.season}")
@@ -250,6 +330,35 @@ def _print_modeling_dataset_summary(
         typer.echo(f"Practice-only drivers: {', '.join(summary.practice_only_drivers)}")
     if summary.qualifying_only_drivers:
         typer.echo(f"Qualifying-only drivers: {', '.join(summary.qualifying_only_drivers)}")
+
+
+def _print_season_dataset_summary(
+    summary: SeasonDatasetBuildSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("")
+    typer.echo("Combined modeling dataset build complete")
+    typer.echo(f"Seasons: {', '.join(str(season) for season in summary.requested_seasons)}")
+    typer.echo(f"Events requested: {summary.n_events_requested}")
+    typer.echo(f"Events successful: {summary.n_events_successful}")
+    typer.echo(f"Events failed: {summary.n_events_failed}")
+    typer.echo(f"Rows: {summary.n_rows}")
+    typer.echo(f"Output: {_display_path(summary.output_path, project_root)}")
+    typer.echo(f"Report: {_display_path(summary.report_path, project_root)}")
+    for failed in summary.failed_events:
+        typer.echo(f"Failed {failed.season} {failed.event}: {failed.error_message}")
+
+
+def _print_baseline_evaluation_summary(
+    summary: BaselineEvaluationSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Baseline evaluation complete")
+    typer.echo(f"Baselines: {', '.join(summary.baselines)}")
+    typer.echo(f"Checkpoints: {', '.join(summary.checkpoints)}")
+    typer.echo(f"Prediction rows: {summary.prediction_rows}")
+    typer.echo(f"Metrics: {_display_path(summary.metrics_path, project_root)}")
+    typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
 
 
 if __name__ == "__main__":
