@@ -161,6 +161,7 @@ def create_diagnostics_report(
     walk_forward_path: Path | None = None,
     repeated_path: Path | None = None,
     baseline_path: Path | None = None,
+    champion_path: Path | None = None,
     dataset_path: Path | None = None,
 ) -> DiagnosticsReportSummary:
     """Load available prediction sources and persist diagnostics artifacts."""
@@ -171,6 +172,8 @@ def create_diagnostics_report(
         or data_config.metrics_output_dir / "repeated_event_holdout_predictions.parquet",
         "baseline_full_dataset": baseline_path
         or data_config.metrics_output_dir / "baseline_predictions.parquet",
+        "champion": champion_path
+        or data_config.metrics_output_dir / "champion_predictions.parquet",
     }
     frames: list[pd.DataFrame] = []
     available: list[str] = []
@@ -182,12 +185,19 @@ def create_diagnostics_report(
         frames.append(frame)
         available.append(source)
     if not frames:
-        raise FileNotFoundError("No walk-forward, repeated-holdout, or baseline predictions exist")
+        raise FileNotFoundError(
+            "No champion, walk-forward, repeated-holdout, or baseline predictions exist"
+        )
 
     predictions = pd.concat(frames, ignore_index=True, sort=False)
     preferred = next(
         source
-        for source in ("walk_forward", "repeated_event_holdout", "baseline_full_dataset")
+        for source in (
+            "champion",
+            "walk_forward",
+            "repeated_event_holdout",
+            "baseline_full_dataset",
+        )
         if source in available
     )
     dataset_source = dataset_path or build_combined_dataset_path(data_config.modeling_output_dir)
@@ -236,6 +246,8 @@ def create_diagnostics_report(
 
 def _standardize_predictions(predictions: pd.DataFrame, source: str) -> pd.DataFrame:
     frame = predictions.copy()
+    if "model_name" not in frame and "selected_model_name" in frame:
+        frame["model_name"] = frame["selected_model_name"]
     if "model_name" not in frame and "baseline_name" in frame:
         frame["model_name"] = frame["baseline_name"]
     if "event" not in frame:

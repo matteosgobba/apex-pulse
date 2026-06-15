@@ -91,6 +91,26 @@ def test_diagnostics_works_with_only_repeated_predictions(tmp_path: Path) -> Non
     assert summary.n_events == 1
 
 
+def test_diagnostics_can_prefer_champion_predictions(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    champion_path = tmp_path / "champion.parquet"
+    champion = _artifact_predictions().drop(columns="model_name")
+    champion["selected_model_name"] = "nested_champion"
+    champion.to_parquet(champion_path, index=False)
+
+    summary = create_diagnostics_report(
+        config,
+        DIAGNOSTICS_CONFIG,
+        walk_forward_path=tmp_path / "missing-walk.parquet",
+        repeated_path=tmp_path / "missing-repeated.parquet",
+        baseline_path=tmp_path / "missing-baseline.parquet",
+        champion_path=champion_path,
+    )
+
+    assert summary.preferred_prediction_source == "champion"
+    assert summary.available_prediction_sources == ("champion",)
+
+
 def _standard_predictions(source: str) -> pd.DataFrame:
     return pd.DataFrame(
         {

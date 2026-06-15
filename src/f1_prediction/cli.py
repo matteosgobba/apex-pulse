@@ -36,6 +36,11 @@ from f1_prediction.modeling.boosted_backtest import (
     BoostedBacktestSummary,
     run_boosted_backtest,
 )
+from f1_prediction.modeling.champion_policy import (
+    ChampionBacktestSummary,
+    ChampionSelectionMode,
+    run_champion_backtest,
+)
 from f1_prediction.modeling.dataset_report import DatasetQualitySummary
 from f1_prediction.modeling.dataset_report import (
     create_dataset_quality_report as run_dataset_quality_report,
@@ -493,6 +498,10 @@ def backtest_report_command(
         Path | None,
         typer.Option("--boosted-metrics", help="Optional boosted metrics JSON path."),
     ] = None,
+    champion_metrics_path: Annotated[
+        Path | None,
+        typer.Option("--champion-metrics", help="Optional champion metrics JSON path."),
+    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Optional path to the data YAML configuration."),
@@ -511,6 +520,7 @@ def backtest_report_command(
             quality_report_path=quality_report_path,
             ablation_metrics_path=ablation_metrics_path,
             boosted_metrics_path=boosted_metrics_path,
+            champion_metrics_path=champion_metrics_path,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -676,6 +686,61 @@ def backtest_boosted_models_command(
     _print_boosted_backtest_summary(summary, data_config.project_root)
 
 
+@app.command("champion-backtest")
+def champion_backtest_command(
+    strategy: Annotated[
+        BacktestStrategy,
+        typer.Option(help="Event-safe backtesting strategy."),
+    ] = BacktestStrategy.walk_forward,
+    selection_mode: Annotated[
+        ChampionSelectionMode,
+        typer.Option(help="Champion selection mode: static or nested."),
+    ] = ChampionSelectionMode.nested,
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    min_events: Annotated[
+        int,
+        typer.Option(min=2, help="Minimum unique events required for champion backtesting."),
+    ] = 10,
+    min_train_events: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum prior events before walk-forward testing."),
+    ] = 5,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Evaluate a checkpoint-specific static or nested champion policy."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_champion_backtest(
+            data_config,
+            strategy=strategy,
+            selection_mode=selection_mode,
+            dataset_path=dataset_path,
+            min_events=min_events,
+            min_train_events=min_train_events,
+            model_config=model_config,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_champion_backtest_summary(summary, data_config.project_root)
+
+
 @app.command("diagnostics-report")
 def diagnostics_report_command(
     walk_forward_path: Annotated[
@@ -689,6 +754,10 @@ def diagnostics_report_command(
     baseline_path: Annotated[
         Path | None,
         typer.Option("--baselines", help="Optional full-dataset baseline predictions path."),
+    ] = None,
+    champion_path: Annotated[
+        Path | None,
+        typer.Option("--champion", help="Optional champion predictions path."),
     ] = None,
     dataset_path: Annotated[
         Path | None,
@@ -720,6 +789,7 @@ def diagnostics_report_command(
             walk_forward_path=walk_forward_path,
             repeated_path=repeated_path,
             baseline_path=baseline_path,
+            champion_path=champion_path,
             dataset_path=dataset_path,
         )
     except (FileNotFoundError, ValueError) as exc:
@@ -977,6 +1047,25 @@ def _print_boosted_backtest_summary(
     typer.echo(f"Folds: {_display_path(summary.folds_path, project_root)}")
     if summary.predictions_path is not None:
         typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
+
+
+def _print_champion_backtest_summary(
+    summary: ChampionBacktestSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Champion backtest complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Strategy: {summary.strategy}")
+    typer.echo(f"Selection mode: {summary.selection_mode}")
+    typer.echo(f"Events: {summary.n_events}")
+    typer.echo(f"Folds successful: {summary.n_folds_successful}")
+    typer.echo(f"Folds failed: {summary.n_folds_failed}")
+    typer.echo(f"Prediction rows: {summary.prediction_rows}")
+    typer.echo(f"Metrics: {_display_path(summary.metrics_path, project_root)}")
+    if summary.predictions_path is not None:
+        typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
+    if summary.selection_path is not None:
+        typer.echo(f"Selection: {_display_path(summary.selection_path, project_root)}")
 
 
 def _print_diagnostics_summary(

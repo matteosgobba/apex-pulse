@@ -137,6 +137,31 @@ def test_backtest_report_includes_boosted_comparisons() -> None:
     assert report["preferred_model_family_by_checkpoint"]["after_fp1"] == "boosted"
 
 
+def test_backtest_report_includes_champion_fields() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        champion_metrics={
+            "status": "complete",
+            "selection_mode": "nested",
+            "metrics_by_checkpoint": {
+                "after_fp1": {
+                    "mae_gap_sec": 0.2,
+                    "mean_abs_position_error": 1.5,
+                }
+            },
+            "champion_vs_best_baseline_delta_mae": {"after_fp1": -0.2},
+            "champion_vs_best_single_family_delta_mae": {"after_fp1": -0.05},
+        },
+    )
+
+    assert report["champion_available"] is True
+    assert report["champion_selection_mode"] == "nested"
+    assert report["champion_vs_best_baseline_delta_mae"]["after_fp1"] == -0.2
+    assert report["preferred_final_policy_by_checkpoint"]["after_fp1"]["family"] == "champion"
+
+
 def _quality() -> dict[str, object]:
     return {
         "n_rows": 120,

@@ -40,6 +40,7 @@ def create_backtest_report(
     walk_forward_metrics_path: Path | None = None,
     ablation_metrics_path: Path | None = None,
     boosted_metrics_path: Path | None = None,
+    champion_metrics_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -75,6 +76,10 @@ def create_backtest_report(
         boosted_metrics_path or config.metrics_output_dir / "boosted_metrics.json",
         config.project_root,
     )
+    champion_path = _resolve_path(
+        champion_metrics_path or config.metrics_output_dir / "champion_metrics.json",
+        config.project_root,
+    )
     dataset = pd.read_parquet(source_path)
     quality = (
         _read_json(quality_path)
@@ -87,6 +92,7 @@ def create_backtest_report(
     walk_forward_metrics = _read_json(walk_forward_path) if walk_forward_path.is_file() else None
     ablation_metrics = _read_json(ablation_path) if ablation_path.is_file() else None
     boosted_metrics = _read_json(boosted_path) if boosted_path.is_file() else None
+    champion_metrics = _read_json(champion_path) if champion_path.is_file() else None
     payload = build_backtest_report_payload(
         quality,
         baseline_metrics,
@@ -95,6 +101,7 @@ def create_backtest_report(
         walk_forward_metrics=walk_forward_metrics,
         ablation_metrics=ablation_metrics,
         boosted_metrics=boosted_metrics,
+        champion_metrics=champion_metrics,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -120,6 +127,7 @@ def build_backtest_report_payload(
     walk_forward_metrics: dict[str, Any] | None = None,
     ablation_metrics: dict[str, Any] | None = None,
     boosted_metrics: dict[str, Any] | None = None,
+    champion_metrics: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -140,6 +148,7 @@ def build_backtest_report_payload(
         )
         payload.update(_ablation_summary(ablation_metrics))
         payload.update(_boosted_summary(payload, ablation_metrics, boosted_metrics))
+        payload.update(_champion_summary(champion_metrics))
         return payload
 
     training_status = (
@@ -186,6 +195,7 @@ def build_backtest_report_payload(
     }
     payload.update(_ablation_summary(ablation_metrics))
     payload.update(_boosted_summary(payload, ablation_metrics, boosted_metrics))
+    payload.update(_champion_summary(champion_metrics))
     return payload
 
 
@@ -438,6 +448,42 @@ def _preferred_model_families(
         if numeric:
             preferred[checkpoint] = min(numeric, key=numeric.get)
     return preferred
+
+
+def _champion_summary(metrics: dict[str, Any] | None) -> dict[str, object]:
+    usable = metrics is not None and metrics.get("status") in {"complete", "partial"}
+    if not usable:
+        return {
+            "champion_available": False,
+            "champion_selection_mode": None,
+            "champion_metrics_by_checkpoint": {},
+            "champion_vs_best_baseline_delta_mae": {},
+            "champion_vs_best_single_family_delta_mae": {},
+            "preferred_final_policy_by_checkpoint": {},
+        }
+    checkpoint_metrics = metrics.get("metrics_by_checkpoint", {})
+    selection_mode = str(metrics.get("selection_mode", "unknown"))
+    preferred = {
+        str(checkpoint): {
+            "family": "champion",
+            "selection_mode": selection_mode,
+            "mae_gap_sec": values.get("mae_gap_sec"),
+            "mean_abs_position_error": values.get("mean_abs_position_error"),
+        }
+        for checkpoint, values in checkpoint_metrics.items()
+    }
+    return {
+        "champion_available": True,
+        "champion_selection_mode": selection_mode,
+        "champion_metrics_by_checkpoint": checkpoint_metrics,
+        "champion_vs_best_baseline_delta_mae": metrics.get(
+            "champion_vs_best_baseline_delta_mae", {}
+        ),
+        "champion_vs_best_single_family_delta_mae": metrics.get(
+            "champion_vs_best_single_family_delta_mae", {}
+        ),
+        "preferred_final_policy_by_checkpoint": preferred,
+    }
 
 
 def _delta(model_value: object, baseline_value: object) -> float | None:

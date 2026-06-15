@@ -18,3 +18,19 @@ model:
     after_fp1: base_lap_features
     after_fp2: base_plus_quality
     after_fp3: base_plus_relative
+  champion_policy:
+    selection_metric: mae_gap_sec
+    static:
+      after_fp1:
+        family: robust_baseline
+        model_name: robust_best_push_lap
+      after_fp2:
+        family: robust_baseline
+        model_name: robust_theoretical_best_lap
+      after_fp3:
+        family: ablation
+        model_name: random_forest
+        feature_group: base_plus_relative
+  uncertainty:
+    interval_z: 1.64
+    min_residual_count: 20

@@ -115,6 +115,49 @@ class FeatureGroupPolicyConfig:
 
 
 @dataclass(frozen=True)
+class ChampionMethodConfig:
+    """One configured checkpoint champion method."""
+
+    family: str
+    model_name: str
+    feature_group: str | None = None
+
+
+def _default_champion_static_policy() -> dict[str, ChampionMethodConfig]:
+    return {
+        "after_fp1": ChampionMethodConfig(
+            family="robust_baseline",
+            model_name="robust_best_push_lap",
+        ),
+        "after_fp2": ChampionMethodConfig(
+            family="robust_baseline",
+            model_name="robust_theoretical_best_lap",
+        ),
+        "after_fp3": ChampionMethodConfig(
+            family="ablation",
+            model_name="random_forest",
+            feature_group="base_plus_relative",
+        ),
+    }
+
+
+@dataclass(frozen=True)
+class ChampionPolicyConfig:
+    """Static fallback methods and nested selection criterion."""
+
+    static: dict[str, ChampionMethodConfig] = field(default_factory=_default_champion_static_policy)
+    selection_metric: str = "mae_gap_sec"
+
+
+@dataclass(frozen=True)
+class UncertaintyConfig:
+    """Prior-residual prediction interval settings."""
+
+    interval_z: float = 1.64
+    min_residual_count: int = 20
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     """Simple tabular model and dataset-size settings."""
 
@@ -126,6 +169,8 @@ class ModelConfig:
         default_factory=HistGradientBoostingConfig
     )
     feature_group_policy: FeatureGroupPolicyConfig = field(default_factory=FeatureGroupPolicyConfig)
+    champion_policy: ChampionPolicyConfig = field(default_factory=ChampionPolicyConfig)
+    uncertainty: UncertaintyConfig = field(default_factory=UncertaintyConfig)
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:
@@ -291,10 +336,21 @@ def load_model_config(
     feature_group_policy = model.get("feature_group_policy", {})
     if not isinstance(feature_group_policy, dict):
         raise ConfigError(f"'feature_group_policy' must be a mapping in {path}")
+    champion_policy = model.get("champion_policy", {})
+    if not isinstance(champion_policy, dict):
+        raise ConfigError(f"'champion_policy' must be a mapping in {path}")
+    static_policy = champion_policy.get("static", {})
+    if not isinstance(static_policy, dict):
+        raise ConfigError(f"'champion_policy.static' must be a mapping in {path}")
+    uncertainty = model.get("uncertainty", {})
+    if not isinstance(uncertainty, dict):
+        raise ConfigError(f"'uncertainty' must be a mapping in {path}")
     default_boosting = HistGradientBoostingConfig(
         random_state=_required_integer(model, "random_state", path)
     )
     default_policy = FeatureGroupPolicyConfig()
+    default_champion = ChampionPolicyConfig()
+    default_uncertainty = UncertaintyConfig()
     config = ModelConfig(
         min_events=_required_integer(model, "min_events", path),
         random_state=_required_integer(model, "random_state", path),
@@ -325,6 +381,26 @@ def load_model_config(
             after_fp2=str(feature_group_policy.get("after_fp2", default_policy.after_fp2)),
             after_fp3=str(feature_group_policy.get("after_fp3", default_policy.after_fp3)),
         ),
+        champion_policy=ChampionPolicyConfig(
+            static={
+                checkpoint: _load_champion_method(
+                    static_policy.get(checkpoint),
+                    default_champion.static[checkpoint],
+                    checkpoint,
+                    path,
+                )
+                for checkpoint in ("after_fp1", "after_fp2", "after_fp3")
+            },
+            selection_metric=str(
+                champion_policy.get("selection_metric", default_champion.selection_metric)
+            ),
+        ),
+        uncertainty=UncertaintyConfig(
+            interval_z=float(uncertainty.get("interval_z", default_uncertainty.interval_z)),
+            min_residual_count=int(
+                uncertainty.get("min_residual_count", default_uncertainty.min_residual_count)
+            ),
+        ),
     )
     if config.min_events < 2 or config.ridge_alpha <= 0:
         raise ConfigError(f"Model min_events and ridge_alpha must be positive in {path}")
@@ -342,7 +418,37 @@ def load_model_config(
         or boosting.l2_regularization < 0
     ):
         raise ConfigError(f"HistGradientBoosting settings are invalid in {path}")
+    if config.champion_policy.selection_metric != "mae_gap_sec":
+        raise ConfigError(f"Only champion selection_metric 'mae_gap_sec' is supported in {path}")
+    if config.uncertainty.interval_z <= 0 or config.uncertainty.min_residual_count < 2:
+        raise ConfigError(f"Uncertainty settings are invalid in {path}")
     return config
+
+
+def _load_champion_method(
+    raw: object,
+    default: ChampionMethodConfig,
+    checkpoint: str,
+    path: Path,
+) -> ChampionMethodConfig:
+    if raw is None:
+        return default
+    if not isinstance(raw, dict):
+        raise ConfigError(f"Champion method for {checkpoint} must be a mapping in {path}")
+    family = raw.get("family", default.family)
+    model_name = raw.get("model_name", default.model_name)
+    feature_group = raw.get("feature_group", default.feature_group)
+    if not isinstance(family, str) or not family.strip():
+        raise ConfigError(f"Champion family for {checkpoint} must be non-empty in {path}")
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ConfigError(f"Champion model_name for {checkpoint} must be non-empty in {path}")
+    if feature_group is not None and not isinstance(feature_group, str):
+        raise ConfigError(f"Champion feature_group for {checkpoint} must be a string in {path}")
+    return ChampionMethodConfig(
+        family=family,
+        model_name=model_name,
+        feature_group=feature_group,
+    )
 
 
 def _required_mapping(config: dict[str, Any], key: str, path: Path) -> dict[str, Any]:

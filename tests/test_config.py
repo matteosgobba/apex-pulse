@@ -101,6 +101,15 @@ model:
     after_fp1: base_lap_features
     after_fp2: base_plus_quality
     after_fp3: base_plus_relative
+  champion_policy:
+    selection_metric: mae_gap_sec
+    static:
+      after_fp1:
+        family: robust_baseline
+        model_name: robust_best_push_lap
+  uncertainty:
+    interval_z: 1.5
+    min_residual_count: 12
 """.strip(),
         encoding="utf-8",
     )
@@ -115,3 +124,7 @@ model:
     assert config.hist_gradient_boosting.learning_rate == 0.08
     assert config.hist_gradient_boosting.random_state == 9
     assert config.feature_group_policy.after_fp2 == "base_plus_quality"
+    assert config.champion_policy.static["after_fp1"].model_name == "robust_best_push_lap"
+    assert config.champion_policy.static["after_fp3"].feature_group == "base_plus_relative"
+    assert config.uncertainty.interval_z == 1.5
+    assert config.uncertainty.min_residual_count == 12
