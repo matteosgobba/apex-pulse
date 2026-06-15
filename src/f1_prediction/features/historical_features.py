@@ -7,6 +7,8 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from f1_prediction.data.identity import add_identity_columns
+
 
 @dataclass(frozen=True)
 class HistoricalFeatureSettings:
@@ -71,6 +73,9 @@ def add_historical_features(
         raise ValueError("Historical features currently support rolling windows 3 and 5")
 
     frame = dataset.drop(columns=list(HISTORICAL_FEATURE_COLUMNS), errors="ignore").copy()
+    frame = add_identity_columns(frame)
+    driver_entity = "driver_key" if frame["driver_key"].notna().any() else "driver"
+    team_entity = "team_key" if frame["team_key"].notna().any() else "team"
     frame["_event_key"] = _event_key_series(frame)
     order = _event_order_table(frame)
     driver_events = _driver_event_outcomes(frame, order)
@@ -80,7 +85,7 @@ def add_historical_features(
 
     driver_features = _rolling_entity_features(
         driver_events,
-        entity_columns=["driver"],
+        entity_columns=[driver_entity],
         value_columns={
             "quali_gap_to_pole_sec": "quali_gap",
             "quali_position": "quali_position",
@@ -94,16 +99,16 @@ def add_historical_features(
         column for column in HISTORICAL_FEATURE_COLUMNS if column.startswith("driver_")
     ]
     frame = frame.merge(
-        driver_features.loc[:, [*_EVENT_COLUMNS, "driver", *driver_feature_columns]],
-        on=[*_EVENT_COLUMNS, "driver"],
+        driver_features.loc[:, [*_EVENT_COLUMNS, driver_entity, *driver_feature_columns]],
+        on=[*_EVENT_COLUMNS, driver_entity],
         how="left",
         validate="many_to_one",
     )
 
-    team_events = _team_event_outcomes(driver_events, order)
+    team_events = _team_event_outcomes(driver_events, order, team_entity)
     team_features = _rolling_entity_features(
         team_events,
-        entity_columns=["team"],
+        entity_columns=[team_entity],
         value_columns={
             "quali_gap_to_pole_sec": "quali_gap",
             "quali_position": "quali_position",
@@ -116,8 +121,8 @@ def add_historical_features(
         column for column in HISTORICAL_FEATURE_COLUMNS if column.startswith("team_")
     ]
     frame = frame.merge(
-        team_features.loc[:, [*_EVENT_COLUMNS, "team", *team_feature_columns]],
-        on=[*_EVENT_COLUMNS, "team"],
+        team_features.loc[:, [*_EVENT_COLUMNS, team_entity, *team_feature_columns]],
+        on=[*_EVENT_COLUMNS, team_entity],
         how="left",
         validate="many_to_one",
     )
@@ -130,18 +135,32 @@ def add_historical_features(
 
 
 def _driver_event_outcomes(frame: pd.DataFrame, order: pd.DataFrame) -> pd.DataFrame:
-    columns = [*_EVENT_COLUMNS, "_event_key", "driver", "team", *_TARGET_COLUMNS]
-    outcomes = frame.loc[:, columns].drop_duplicates([*_EVENT_COLUMNS, "driver"])
+    columns = [
+        *_EVENT_COLUMNS,
+        "_event_key",
+        "driver",
+        "driver_key",
+        "team",
+        "team_key",
+        *_TARGET_COLUMNS,
+    ]
+    outcomes = frame.loc[:, columns].drop_duplicates([*_EVENT_COLUMNS, "driver_key"])
     return outcomes.merge(order, on=[*_EVENT_COLUMNS, "_event_key"], validate="many_to_one")
 
 
-def _team_event_outcomes(driver_events: pd.DataFrame, order: pd.DataFrame) -> pd.DataFrame:
-    valid = driver_events[driver_events["team"].notna()].copy()
+def _team_event_outcomes(
+    driver_events: pd.DataFrame,
+    order: pd.DataFrame,
+    team_entity: str,
+) -> pd.DataFrame:
+    valid = driver_events[driver_events[team_entity].notna()].copy()
     values = list(_TARGET_COLUMNS)
     source_values = valid[values].where(valid["_history_source"], pd.NA)
     valid[values] = source_values
     teams = (
-        valid.groupby([*_EVENT_COLUMNS, "_event_key", "team"], sort=False, dropna=False)[values]
+        valid.groupby([*_EVENT_COLUMNS, "_event_key", team_entity], sort=False, dropna=False)[
+            values
+        ]
         .mean()
         .reset_index()
     )
@@ -206,7 +225,8 @@ def _rolling_entity_features(
 
 def _teammate_gap(driver_events: pd.DataFrame) -> pd.Series:
     gaps = pd.Series(pd.NA, index=driver_events.index, dtype="Float64")
-    group_columns = [*_EVENT_COLUMNS, "team"]
+    team_column = "team_key" if driver_events["team_key"].notna().any() else "team"
+    group_columns = [*_EVENT_COLUMNS, team_column]
     for _, group in driver_events.groupby(group_columns, sort=False, dropna=False):
         if len(group) < 2:
             continue

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pandas as pd
 
+from f1_prediction.data.identity import add_identity_columns
+
 SESSION_GROUP_COLUMNS: tuple[str, ...] = ("season", "event_slug", "session_slug")
-TEAM_GROUP_COLUMNS: tuple[str, ...] = (*SESSION_GROUP_COLUMNS, "team")
 METRIC_COLUMNS: dict[str, str] = {
     "best_push": "best_push_lap_time_sec",
     "best_valid": "best_valid_lap_time_sec",
@@ -30,7 +31,7 @@ def add_relative_practice_features(practice_features: pd.DataFrame) -> pd.DataFr
             f"Practice features are missing relative-feature identifiers: {', '.join(missing)}"
         )
 
-    features = practice_features.copy()
+    features = add_identity_columns(practice_features)
     for metric_column in METRIC_COLUMNS.values():
         if metric_column not in features:
             features[metric_column] = float("nan")
@@ -66,7 +67,8 @@ def _add_team_features(
     metric: pd.Series,
     feature_name: str,
 ) -> None:
-    valid_team = features["team"].notna()
+    team_column = "team_key" if "team_key" in features else "team"
+    valid_team = features[team_column].notna()
     team_best = pd.Series(float("nan"), index=features.index, dtype="float64")
     team_rank = pd.Series(pd.NA, index=features.index, dtype="Int64")
     teammate_best = pd.Series(float("nan"), index=features.index, dtype="float64")
@@ -75,7 +77,7 @@ def _add_team_features(
         features.loc[valid_team]
         .assign(_metric=metric.loc[valid_team])
         .groupby(
-            list(TEAM_GROUP_COLUMNS),
+            [*SESSION_GROUP_COLUMNS, team_column],
             dropna=False,
             sort=False,
         )

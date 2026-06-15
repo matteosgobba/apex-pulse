@@ -773,6 +773,7 @@ def _print_season_dataset_summary(
     typer.echo(f"Events successful: {summary.n_events_successful}")
     typer.echo(f"Events failed: {summary.n_events_failed}")
     typer.echo(f"Rows: {summary.n_rows}")
+    typer.echo(f"Teams: {summary.n_teams}")
     typer.echo(f"Output: {_display_path(summary.output_path, project_root)}")
     typer.echo(f"Report: {_display_path(summary.report_path, project_root)}")
     for failed in summary.failed_events:

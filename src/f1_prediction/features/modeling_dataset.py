@@ -10,6 +10,7 @@ import pandas as pd
 
 from f1_prediction.config import DataConfig, DataQualityConfig, FeatureConfig
 from f1_prediction.data.fastf1_loader import build_lap_output_path
+from f1_prediction.data.identity import add_identity_columns
 from f1_prediction.features.build import build_session_features_output_path
 from f1_prediction.features.data_quality import (
     DATA_QUALITY_FEATURE_COLUMNS,
@@ -32,10 +33,28 @@ IDENTIFIER_COLUMNS: tuple[str, ...] = (
     "event_slug",
     "checkpoint",
     "driver",
+    "driver_code",
+    "driver_name",
+    "driver_key",
     "team",
+    "team_name",
+    "team_key",
 )
 SESSION_IDENTIFIER_COLUMNS: frozenset[str] = frozenset(
-    {"season", "event", "event_slug", "session", "session_slug", "driver", "team"}
+    {
+        "season",
+        "event",
+        "event_slug",
+        "session",
+        "session_slug",
+        "driver",
+        "driver_code",
+        "driver_name",
+        "driver_key",
+        "team",
+        "team_name",
+        "team_key",
+    }
 )
 ProgressCallback = Callable[[str], None]
 
@@ -61,6 +80,8 @@ def build_checkpoint_modeling_dataset(
     data_quality_config: DataQualityConfig | None = None,
 ) -> pd.DataFrame:
     """Build after-FP1/FP2/FP3 rows without exposing future practice values."""
+    practice_features = add_identity_columns(practice_features)
+    qualifying_targets = add_identity_columns(qualifying_targets)
     _validate_target_columns(qualifying_targets)
     _validate_unique_session_driver_rows(practice_features)
     practice_features = add_relative_practice_features(practice_features)
@@ -76,14 +97,19 @@ def build_checkpoint_modeling_dataset(
     for checkpoint, available_sessions in CHECKPOINT_SESSIONS.items():
         frame = qualifying_targets.copy()
         frame["checkpoint"] = checkpoint
-        frame["team"] = frame["driver"].map(team_map)
+        for identity_column in ("team", "team_name", "team_key"):
+            mapped = frame["driver_key"].map(team_map[identity_column])
+            if identity_column in frame:
+                frame[identity_column] = frame[identity_column].fillna(mapped)
+            else:
+                frame[identity_column] = mapped
 
         for session in available_sessions:
             session_rows = practice_features[practice_features["session"].eq(session)]
-            renamed = session_rows.loc[:, ["driver", *source_feature_columns]].rename(
+            renamed = session_rows.loc[:, ["driver_key", *source_feature_columns]].rename(
                 columns={column: f"{session.lower()}_{column}" for column in source_feature_columns}
             )
-            frame = frame.merge(renamed, on="driver", how="left", validate="one_to_one")
+            frame = frame.merge(renamed, on="driver_key", how="left", validate="one_to_one")
 
         checkpoint_frames.append(frame)
 
@@ -203,15 +229,18 @@ def _build_summary(
     )
 
 
-def _driver_team_map(practice_features: pd.DataFrame) -> dict[str, object]:
+def _driver_team_map(practice_features: pd.DataFrame) -> dict[str, dict[str, object]]:
     session_order = {"FP1": 1, "FP2": 2, "FP3": 3}
     teams = practice_features.loc[
-        practice_features["driver"].notna() & practice_features["team"].notna(),
-        ["driver", "team", "session"],
+        practice_features["driver_key"].notna() & practice_features["team"].notna(),
+        ["driver_key", "team", "team_name", "team_key", "session"],
     ].copy()
     teams["session_order"] = teams["session"].map(session_order).fillna(0)
-    latest = teams.sort_values("session_order").drop_duplicates("driver", keep="last")
-    return dict(zip(latest["driver"], latest["team"], strict=True))
+    latest = teams.sort_values("session_order").drop_duplicates("driver_key", keep="last")
+    return {
+        column: dict(zip(latest["driver_key"], latest[column], strict=True))
+        for column in ("team", "team_name", "team_key")
+    }
 
 
 def _ordered_feature_columns(dataset: pd.DataFrame) -> list[str]:
@@ -235,7 +264,7 @@ def _quality_settings(config: DataQualityConfig | None) -> DataQualitySettings:
 
 
 def _validate_target_columns(targets: pd.DataFrame) -> None:
-    required = {"season", "event", "event_slug", "driver", *TARGET_COLUMNS}
+    required = {"season", "event", "event_slug", "driver", "driver_key", *TARGET_COLUMNS}
     missing = sorted(required - set(targets.columns))
     if missing:
         raise ValueError(f"Qualifying targets are missing columns: {', '.join(missing)}")

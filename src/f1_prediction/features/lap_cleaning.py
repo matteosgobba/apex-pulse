@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from f1_prediction.data.identity import add_identity_columns
 from f1_prediction.utils.paths import ensure_directory, slugify
 
 TIME_COLUMN_MAP: dict[str, str] = {
@@ -33,6 +34,7 @@ def clean_session_laps(
 
     cleaned["driver"] = _normalized_string(raw_laps, "Driver", uppercase=True)
     cleaned["team"] = _normalized_string(raw_laps, "Team")
+    cleaned = add_identity_columns(cleaned)
     cleaned["lap_number"] = _numeric_column(raw_laps, "LapNumber")
     cleaned["stint"] = _numeric_column(raw_laps, "Stint")
     cleaned["compound"] = _normalized_string(raw_laps, "Compound", uppercase=True)

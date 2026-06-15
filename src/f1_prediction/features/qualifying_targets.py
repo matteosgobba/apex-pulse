@@ -29,15 +29,26 @@ def build_qualifying_targets(
         event=event,
         session="Q",
     )
-    drivers = cleaned.loc[cleaned["driver"].notna(), "driver"].drop_duplicates().tolist()
+    identity_columns = [
+        "driver",
+        "driver_code",
+        "driver_name",
+        "driver_key",
+        "team",
+        "team_name",
+        "team_key",
+    ]
+    drivers = cleaned.loc[cleaned["driver_key"].notna(), identity_columns].drop_duplicates(
+        "driver_key"
+    )
     valid = cleaned[cleaned["is_valid_lap"]]
-    best_times = valid.groupby("driver", sort=False)["lap_time_sec"].min()
+    best_times = valid.groupby("driver_key", sort=False)["lap_time_sec"].min()
 
-    targets = pd.DataFrame({"driver": drivers})
+    targets = drivers.reset_index(drop=True)
     targets["season"] = season
     targets["event"] = event
     targets["event_slug"] = slugify(event)
-    targets["quali_best_lap_time_sec"] = targets["driver"].map(best_times)
+    targets["quali_best_lap_time_sec"] = targets["driver_key"].map(best_times)
     targets = _assign_ordinal_positions(targets)
 
     pole_time = targets["quali_best_lap_time_sec"].min()
@@ -46,7 +57,13 @@ def build_qualifying_targets(
     targets["reached_q2"] = (has_valid_time & targets["quali_position"].le(15)).astype("int8")
     targets["reached_q3"] = (has_valid_time & targets["quali_position"].le(10)).astype("int8")
 
-    columns = ["season", "event", "event_slug", "driver", *TARGET_COLUMNS]
+    columns = [
+        "season",
+        "event",
+        "event_slug",
+        *identity_columns,
+        *TARGET_COLUMNS,
+    ]
     return targets.loc[:, columns]
 
 

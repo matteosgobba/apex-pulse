@@ -6,6 +6,8 @@ import math
 
 import pandas as pd
 
+from f1_prediction.data.identity import add_identity_columns
+
 IDENTIFIER_COLUMNS: tuple[str, ...] = (
     "season",
     "event",
@@ -13,11 +15,20 @@ IDENTIFIER_COLUMNS: tuple[str, ...] = (
     "session",
     "session_slug",
     "driver",
+    "driver_key",
+)
+IDENTITY_COLUMNS: tuple[str, ...] = (
+    "driver_code",
+    "driver_name",
+    "team",
+    "team_name",
+    "team_key",
 )
 
 
 def aggregate_session_features(clean_laps: pd.DataFrame) -> pd.DataFrame:
     """Create one aggregate row per season, event, session, and driver."""
+    clean_laps = add_identity_columns(clean_laps)
     identified_laps = clean_laps[clean_laps["driver"].notna()]
     rows = [
         _aggregate_driver(group)
@@ -69,7 +80,10 @@ def _aggregate_driver(group: pd.DataFrame) -> dict[str, object]:
     row: dict[str, object] = {column: group.iloc[0][column] for column in IDENTIFIER_COLUMNS}
     row.update(
         {
-            "team": _first_present(group["team"]),
+            **{
+                column: _first_present(group[column]) if column in group else pd.NA
+                for column in IDENTITY_COLUMNS
+            },
             "n_laps": len(group),
             "n_valid_laps": int(group["is_valid_lap"].sum()),
             "n_push_laps": int(group["is_push_lap"].sum()),

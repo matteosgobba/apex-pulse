@@ -63,6 +63,23 @@ def test_dataset_report_counts_historical_and_quality_features() -> None:
     assert report["rows_with_extreme_latest_practice_signal"] == 1
 
 
+def test_dataset_report_includes_identity_consistency_fields() -> None:
+    dataset = _quality_dataset().assign(
+        driver=["NOR", "NOR", "VER", "VER"],
+        team=["McLaren", "Ferrari", "Red Bull Racing", "Red Bull Racing"],
+    )
+
+    report = build_dataset_quality_report(dataset)
+
+    assert report["driver_key_count"] == 2
+    assert report["team_key_count"] == 3
+    assert report["driver_key_missing_count"] == 0
+    assert report["team_key_missing_count"] == 0
+    assert "nor" in report["drivers_appearing_under_multiple_team_keys"]
+    assert "2024/monza" in report["events_with_less_than_20_drivers"]
+    assert report["events_by_season"]["2024"] == 2
+
+
 def test_create_dataset_quality_report_writes_json(tmp_path: Path) -> None:
     config = _config(tmp_path)
     dataset_path = tmp_path / "custom.parquet"

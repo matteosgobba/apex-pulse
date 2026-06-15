@@ -150,6 +150,7 @@ def test_dataset_build_report_contains_required_structure(tmp_path: Path) -> Non
         ),
         n_rows=60,
         n_drivers=20,
+        n_teams=10,
         checkpoints=("after_fp1", "after_fp2", "after_fp3"),
         output_path=output_path,
         report_path=tmp_path / "metrics/dataset_build_report.json",
@@ -157,6 +158,7 @@ def test_dataset_build_report_contains_required_structure(tmp_path: Path) -> Non
         rows_by_checkpoint=(("after_fp1", 20), ("after_fp2", 20), ("after_fp3", 20)),
         events_by_checkpoint=(("after_fp1", 1), ("after_fp2", 1), ("after_fp3", 1)),
         rows_by_season=(("2024", 60),),
+        rows_by_event=(("2024/monza", 60),),
         preset="conventional_2024",
     )
 
@@ -168,10 +170,12 @@ def test_dataset_build_report_contains_required_structure(tmp_path: Path) -> Non
     assert report["n_events_failed"] == 1
     assert report["n_rows"] == 60
     assert report["n_drivers"] == 20
+    assert report["n_teams"] == 10
     assert report["n_columns"] == 90
     assert report["rows_by_checkpoint"]["after_fp1"] == 20
     assert report["events_by_checkpoint"]["after_fp3"] == 1
     assert report["rows_by_season"]["2024"] == 60
+    assert report["rows_by_event"]["2024/monza"] == 60
     assert report["preset"] == "conventional_2024"
     assert report["failed_events"][0]["error_message"] == "RuntimeError: failed"
     assert report["output_path"] == "modeling/combined/modeling_dataset.parquet"

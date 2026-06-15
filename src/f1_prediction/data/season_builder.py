@@ -13,6 +13,7 @@ import pandas as pd
 
 from f1_prediction.config import DataConfig, FeatureConfig
 from f1_prediction.data.cache import initialize_fastf1_cache
+from f1_prediction.data.identity import add_identity_columns
 from f1_prediction.data.ingest import ingest_event
 from f1_prediction.features.build import build_session_features
 from f1_prediction.features.historical_features import (
@@ -117,10 +118,12 @@ class SeasonDatasetBuildSummary:
     checkpoints: tuple[str, ...]
     output_path: Path
     report_path: Path
+    n_teams: int = 0
     n_columns: int = 0
     rows_by_checkpoint: tuple[tuple[str, int], ...] = ()
     events_by_checkpoint: tuple[tuple[str, int], ...] = ()
     rows_by_season: tuple[tuple[str, int], ...] = ()
+    rows_by_event: tuple[tuple[str, int], ...] = ()
     preset: str | None = None
 
     @property
@@ -205,7 +208,11 @@ def build_season_dataset(
     event_references = tuple(
         reference
         for season in requested_seasons
-        for reference in discover_season_events(season, _events_for_season(events, season))
+        for reference in _discover_or_fallback_events(
+            season,
+            _events_for_season(events, season),
+            progress,
+        )
     )
     successful: list[SuccessfulEventBuild] = []
     failed: list[FailedEventBuild] = []
@@ -297,6 +304,9 @@ def build_season_dataset(
         failed_events=tuple(failed),
         n_rows=len(combined),
         n_drivers=combined["driver"].nunique() if not combined.empty else 0,
+        n_teams=(
+            combined["team_key"].nunique() if not combined.empty and "team_key" in combined else 0
+        ),
         checkpoints=tuple(CHECKPOINT_SESSIONS),
         output_path=output_path,
         report_path=report_path,
@@ -304,6 +314,7 @@ def build_season_dataset(
         rows_by_checkpoint=_checkpoint_counts(combined),
         events_by_checkpoint=_checkpoint_event_counts(combined),
         rows_by_season=_season_counts(combined),
+        rows_by_event=_event_counts(combined),
         preset=preset,
     )
     save_dataset_build_report(summary, data_config.project_root)
@@ -319,6 +330,7 @@ def combine_event_datasets(
     if not event_frames:
         return pd.DataFrame()
     combined = pd.concat(event_frames, ignore_index=True, sort=False)
+    combined = add_identity_columns(combined)
     checkpoint_order = {name: index for index, name in enumerate(CHECKPOINT_SESSIONS)}
     combined["_checkpoint_order"] = combined["checkpoint"].map(checkpoint_order)
     event_sort_column = "event_order" if "event_order" in combined else "_event_appearance"
@@ -366,9 +378,11 @@ def build_dataset_report_payload(
         "n_rows": summary.n_rows,
         "n_columns": summary.n_columns,
         "n_drivers": summary.n_drivers,
+        "n_teams": summary.n_teams,
         "checkpoints": list(summary.checkpoints),
         "rows_by_checkpoint": dict(summary.rows_by_checkpoint),
         "rows_by_season": dict(summary.rows_by_season),
+        "rows_by_event": dict(summary.rows_by_event),
         "events_by_checkpoint": dict(summary.events_by_checkpoint),
         "output_path": _portable_path(summary.output_path, project_root),
         "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -464,6 +478,13 @@ def _season_counts(dataset: pd.DataFrame) -> tuple[tuple[str, int], ...]:
     )
 
 
+def _event_counts(dataset: pd.DataFrame) -> tuple[tuple[str, int], ...]:
+    if dataset.empty or not {"season", "event_slug"} <= set(dataset.columns):
+        return ()
+    keys = dataset["season"].astype(str) + "/" + dataset["event_slug"].astype(str)
+    return tuple((str(event), int(count)) for event, count in keys.value_counts(sort=False).items())
+
+
 def _events_for_season(
     events: Sequence[str] | Mapping[int, Sequence[str]] | None,
     season: int,
@@ -471,6 +492,32 @@ def _events_for_season(
     if isinstance(events, Mapping):
         return events.get(season)
     return events
+
+
+def _discover_or_fallback_events(
+    season: int,
+    events: Sequence[str] | None,
+    progress: ProgressCallback | None,
+) -> tuple[EventReference, ...]:
+    try:
+        return discover_season_events(season, events)
+    except Exception as exc:
+        if not events:
+            raise
+        _report(
+            progress,
+            f"WARN  {season}: schedule lookup failed; using requested event names "
+            f"({_concise_error(exc)})",
+        )
+        return tuple(
+            EventReference(
+                season=season,
+                event=event,
+                event_name=event,
+                round_number=index,
+            )
+            for index, event in enumerate(events, start=1)
+        )
 
 
 def _portable_path(path: Path, project_root: Path) -> str:

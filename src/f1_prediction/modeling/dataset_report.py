@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 
 from f1_prediction.config import DataConfig
+from f1_prediction.data.identity import add_identity_columns
 from f1_prediction.data.season_builder import build_combined_dataset_path
 from f1_prediction.features.data_quality import DATA_QUALITY_FEATURE_COLUMNS
 from f1_prediction.features.historical_features import HISTORICAL_FEATURE_COLUMNS
@@ -40,7 +41,7 @@ def build_dataset_quality_report(dataset: pd.DataFrame) -> dict[str, object]:
     if missing:
         raise ValueError(f"Modeling dataset is missing columns: {', '.join(missing)}")
 
-    frame = dataset.copy()
+    frame = add_identity_columns(dataset)
     frame["_event_key"] = _event_keys(frame)
     feature_columns = get_feature_columns(frame)
     numeric_features = [
@@ -76,6 +77,28 @@ def build_dataset_quality_report(dataset: pd.DataFrame) -> dict[str, object]:
         if extreme_columns
         else pd.Series(False, index=frame.index)
     )
+    event_driver_rows = frame.drop_duplicates(["season", "event_slug", "driver_key"])
+    events_by_season = event_driver_rows.groupby("season", sort=True)["event_slug"].nunique()
+    drivers_by_season = event_driver_rows.groupby("season", sort=True)["driver_key"].nunique()
+    teams_by_season = event_driver_rows.groupby("season", sort=True)["team_key"].nunique()
+    driver_team_counts = (
+        frame.dropna(subset=["driver_key", "team_key"])
+        .drop_duplicates(["driver_key", "team_key"])
+        .groupby("driver_key", sort=True)["team_key"]
+        .nunique()
+    )
+    drivers_multiple_teams = driver_team_counts[driver_team_counts.gt(1)].index.tolist()
+    team_event_counts = (
+        event_driver_rows.dropna(subset=["team_key"])
+        .groupby(["_event_key", "team_key"], sort=False)["driver_key"]
+        .nunique()
+    )
+    single_driver_teams = [
+        f"{event}/{team}" for (event, team), count in team_event_counts.items() if count < 2
+    ]
+    event_driver_counts = event_driver_rows.groupby("_event_key", sort=False)[
+        "driver_key"
+    ].nunique()
 
     return {
         "n_rows": len(frame),
@@ -87,6 +110,9 @@ def build_dataset_quality_report(dataset: pd.DataFrame) -> dict[str, object]:
         "drivers": sorted(frame["driver"].dropna().astype(str).unique().tolist()),
         "checkpoints": checkpoint_order,
         "rows_by_season": _count_mapping(frame.groupby("season", sort=True).size()),
+        "events_by_season": _count_mapping(events_by_season),
+        "drivers_by_season": _count_mapping(drivers_by_season),
+        "teams_by_season": _count_mapping(teams_by_season),
         "rows_by_event": _count_mapping(rows_by_event),
         "rows_by_checkpoint": _count_mapping(frame.groupby("checkpoint", sort=False).size()),
         "missing_target_counts": {
@@ -99,6 +125,22 @@ def build_dataset_quality_report(dataset: pd.DataFrame) -> dict[str, object]:
         ),
         "checkpoints_per_event": {str(key): value for key, value in checkpoints_per_event.items()},
         "events_with_missing_checkpoints": events_with_missing,
+        "driver_key_count": int(frame["driver_key"].nunique()),
+        "team_key_count": int(frame["team_key"].nunique()),
+        "driver_key_missing_count": int(frame["driver_key"].isna().sum()),
+        "team_key_missing_count": int(frame["team_key"].isna().sum()),
+        "team_key_distribution": _count_mapping(
+            event_driver_rows["team_key"].value_counts(dropna=True, sort=False)
+        ),
+        "driver_key_distribution": _count_mapping(
+            event_driver_rows["driver_key"].value_counts(dropna=True, sort=False)
+        ),
+        "drivers_appearing_under_multiple_team_keys": drivers_multiple_teams,
+        "teams_with_single_driver_events": single_driver_teams,
+        "events_with_less_than_20_drivers": [
+            str(event) for event, count in event_driver_counts.items() if count < 20
+        ],
+        "events_with_failed_or_missing_sessions_if_detectable": events_with_missing,
         "practice_only_driver_rows": int((feature_present & ~target_present).sum()),
         "qualifying_only_driver_rows_if_detectable": int((target_present & ~feature_present).sum()),
         "historical_feature_count": len(historical_columns),
