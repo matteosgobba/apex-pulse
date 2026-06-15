@@ -11,8 +11,12 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from f1_prediction.config import DataConfig, ModelConfig, RandomForestConfig
+from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig, RandomForestConfig
 from f1_prediction.data.season_builder import build_combined_dataset_path
+from f1_prediction.features.historical_features import (
+    HistoricalFeatureSettings,
+    add_historical_features,
+)
 from f1_prediction.features.qualifying_targets import TARGET_COLUMNS
 from f1_prediction.modeling.baselines import generate_baseline_predictions
 from f1_prediction.modeling.metrics import compute_baseline_metrics, compute_prediction_metrics
@@ -76,6 +80,7 @@ def train_tabular_models(
     test_events: list[str] | None = None,
     min_events: int | None = None,
     model_config: ModelConfig | None = None,
+    feature_config: FeatureConfig | None = None,
 ) -> TabularTrainingSummary:
     """Train checkpoint-specific simple models with an event-safe holdout."""
     settings = model_config or DEFAULT_MODEL_CONFIG
@@ -118,8 +123,14 @@ def train_tabular_models(
         )
 
     split = _training_split(dataset, test_season=test_season, test_events=test_events)
-    train = dataset.loc[list(split.train_indices)].copy()
-    test = dataset.loc[list(split.test_indices)].copy()
+    dataset = add_historical_features(
+        dataset,
+        _historical_settings(feature_config),
+        excluded_target_events=set(split.metadata["test_events"]),
+    )
+    event_keys = dataset["season"].astype(str) + "/" + dataset["event_slug"].astype(str)
+    train = dataset[event_keys.isin(split.metadata["train_events"])].copy()
+    test = dataset[event_keys.isin(split.metadata["test_events"])].copy()
     if train.empty:
         raise ValueError("The selected holdout leaves no events available for training")
     predictions, fitted_models = fit_and_predict(train, test, model_config=settings)
@@ -150,7 +161,14 @@ def train_tabular_models(
     }
     baseline_path = config.metrics_output_dir / "baseline_metrics.json"
     if baseline_path.is_file():
-        payload.update(_baseline_comparison(baseline_path, test, metrics))
+        payload.update(
+            _baseline_comparison(
+                baseline_path,
+                test,
+                metrics,
+                robust_threshold=_robust_baseline_threshold(feature_config),
+            )
+        )
     _write_json(metrics_path, payload)
 
     return TabularTrainingSummary(
@@ -259,10 +277,17 @@ def _baseline_comparison(
     baseline_path: Path,
     test: pd.DataFrame,
     model_metrics: dict[str, dict[str, dict[str, float | None]]],
+    *,
+    robust_threshold: float,
 ) -> dict[str, object]:
     with baseline_path.open(encoding="utf-8") as baseline_file:
         available_metrics = json.load(baseline_file)
-    holdout_metrics = compute_baseline_metrics(generate_baseline_predictions(test))
+    holdout_metrics = compute_baseline_metrics(
+        generate_baseline_predictions(
+            test,
+            robust_extreme_threshold_sec=robust_threshold,
+        )
+    )
     best_by_checkpoint: dict[str, dict[str, object]] = {}
     for checkpoint in test["checkpoint"].dropna().astype(str).drop_duplicates():
         candidates = [
@@ -322,3 +347,19 @@ def _portable_path(path: Path, project_root: Path) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _historical_settings(config: FeatureConfig | None) -> HistoricalFeatureSettings:
+    if config is None or config.historical_features is None:
+        return HistoricalFeatureSettings()
+    historical = config.historical_features
+    return HistoricalFeatureSettings(
+        rolling_windows=historical.rolling_windows,
+        min_periods=historical.min_periods,
+    )
+
+
+def _robust_baseline_threshold(config: FeatureConfig | None) -> float:
+    if config is None or config.baselines is None:
+        return 3.0
+    return config.baselines.robust_extreme_gap_to_session_best_sec

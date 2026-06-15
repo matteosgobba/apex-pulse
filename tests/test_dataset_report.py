@@ -33,6 +33,10 @@ def test_dataset_quality_report_has_required_structure() -> None:
         "events_with_missing_checkpoints",
         "practice_only_driver_rows",
         "qualifying_only_driver_rows_if_detectable",
+        "historical_feature_count",
+        "data_quality_feature_count",
+        "rows_with_low_practice_signal_quality",
+        "rows_with_extreme_latest_practice_signal",
         "created_at_utc",
     }
     assert required <= report.keys()
@@ -41,6 +45,22 @@ def test_dataset_quality_report_has_required_structure() -> None:
     assert report["events_with_missing_checkpoints"] == ["2024/spa"]
     assert report["practice_only_driver_rows"] == 1
     assert report["qualifying_only_driver_rows_if_detectable"] == 1
+
+
+def test_dataset_report_counts_historical_and_quality_features() -> None:
+    dataset = _quality_dataset().assign(
+        driver_prev_events_count=[0, 0, 1, 1],
+        driver_rolling3_quali_gap_mean=[pd.NA, pd.NA, 0.1, 0.2],
+        practice_signal_quality_score=[6, 2, 4, 1],
+        latest_best_push_gap_to_session_best_is_extreme=[False, False, True, False],
+    )
+
+    report = build_dataset_quality_report(dataset)
+
+    assert report["historical_feature_count"] == 2
+    assert report["data_quality_feature_count"] == 2
+    assert report["rows_with_low_practice_signal_quality"] == 2
+    assert report["rows_with_extreme_latest_practice_signal"] == 1
 
 
 def test_create_dataset_quality_report_writes_json(tmp_path: Path) -> None:

@@ -73,6 +73,10 @@ def test_backtest_predictions_and_baselines_use_same_fold_rows(tmp_path: Path) -
         "predicted_quali_position",
     }
     assert required <= set(predictions.columns)
+    baseline_names = set(
+        predictions.loc[predictions["prediction_type"].eq("baseline"), "model_name"]
+    )
+    assert "robust_best_push_lap" in baseline_names
     for fold_id, fold_rows in predictions.groupby("fold_id"):
         tabular_drivers = set(fold_rows.loc[fold_rows["prediction_type"].eq("tabular"), "driver"])
         baseline_drivers = set(fold_rows.loc[fold_rows["prediction_type"].eq("baseline"), "driver"])

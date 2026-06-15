@@ -18,10 +18,17 @@ def test_evaluate_baselines_writes_metrics_and_predictions(tmp_path: Path) -> No
 
     metrics = json.loads(summary.metrics_path.read_text(encoding="utf-8"))
     predictions = pd.read_parquet(summary.predictions_path)
-    assert summary.prediction_rows == 18
-    assert set(metrics) == {"best_push_lap", "best_valid_lap", "theoretical_best_lap"}
+    assert summary.prediction_rows == 36
+    assert set(metrics) == {
+        "best_push_lap",
+        "best_valid_lap",
+        "theoretical_best_lap",
+        "robust_best_push_lap",
+        "robust_best_valid_lap",
+        "robust_theoretical_best_lap",
+    }
     assert set(metrics["best_push_lap"]) == {"after_fp1", "after_fp2", "after_fp3"}
-    assert len(predictions) == 18
+    assert len(predictions) == 36
     assert summary.metrics_path.is_file()
     assert summary.predictions_path.is_file()
 

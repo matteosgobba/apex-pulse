@@ -68,6 +68,20 @@ def test_numeric_feature_selection_excludes_targets_identifiers_and_future_sessi
     assert "fp2_n_laps" not in features
 
 
+def test_numeric_feature_selection_includes_historical_and_quality_features() -> None:
+    dataset = _split_dataset().assign(
+        driver_prev_events_count=1.0,
+        driver_rolling3_quali_gap_mean=0.2,
+        practice_signal_quality_score=5.0,
+    )
+
+    features = get_numeric_feature_columns(dataset, "after_fp1")
+
+    assert "driver_prev_events_count" in features
+    assert "driver_rolling3_quali_gap_mean" in features
+    assert "practice_signal_quality_score" in features
+
+
 def _split_dataset() -> pd.DataFrame:
     rows = []
     for season, event, event_order in (

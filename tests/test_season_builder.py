@@ -110,6 +110,17 @@ def test_combine_event_dataset_files_reads_synthetic_parquets(tmp_path: Path) ->
     assert set(combined["event"]) == {"Spa", "Monza"}
 
 
+def test_combined_dataset_adds_historical_features_when_targets_are_available() -> None:
+    first = _history_event_frame("Bahrain", 1, 0.2)
+    second = _history_event_frame("Monza", 16, 0.4)
+
+    combined = combine_event_datasets((first, second))
+    monza = combined[combined["event"].eq("Monza")].iloc[0]
+
+    assert "driver_rolling3_quali_gap_mean" in combined
+    assert monza["driver_rolling3_quali_gap_mean"] == pytest.approx(0.2)
+
+
 def test_dataset_build_report_contains_required_structure(tmp_path: Path) -> None:
     output_path = build_combined_dataset_path(tmp_path / "modeling")
     summary = SeasonDatasetBuildSummary(
@@ -157,5 +168,22 @@ def _event_frame(event: str, round_number: int) -> pd.DataFrame:
             "checkpoint": ["after_fp3", "after_fp1", "after_fp2"],
             "driver": ["NOR"] * 3,
             "quali_position": [round_number] * 3,
+        }
+    )
+
+
+def _history_event_frame(event: str, round_number: int, gap: float) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "season": [2024],
+            "event": [event],
+            "event_slug": [event.lower()],
+            "event_order": [round_number],
+            "checkpoint": ["after_fp1"],
+            "driver": ["NOR"],
+            "team": ["McLaren"],
+            "quali_position": [1],
+            "quali_gap_to_pole_sec": [gap],
+            "reached_q3": [1],
         }
     )

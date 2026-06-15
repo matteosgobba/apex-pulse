@@ -15,6 +15,10 @@ from f1_prediction.config import DataConfig, FeatureConfig
 from f1_prediction.data.cache import initialize_fastf1_cache
 from f1_prediction.data.ingest import ingest_event
 from f1_prediction.features.build import build_session_features
+from f1_prediction.features.historical_features import (
+    HistoricalFeatureSettings,
+    add_historical_features,
+)
 from f1_prediction.features.modeling_dataset import (
     CHECKPOINT_SESSIONS,
     build_modeling_dataset_files,
@@ -205,6 +209,7 @@ def build_season_dataset(
                 reference.season,
                 reference.event,
                 data_config,
+                feature_config=feature_config,
                 force=force,
                 progress=progress,
             )
@@ -235,7 +240,16 @@ def build_season_dataset(
             if fail_fast:
                 break
 
-    combined = combine_event_datasets(event_frames)
+    historical_config = feature_config.historical_features
+    historical_settings = (
+        HistoricalFeatureSettings(
+            rolling_windows=historical_config.rolling_windows,
+            min_periods=historical_config.min_periods,
+        )
+        if historical_config is not None
+        else HistoricalFeatureSettings()
+    )
+    combined = combine_event_datasets(event_frames, historical_settings=historical_settings)
     output_path = build_combined_dataset_path(data_config.modeling_output_dir)
     if not combined.empty:
         ensure_directory(output_path.parent)
@@ -262,7 +276,11 @@ def build_season_dataset(
     return summary
 
 
-def combine_event_datasets(event_frames: Sequence[pd.DataFrame]) -> pd.DataFrame:
+def combine_event_datasets(
+    event_frames: Sequence[pd.DataFrame],
+    *,
+    historical_settings: HistoricalFeatureSettings | None = None,
+) -> pd.DataFrame:
     """Concatenate event datasets into a deterministic combined dataset."""
     if not event_frames:
         return pd.DataFrame()
@@ -275,12 +293,22 @@ def combine_event_datasets(event_frames: Sequence[pd.DataFrame]) -> pd.DataFrame
         ["season", event_sort_column, "_checkpoint_order", "quali_position", "driver"],
         kind="stable",
     ).drop(columns=["_checkpoint_order", "_event_appearance"])
-    return combined.reset_index(drop=True)
+    combined = combined.reset_index(drop=True)
+    if {"team", "quali_gap_to_pole_sec", "reached_q3"} <= set(combined.columns):
+        combined = add_historical_features(combined, historical_settings)
+    return combined
 
 
-def combine_event_dataset_files(event_paths: Sequence[Path]) -> pd.DataFrame:
+def combine_event_dataset_files(
+    event_paths: Sequence[Path],
+    *,
+    historical_settings: HistoricalFeatureSettings | None = None,
+) -> pd.DataFrame:
     """Read event-level Parquet files and concatenate them."""
-    return combine_event_datasets([pd.read_parquet(path) for path in event_paths])
+    return combine_event_datasets(
+        [pd.read_parquet(path) for path in event_paths],
+        historical_settings=historical_settings,
+    )
 
 
 def build_combined_dataset_path(modeling_output_dir: Path) -> Path:

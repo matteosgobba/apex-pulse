@@ -71,7 +71,12 @@ def test_checkpoint_dataset_keeps_target_driver_missing_from_practice() -> None:
     verstappen = dataset[dataset["driver"].eq("VER")]
 
     assert len(verstappen) == len(CHECKPOINT_SESSIONS)
-    assert verstappen[get_feature_columns(dataset)].isna().all().all()
+    practice_columns = [
+        column for column in get_feature_columns(dataset) if column.startswith("fp")
+    ]
+    assert verstappen[practice_columns].isna().all().all()
+    assert verstappen["practice_signal_quality_score"].eq(0).all()
+    assert ~verstappen["has_any_practice_time"].all()
     assert verstappen["quali_position"].eq(1).all()
 
 

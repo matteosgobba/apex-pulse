@@ -13,6 +13,8 @@ import pandas as pd
 
 from f1_prediction.config import DataConfig
 from f1_prediction.data.season_builder import build_combined_dataset_path
+from f1_prediction.features.data_quality import DATA_QUALITY_FEATURE_COLUMNS
+from f1_prediction.features.historical_features import HISTORICAL_FEATURE_COLUMNS
 from f1_prediction.features.modeling_dataset import get_feature_columns
 from f1_prediction.features.qualifying_targets import TARGET_COLUMNS
 from f1_prediction.utils.paths import ensure_directory, slugify
@@ -137,7 +139,12 @@ def get_numeric_feature_columns(
         raise ValueError(f"Unsupported checkpoint: {checkpoint}")
     columns = get_feature_columns(dataset)
     if checkpoint is not None:
-        columns = [column for column in columns if column.startswith(allowed_prefixes[checkpoint])]
+        always_available = set(HISTORICAL_FEATURE_COLUMNS) | set(DATA_QUALITY_FEATURE_COLUMNS)
+        columns = [
+            column
+            for column in columns
+            if column.startswith(allowed_prefixes[checkpoint]) or column in always_available
+        ]
     return [column for column in columns if pd.api.types.is_numeric_dtype(dataset[column])]
 
 

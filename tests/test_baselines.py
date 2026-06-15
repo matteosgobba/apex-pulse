@@ -65,6 +65,40 @@ def test_after_fp1_baseline_does_not_use_future_session_values() -> None:
     assert predictions.loc["NOR", "predicted_quali_position"] == 1
 
 
+def test_robust_baseline_falls_back_from_extreme_fp3_to_fp2() -> None:
+    dataset = _modeling_rows("after_fp3")
+    dataset["fp3_best_push_gap_to_session_best_sec"] = [4.0, 0.2, 0.5]
+    dataset["fp2_best_push_gap_to_session_best_sec"] = [0.1, 0.2, 0.5]
+
+    predictions = predict_baseline(dataset, "robust_best_push_lap").set_index("driver")
+
+    assert predictions.loc["NOR", "selected_practice_session"] == "FP2"
+    assert predictions.loc["NOR", "selected_practice_metric_sec"] == pytest.approx(80.0)
+
+
+def test_robust_baseline_respects_checkpoint_boundaries() -> None:
+    dataset = _modeling_rows("after_fp2")
+    dataset["fp2_best_push_gap_to_session_best_sec"] = [4.0, 0.2, 0.5]
+    dataset["fp1_best_push_gap_to_session_best_sec"] = [0.1, 0.2, 0.5]
+    dataset["fp3_best_push_gap_to_session_best_sec"] = 0.0
+    dataset["fp3_best_push_lap_time_sec"] = 1.0
+
+    predictions = predict_baseline(dataset, "robust_best_push_lap").set_index("driver")
+
+    assert predictions.loc["NOR", "selected_practice_session"] == "FP1"
+    assert predictions.loc["NOR", "selected_practice_metric_sec"] == pytest.approx(80.0)
+
+
+def test_robust_baseline_ranks_extreme_only_driver_after_valid_predictions() -> None:
+    dataset = _modeling_rows("after_fp1")
+    dataset["fp1_best_push_gap_to_session_best_sec"] = [0.0, 0.2, 5.0]
+
+    predictions = predict_baseline(dataset, "robust_best_push_lap").set_index("driver")
+
+    assert pd.isna(predictions.loc["BOT", "selected_practice_metric_sec"])
+    assert predictions.loc["BOT", "predicted_quali_position"] == 3
+
+
 def test_metrics_computation_on_synthetic_predictions() -> None:
     predictions = pd.DataFrame(
         {

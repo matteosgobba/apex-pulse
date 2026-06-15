@@ -42,19 +42,46 @@ class PushLapConfig:
 
 
 @dataclass(frozen=True)
-class FeatureConfig:
-    """Feature engineering configuration."""
-
-    push_lap: PushLapConfig
-    diagnostics: DiagnosticsConfig | None = None
-
-
-@dataclass(frozen=True)
 class DiagnosticsConfig:
     """Thresholds and output limits for prediction diagnostics."""
 
     extreme_mae_gap_threshold_sec: float
     top_n: int
+
+
+@dataclass(frozen=True)
+class HistoricalFeaturesConfig:
+    """Leakage-safe historical rolling feature settings."""
+
+    rolling_windows: tuple[int, ...]
+    min_periods: int
+
+
+@dataclass(frozen=True)
+class DataQualityConfig:
+    """Practice signal quality thresholds."""
+
+    extreme_gap_to_session_best_sec: float
+    min_push_laps_latest_session: int
+    min_valid_laps_latest_session: int
+
+
+@dataclass(frozen=True)
+class BaselineConfig:
+    """Robust practice baseline settings."""
+
+    robust_extreme_gap_to_session_best_sec: float
+
+
+@dataclass(frozen=True)
+class FeatureConfig:
+    """Feature engineering configuration."""
+
+    push_lap: PushLapConfig
+    diagnostics: DiagnosticsConfig | None = None
+    historical_features: HistoricalFeaturesConfig | None = None
+    data_quality: DataQualityConfig | None = None
+    baselines: BaselineConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +187,51 @@ def load_feature_config(
     if diagnostics.extreme_mae_gap_threshold_sec <= 0 or diagnostics.top_n < 1:
         raise ConfigError(f"Diagnostics threshold and top_n must be positive in {path}")
 
+    historical_raw = raw_config.get("historical_features", {})
+    if not isinstance(historical_raw, dict):
+        raise ConfigError(f"'historical_features' must be a mapping in {path}")
+    rolling_windows_raw = historical_raw.get("rolling_windows", [3, 5])
+    if (
+        not isinstance(rolling_windows_raw, list)
+        or not rolling_windows_raw
+        or not all(isinstance(window, int) and window > 0 for window in rolling_windows_raw)
+    ):
+        raise ConfigError(f"Historical rolling_windows must be positive integers in {path}")
+    historical = HistoricalFeaturesConfig(
+        rolling_windows=tuple(rolling_windows_raw),
+        min_periods=int(historical_raw.get("min_periods", 1)),
+    )
+    if historical.min_periods < 1:
+        raise ConfigError(f"Historical min_periods must be positive in {path}")
+
+    quality_raw = raw_config.get("data_quality", {})
+    if not isinstance(quality_raw, dict):
+        raise ConfigError(f"'data_quality' must be a mapping in {path}")
+    data_quality = DataQualityConfig(
+        extreme_gap_to_session_best_sec=float(
+            quality_raw.get("extreme_gap_to_session_best_sec", 3.0)
+        ),
+        min_push_laps_latest_session=int(quality_raw.get("min_push_laps_latest_session", 2)),
+        min_valid_laps_latest_session=int(quality_raw.get("min_valid_laps_latest_session", 5)),
+    )
+    if (
+        data_quality.extreme_gap_to_session_best_sec <= 0
+        or data_quality.min_push_laps_latest_session < 1
+        or data_quality.min_valid_laps_latest_session < 1
+    ):
+        raise ConfigError(f"Data-quality thresholds must be positive in {path}")
+
+    baselines_raw = raw_config.get("baselines", {})
+    if not isinstance(baselines_raw, dict):
+        raise ConfigError(f"'baselines' must be a mapping in {path}")
+    baselines = BaselineConfig(
+        robust_extreme_gap_to_session_best_sec=float(
+            baselines_raw.get("robust_extreme_gap_to_session_best_sec", 3.0)
+        )
+    )
+    if baselines.robust_extreme_gap_to_session_best_sec <= 0:
+        raise ConfigError(f"Robust baseline threshold must be positive in {path}")
+
     return FeatureConfig(
         push_lap=PushLapConfig(
             driver_best_pct_threshold=driver_threshold,
@@ -167,6 +239,9 @@ def load_feature_config(
             allowed_compounds=tuple(compound.upper() for compound in allowed_compounds),
         ),
         diagnostics=diagnostics,
+        historical_features=historical,
+        data_quality=data_quality,
+        baselines=baselines,
     )
 
 

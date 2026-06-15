@@ -198,16 +198,25 @@ def build_modeling_dataset_command(
         Path | None,
         typer.Option("--config", help="Optional path to the data YAML configuration."),
     ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Build qualifying targets and checkpoint-level modeling rows."""
     configure_logging(verbose=verbose)
     config = load_data_config(config_path=config_path)
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=config.project_root,
+    )
     try:
         summary = run_modeling_dataset_build(
             season=season,
             event=event,
             config=config,
+            feature_config=feature_config,
             force=force,
             progress=typer.echo,
         )
@@ -293,13 +302,25 @@ def evaluate_baselines_command(
         Path | None,
         typer.Option("--config", help="Optional path to the data YAML configuration."),
     ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Evaluate transparent non-ML practice pace baselines."""
     configure_logging(verbose=verbose)
     config = load_data_config(config_path=config_path)
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=config.project_root,
+    )
     try:
-        summary = run_baseline_evaluation(config, dataset_path=dataset_path)
+        summary = run_baseline_evaluation(
+            config,
+            dataset_path=dataset_path,
+            feature_config=feature_config,
+        )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -398,6 +419,10 @@ def train_tabular_models_command(
         Path | None,
         typer.Option("--model-config", help="Optional path to the model YAML configuration."),
     ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Train simple checkpoint-safe Ridge and Random Forest regressors."""
@@ -405,6 +430,10 @@ def train_tabular_models_command(
     config = load_data_config(config_path=config_path)
     model_config = load_model_config(
         config_path=model_config_path,
+        project_root=config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
         project_root=config.project_root,
     )
     try:
@@ -415,6 +444,7 @@ def train_tabular_models_command(
             test_events=test_events,
             min_events=min_events,
             model_config=model_config,
+            feature_config=feature_config,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -498,6 +528,10 @@ def backtest_tabular_models_command(
         Path | None,
         typer.Option("--model-config", help="Optional path to the model YAML configuration."),
     ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
     """Backtest simple tabular models across repeated event-safe folds."""
@@ -505,6 +539,10 @@ def backtest_tabular_models_command(
     config = load_data_config(config_path=config_path)
     model_config = load_model_config(
         config_path=model_config_path,
+        project_root=config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
         project_root=config.project_root,
     )
     requested_test_events = [*(test_events or []), *(additional_test_events or [])]
@@ -518,6 +556,7 @@ def backtest_tabular_models_command(
             min_train_events=min_train_events,
             fail_fast=fail_fast,
             model_config=model_config,
+            feature_config=feature_config,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -669,6 +708,8 @@ def _print_dataset_quality_summary(summary: DatasetQualitySummary, project_root:
     typer.echo(f"Events: {summary.n_events}")
     typer.echo(f"Drivers: {summary.n_drivers}")
     typer.echo(f"Checkpoints: {', '.join(summary.checkpoints)}")
+    typer.echo(f"Historical features: {summary.historical_feature_count}")
+    typer.echo(f"Data-quality features: {summary.data_quality_feature_count}")
     typer.echo(f"Report: {_display_path(summary.report_path, project_root)}")
 
 

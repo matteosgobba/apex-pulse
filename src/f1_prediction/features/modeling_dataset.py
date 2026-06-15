@@ -8,9 +8,15 @@ from pathlib import Path
 
 import pandas as pd
 
-from f1_prediction.config import DataConfig
+from f1_prediction.config import DataConfig, DataQualityConfig, FeatureConfig
 from f1_prediction.data.fastf1_loader import build_lap_output_path
 from f1_prediction.features.build import build_session_features_output_path
+from f1_prediction.features.data_quality import (
+    DATA_QUALITY_FEATURE_COLUMNS,
+    DataQualitySettings,
+    add_data_quality_features,
+)
+from f1_prediction.features.historical_features import HISTORICAL_FEATURE_COLUMNS
 from f1_prediction.features.qualifying_targets import TARGET_COLUMNS, build_qualifying_targets
 from f1_prediction.features.relative_features import add_relative_practice_features
 from f1_prediction.utils.paths import ensure_directory, slugify
@@ -52,6 +58,7 @@ class ModelingDatasetBuildSummary:
 def build_checkpoint_modeling_dataset(
     practice_features: pd.DataFrame,
     qualifying_targets: pd.DataFrame,
+    data_quality_config: DataQualityConfig | None = None,
 ) -> pd.DataFrame:
     """Build after-FP1/FP2/FP3 rows without exposing future practice values."""
     _validate_target_columns(qualifying_targets)
@@ -81,6 +88,7 @@ def build_checkpoint_modeling_dataset(
         checkpoint_frames.append(frame)
 
     dataset = pd.concat(checkpoint_frames, ignore_index=True, sort=False)
+    dataset = add_data_quality_features(dataset, _quality_settings(data_quality_config))
     feature_columns = _ordered_feature_columns(dataset)
     ordered_columns = [*IDENTIFIER_COLUMNS, *feature_columns, *TARGET_COLUMNS]
     return dataset.loc[:, ordered_columns]
@@ -91,7 +99,12 @@ def get_feature_columns(dataset: pd.DataFrame) -> list[str]:
     return [
         column
         for column in dataset.columns
-        if column.startswith(("fp1_", "fp2_", "fp3_")) and column not in TARGET_COLUMNS
+        if (
+            column.startswith(("fp1_", "fp2_", "fp3_"))
+            or column in HISTORICAL_FEATURE_COLUMNS
+            or column in DATA_QUALITY_FEATURE_COLUMNS
+        )
+        and column not in TARGET_COLUMNS
     ]
 
 
@@ -100,6 +113,7 @@ def build_modeling_dataset_files(
     event: str,
     config: DataConfig,
     *,
+    feature_config: FeatureConfig | None = None,
     force: bool = False,
     progress: ProgressCallback | None = None,
 ) -> ModelingDatasetBuildSummary:
@@ -143,7 +157,12 @@ def build_modeling_dataset_files(
         event=event,
     )
     _report(progress, "BUILD: after_fp1, after_fp2, and after_fp3 rows")
-    dataset = build_checkpoint_modeling_dataset(practice_features, targets)
+    quality_config = feature_config.data_quality if feature_config is not None else None
+    dataset = build_checkpoint_modeling_dataset(
+        practice_features,
+        targets,
+        data_quality_config=quality_config,
+    )
     ensure_directory(output_path.parent)
     dataset.to_parquet(output_path, engine="pyarrow", index=False)
     _report(progress, f"OK: {len(dataset)} modeling rows")
@@ -200,7 +219,19 @@ def _ordered_feature_columns(dataset: pd.DataFrame) -> list[str]:
     ordered: list[str] = []
     for session in ("fp1", "fp2", "fp3"):
         ordered.extend(sorted(column for column in available if column.startswith(f"{session}_")))
+    ordered.extend(column for column in DATA_QUALITY_FEATURE_COLUMNS if column in available)
+    ordered.extend(column for column in HISTORICAL_FEATURE_COLUMNS if column in available)
     return ordered
+
+
+def _quality_settings(config: DataQualityConfig | None) -> DataQualitySettings:
+    if config is None:
+        return DataQualitySettings()
+    return DataQualitySettings(
+        extreme_gap_to_session_best_sec=config.extreme_gap_to_session_best_sec,
+        min_push_laps_latest_session=config.min_push_laps_latest_session,
+        min_valid_laps_latest_session=config.min_valid_laps_latest_session,
+    )
 
 
 def _validate_target_columns(targets: pd.DataFrame) -> None:

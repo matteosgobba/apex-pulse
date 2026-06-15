@@ -11,6 +11,8 @@ import pandas as pd
 
 from f1_prediction.config import DataConfig
 from f1_prediction.data.season_builder import build_combined_dataset_path
+from f1_prediction.features.data_quality import DATA_QUALITY_FEATURE_COLUMNS
+from f1_prediction.features.historical_features import HISTORICAL_FEATURE_COLUMNS
 from f1_prediction.features.modeling_dataset import get_feature_columns
 from f1_prediction.features.qualifying_targets import TARGET_COLUMNS
 from f1_prediction.utils.paths import ensure_directory
@@ -27,6 +29,8 @@ class DatasetQualitySummary:
     n_events: int
     n_drivers: int
     checkpoints: tuple[str, ...]
+    historical_feature_count: int
+    data_quality_feature_count: int
 
 
 def build_dataset_quality_report(dataset: pd.DataFrame) -> dict[str, object]:
@@ -58,6 +62,20 @@ def build_dataset_quality_report(dataset: pd.DataFrame) -> dict[str, object]:
     ]
     feature_present = frame[feature_columns].notna().any(axis=1) if feature_columns else False
     target_present = frame[target_columns].notna().any(axis=1) if target_columns else False
+    historical_columns = [
+        column for column in HISTORICAL_FEATURE_COLUMNS if column in frame.columns
+    ]
+    quality_columns = [column for column in DATA_QUALITY_FEATURE_COLUMNS if column in frame.columns]
+    quality_score = pd.to_numeric(
+        frame.get("practice_signal_quality_score", pd.Series(float("nan"), index=frame.index)),
+        errors="coerce",
+    )
+    extreme_columns = [column for column in quality_columns if column.endswith("_is_extreme")]
+    extreme_rows = (
+        frame[extreme_columns].fillna(False).astype(bool).any(axis=1)
+        if extreme_columns
+        else pd.Series(False, index=frame.index)
+    )
 
     return {
         "n_rows": len(frame),
@@ -83,6 +101,10 @@ def build_dataset_quality_report(dataset: pd.DataFrame) -> dict[str, object]:
         "events_with_missing_checkpoints": events_with_missing,
         "practice_only_driver_rows": int((feature_present & ~target_present).sum()),
         "qualifying_only_driver_rows_if_detectable": int((target_present & ~feature_present).sum()),
+        "historical_feature_count": len(historical_columns),
+        "data_quality_feature_count": len(quality_columns),
+        "rows_with_low_practice_signal_quality": int(quality_score.lt(3).sum()),
+        "rows_with_extreme_latest_practice_signal": int(extreme_rows.sum()),
         "created_at_utc": _utc_now(),
     }
 
@@ -108,6 +130,8 @@ def create_dataset_quality_report(
         n_events=int(report["n_events"]),
         n_drivers=int(report["n_drivers"]),
         checkpoints=tuple(report["checkpoints"]),
+        historical_feature_count=int(report["historical_feature_count"]),
+        data_quality_feature_count=int(report["data_quality_feature_count"]),
     )
 
 

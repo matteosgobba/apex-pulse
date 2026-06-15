@@ -12,8 +12,12 @@ from typing import Any
 
 import pandas as pd
 
-from f1_prediction.config import DataConfig, ModelConfig
+from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig
 from f1_prediction.data.season_builder import build_combined_dataset_path
+from f1_prediction.features.historical_features import (
+    HistoricalFeatureSettings,
+    add_historical_features,
+)
 from f1_prediction.modeling.baselines import generate_baseline_predictions
 from f1_prediction.modeling.metrics import compute_baseline_metrics, compute_prediction_metrics
 from f1_prediction.modeling.splits import (
@@ -126,6 +130,7 @@ def run_tabular_backtest(
     min_train_events: int = 5,
     fail_fast: bool = False,
     model_config: ModelConfig | None = None,
+    feature_config: FeatureConfig | None = None,
 ) -> TabularBacktestSummary:
     """Train and evaluate tabular models plus baselines on repeated event folds."""
     strategy = BacktestStrategy(strategy)
@@ -168,15 +173,27 @@ def run_tabular_backtest(
     completed_folds: list[BacktestFold] = []
     tabular_frames: list[pd.DataFrame] = []
     baseline_frames: list[pd.DataFrame] = []
+    historical_settings = _historical_settings(feature_config)
+    robust_threshold = _robust_baseline_threshold(feature_config)
 
     for fold in folds:
         try:
-            train = dataset[row_keys.isin(fold.train_events)].copy()
-            test = dataset[row_keys.eq(fold.test_event)].copy()
+            fold_scope = dataset[row_keys.isin([*fold.train_events, fold.test_event])].copy()
+            fold_scope = add_historical_features(
+                fold_scope,
+                historical_settings,
+                excluded_target_events={fold.test_event},
+            )
+            fold_keys = _event_key_series(fold_scope)
+            train = fold_scope[fold_keys.isin(fold.train_events)].copy()
+            test = fold_scope[fold_keys.eq(fold.test_event)].copy()
             if train.empty or test.empty:
                 raise ValueError("Fold must contain both training and test rows")
             tabular_predictions, _ = fit_and_predict(train, test, model_config=settings)
-            baseline_predictions = generate_baseline_predictions(test)
+            baseline_predictions = generate_baseline_predictions(
+                test,
+                robust_extreme_threshold_sec=robust_threshold,
+            )
             tabular_frames.append(_tag_tabular_predictions(tabular_predictions, fold))
             baseline_frames.append(_tag_baseline_predictions(baseline_predictions, fold))
             completed_folds.append(_completed_fold(fold, "success", None))
@@ -504,3 +521,19 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _historical_settings(config: FeatureConfig | None) -> HistoricalFeatureSettings:
+    if config is None or config.historical_features is None:
+        return HistoricalFeatureSettings()
+    historical = config.historical_features
+    return HistoricalFeatureSettings(
+        rolling_windows=historical.rolling_windows,
+        min_periods=historical.min_periods,
+    )
+
+
+def _robust_baseline_threshold(config: FeatureConfig | None) -> float:
+    if config is None or config.baselines is None:
+        return 3.0
+    return config.baselines.robust_extreme_gap_to_session_best_sec

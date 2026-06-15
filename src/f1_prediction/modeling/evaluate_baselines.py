@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from f1_prediction.config import DataConfig
+from f1_prediction.config import DataConfig, FeatureConfig
 from f1_prediction.data.season_builder import build_combined_dataset_path
 from f1_prediction.modeling.baselines import generate_baseline_predictions
 from f1_prediction.modeling.metrics import compute_baseline_metrics
@@ -30,6 +30,8 @@ class BaselineEvaluationSummary:
 def evaluate_baselines(
     config: DataConfig,
     dataset_path: Path | None = None,
+    *,
+    feature_config: FeatureConfig | None = None,
 ) -> BaselineEvaluationSummary:
     """Evaluate all baselines and persist predictions plus nested metrics."""
     source_path = dataset_path or build_combined_dataset_path(config.modeling_output_dir)
@@ -42,7 +44,15 @@ def evaluate_baselines(
         )
 
     dataset = pd.read_parquet(source_path)
-    predictions = generate_baseline_predictions(dataset)
+    robust_threshold = (
+        feature_config.baselines.robust_extreme_gap_to_session_best_sec
+        if feature_config is not None and feature_config.baselines is not None
+        else 3.0
+    )
+    predictions = generate_baseline_predictions(
+        dataset,
+        robust_extreme_threshold_sec=robust_threshold,
+    )
     metrics = compute_baseline_metrics(predictions)
     metrics_path = config.metrics_output_dir / "baseline_metrics.json"
     predictions_path = config.metrics_output_dir / "baseline_predictions.parquet"

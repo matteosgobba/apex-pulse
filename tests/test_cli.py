@@ -118,6 +118,12 @@ def test_build_modeling_dataset_command(monkeypatch, tmp_path: Path) -> None:
     output_path = tmp_path / "modeling/2024/monza/modeling_dataset.parquet"
     monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
     monkeypatch.setattr(
+        "f1_prediction.cli.load_feature_config",
+        lambda config_path=None, project_root=None: FeatureConfig(
+            push_lap=PushLapConfig(1.03, 1.07, ("SOFT",))
+        ),
+    )
+    monkeypatch.setattr(
         "f1_prediction.cli.run_modeling_dataset_build",
         lambda **kwargs: ModelingDatasetBuildSummary(
             season=2024,
@@ -271,8 +277,14 @@ def test_evaluate_baselines_command(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
     monkeypatch.setattr(
+        "f1_prediction.cli.load_feature_config",
+        lambda config_path=None, project_root=None: FeatureConfig(
+            push_lap=PushLapConfig(1.03, 1.07, ("SOFT",))
+        ),
+    )
+    monkeypatch.setattr(
         "f1_prediction.cli.run_baseline_evaluation",
-        lambda config, dataset_path=None: BaselineEvaluationSummary(
+        lambda config, dataset_path=None, feature_config=None: BaselineEvaluationSummary(
             dataset_path=tmp_path / "combined.parquet",
             prediction_rows=180,
             baselines=("best_push_lap",),
