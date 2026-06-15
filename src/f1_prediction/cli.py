@@ -32,6 +32,10 @@ from f1_prediction.modeling.backtest_tabular import (
     TabularBacktestSummary,
     run_tabular_backtest,
 )
+from f1_prediction.modeling.boosted_backtest import (
+    BoostedBacktestSummary,
+    run_boosted_backtest,
+)
 from f1_prediction.modeling.dataset_report import DatasetQualitySummary
 from f1_prediction.modeling.dataset_report import (
     create_dataset_quality_report as run_dataset_quality_report,
@@ -485,6 +489,10 @@ def backtest_report_command(
         Path | None,
         typer.Option("--ablation-metrics", help="Optional ablation metrics JSON path."),
     ] = None,
+    boosted_metrics_path: Annotated[
+        Path | None,
+        typer.Option("--boosted-metrics", help="Optional boosted metrics JSON path."),
+    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Optional path to the data YAML configuration."),
@@ -502,6 +510,7 @@ def backtest_report_command(
             tabular_metrics_path=tabular_metrics_path,
             quality_report_path=quality_report_path,
             ablation_metrics_path=ablation_metrics_path,
+            boosted_metrics_path=boosted_metrics_path,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -578,6 +587,93 @@ def backtest_tabular_models_command(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     _print_tabular_backtest_summary(summary, config.project_root)
+
+
+@app.command("backtest-boosted-models")
+def backtest_boosted_models_command(
+    strategy: Annotated[
+        BacktestStrategy,
+        typer.Option(help="Event-safe backtesting strategy."),
+    ] = BacktestStrategy.walk_forward,
+    feature_policy: Annotated[
+        str,
+        typer.Option(help="Feature policy: checkpoint_best or all_features."),
+    ] = "checkpoint_best",
+    feature_group: Annotated[
+        str | None,
+        typer.Option(
+            "--feature-group",
+            help="Use one registered feature group at every checkpoint.",
+        ),
+    ] = None,
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    test_events: Annotated[
+        list[str] | None,
+        typer.Option("--test-events", help="Repeated-holdout test event filter."),
+    ] = None,
+    additional_test_events: Annotated[
+        list[str] | None,
+        typer.Argument(hidden=True),
+    ] = None,
+    min_events: Annotated[
+        int,
+        typer.Option(min=2, help="Minimum unique events required for boosted backtesting."),
+    ] = 10,
+    min_train_events: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum prior events before walk-forward testing."),
+    ] = 5,
+    fail_fast: Annotated[
+        bool,
+        typer.Option("--fail-fast", help="Stop after the first failed fold."),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Backtest gradient-boosted models with checkpoint-safe feature policies."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    requested_test_events = [*(test_events or []), *(additional_test_events or [])]
+    try:
+        summary = run_boosted_backtest(
+            data_config,
+            strategy=strategy,
+            feature_policy=feature_policy,
+            explicit_feature_group=feature_group,
+            dataset_path=dataset_path,
+            test_events=requested_test_events or None,
+            min_events=min_events,
+            min_train_events=min_train_events,
+            fail_fast=fail_fast,
+            model_config=model_config,
+            feature_config=feature_config,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_boosted_backtest_summary(summary, data_config.project_root)
 
 
 @app.command("diagnostics-report")
@@ -855,6 +951,24 @@ def _print_tabular_backtest_summary(
     typer.echo("Tabular backtest complete")
     typer.echo(f"Status: {summary.status}")
     typer.echo(f"Strategy: {summary.strategy}")
+    typer.echo(f"Events: {summary.n_events}")
+    typer.echo(f"Folds successful: {summary.n_folds_successful}")
+    typer.echo(f"Folds failed: {summary.n_folds_failed}")
+    typer.echo(f"Prediction rows: {summary.prediction_rows}")
+    typer.echo(f"Metrics: {_display_path(summary.metrics_path, project_root)}")
+    typer.echo(f"Folds: {_display_path(summary.folds_path, project_root)}")
+    if summary.predictions_path is not None:
+        typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
+
+
+def _print_boosted_backtest_summary(
+    summary: BoostedBacktestSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Boosted model backtest complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Strategy: {summary.strategy}")
+    typer.echo(f"Feature policy: {summary.feature_policy}")
     typer.echo(f"Events: {summary.n_events}")
     typer.echo(f"Folds successful: {summary.n_folds_successful}")
     typer.echo(f"Folds failed: {summary.n_folds_failed}")

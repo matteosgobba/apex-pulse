@@ -39,6 +39,7 @@ def create_backtest_report(
     repeated_metrics_path: Path | None = None,
     walk_forward_metrics_path: Path | None = None,
     ablation_metrics_path: Path | None = None,
+    boosted_metrics_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -70,6 +71,10 @@ def create_backtest_report(
         ablation_metrics_path or config.metrics_output_dir / "ablation_metrics.json",
         config.project_root,
     )
+    boosted_path = _resolve_path(
+        boosted_metrics_path or config.metrics_output_dir / "boosted_metrics.json",
+        config.project_root,
+    )
     dataset = pd.read_parquet(source_path)
     quality = (
         _read_json(quality_path)
@@ -81,6 +86,7 @@ def create_backtest_report(
     repeated_metrics = _read_json(repeated_path) if repeated_path.is_file() else None
     walk_forward_metrics = _read_json(walk_forward_path) if walk_forward_path.is_file() else None
     ablation_metrics = _read_json(ablation_path) if ablation_path.is_file() else None
+    boosted_metrics = _read_json(boosted_path) if boosted_path.is_file() else None
     payload = build_backtest_report_payload(
         quality,
         baseline_metrics,
@@ -88,6 +94,7 @@ def create_backtest_report(
         repeated_metrics=repeated_metrics,
         walk_forward_metrics=walk_forward_metrics,
         ablation_metrics=ablation_metrics,
+        boosted_metrics=boosted_metrics,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -112,6 +119,7 @@ def build_backtest_report_payload(
     repeated_metrics: dict[str, Any] | None = None,
     walk_forward_metrics: dict[str, Any] | None = None,
     ablation_metrics: dict[str, Any] | None = None,
+    boosted_metrics: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -131,6 +139,7 @@ def build_backtest_report_payload(
             available_backtests,
         )
         payload.update(_ablation_summary(ablation_metrics))
+        payload.update(_boosted_summary(payload, ablation_metrics, boosted_metrics))
         return payload
 
     training_status = (
@@ -176,6 +185,7 @@ def build_backtest_report_payload(
         "created_at_utc": _utc_now(),
     }
     payload.update(_ablation_summary(ablation_metrics))
+    payload.update(_boosted_summary(payload, ablation_metrics, boosted_metrics))
     return payload
 
 
@@ -341,6 +351,93 @@ def _ablation_summary(metrics: dict[str, Any] | None) -> dict[str, object]:
         "best_ablation_model_by_checkpoint": best_models,
         "best_ablation_delta_vs_baseline_by_checkpoint": deltas,
     }
+
+
+def _boosted_summary(
+    report: dict[str, object],
+    ablation_metrics: dict[str, Any] | None,
+    boosted_metrics: dict[str, Any] | None,
+) -> dict[str, object]:
+    usable = boosted_metrics is not None and boosted_metrics.get("status") in {
+        "complete",
+        "partial",
+    }
+    if not usable:
+        return {
+            "boosted_models_available": [],
+            "best_boosted_model_by_checkpoint": {},
+            "boosted_vs_best_baseline_delta_mae_by_checkpoint": {},
+            "boosted_vs_best_tabular_delta_mae_by_checkpoint": {},
+            "boosted_vs_best_ablation_delta_mae_by_checkpoint": {},
+            "preferred_model_family_by_checkpoint": _preferred_model_families(
+                report, ablation_metrics, None
+            ),
+        }
+    best_boosted = boosted_metrics.get("best_model_by_checkpoint", {})
+    best_tabular = report.get("best_tabular_model_by_checkpoint", {})
+    best_ablation = (
+        ablation_metrics.get("best_overall_by_checkpoint", {})
+        if ablation_metrics and ablation_metrics.get("status") in {"complete", "partial"}
+        else {}
+    )
+    best_baseline = boosted_metrics.get("best_baseline_by_checkpoint", {})
+    checkpoints = set(best_boosted) | set(best_tabular) | set(best_ablation) | set(best_baseline)
+    baseline_deltas: dict[str, float | None] = {}
+    tabular_deltas: dict[str, float | None] = {}
+    ablation_deltas: dict[str, float | None] = {}
+    for checkpoint in sorted(checkpoints):
+        boosted_mae = best_boosted.get(checkpoint, {}).get("mae_gap_sec")
+        baseline_deltas[checkpoint] = _delta(
+            boosted_mae, best_baseline.get(checkpoint, {}).get("mae_gap_sec")
+        )
+        tabular_deltas[checkpoint] = _delta(
+            boosted_mae, best_tabular.get(checkpoint, {}).get("mae_gap_sec")
+        )
+        ablation_deltas[checkpoint] = _delta(
+            boosted_mae, best_ablation.get(checkpoint, {}).get("mae_gap_sec")
+        )
+    return {
+        "boosted_models_available": list(boosted_metrics.get("models", [])),
+        "best_boosted_model_by_checkpoint": best_boosted,
+        "boosted_vs_best_baseline_delta_mae_by_checkpoint": baseline_deltas,
+        "boosted_vs_best_tabular_delta_mae_by_checkpoint": tabular_deltas,
+        "boosted_vs_best_ablation_delta_mae_by_checkpoint": ablation_deltas,
+        "preferred_model_family_by_checkpoint": _preferred_model_families(
+            report, ablation_metrics, boosted_metrics
+        ),
+    }
+
+
+def _preferred_model_families(
+    report: dict[str, object],
+    ablation_metrics: dict[str, Any] | None,
+    boosted_metrics: dict[str, Any] | None,
+) -> dict[str, str]:
+    baselines = report.get("best_baseline_by_checkpoint", {})
+    tabular = report.get("best_tabular_model_by_checkpoint", {})
+    ablation = (
+        ablation_metrics.get("best_overall_by_checkpoint", {})
+        if ablation_metrics and ablation_metrics.get("status") in {"complete", "partial"}
+        else {}
+    )
+    boosted = (
+        boosted_metrics.get("best_model_by_checkpoint", {})
+        if boosted_metrics and boosted_metrics.get("status") in {"complete", "partial"}
+        else {}
+    )
+    checkpoints = set(baselines) | set(tabular) | set(ablation) | set(boosted)
+    preferred: dict[str, str] = {}
+    for checkpoint in sorted(checkpoints):
+        candidates = {
+            "baseline": baselines.get(checkpoint, {}).get("mae_gap_sec"),
+            "tabular": tabular.get(checkpoint, {}).get("mae_gap_sec"),
+            "ablation": ablation.get(checkpoint, {}).get("mae_gap_sec"),
+            "boosted": boosted.get(checkpoint, {}).get("mae_gap_sec"),
+        }
+        numeric = {name: float(value) for name, value in candidates.items() if value is not None}
+        if numeric:
+            preferred[checkpoint] = min(numeric, key=numeric.get)
+    return preferred
 
 
 def _delta(model_value: object, baseline_value: object) -> float | None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +94,27 @@ class RandomForestConfig:
 
 
 @dataclass(frozen=True)
+class HistGradientBoostingConfig:
+    """Conservative histogram gradient boosting settings."""
+
+    enabled: bool = True
+    max_iter: int = 200
+    learning_rate: float = 0.05
+    max_leaf_nodes: int = 31
+    l2_regularization: float = 0.1
+    random_state: int = 42
+
+
+@dataclass(frozen=True)
+class FeatureGroupPolicyConfig:
+    """Default feature group selected for each prediction checkpoint."""
+
+    after_fp1: str = "base_lap_features"
+    after_fp2: str = "base_plus_quality"
+    after_fp3: str = "base_plus_relative"
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     """Simple tabular model and dataset-size settings."""
 
@@ -101,6 +122,10 @@ class ModelConfig:
     random_state: int
     ridge_alpha: float
     random_forest: RandomForestConfig
+    hist_gradient_boosting: HistGradientBoostingConfig = field(
+        default_factory=HistGradientBoostingConfig
+    )
+    feature_group_policy: FeatureGroupPolicyConfig = field(default_factory=FeatureGroupPolicyConfig)
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:
@@ -257,6 +282,19 @@ def load_model_config(
     raw_config = load_yaml_config(path)
     model = _required_mapping(raw_config, "model", path)
     random_forest = _required_mapping(model, "random_forest", path)
+    models = model.get("models", {})
+    if not isinstance(models, dict):
+        raise ConfigError(f"'models' must be a mapping in {path}")
+    hist_gradient_boosting = models.get("hist_gradient_boosting", {})
+    if not isinstance(hist_gradient_boosting, dict):
+        raise ConfigError(f"'hist_gradient_boosting' must be a mapping in {path}")
+    feature_group_policy = model.get("feature_group_policy", {})
+    if not isinstance(feature_group_policy, dict):
+        raise ConfigError(f"'feature_group_policy' must be a mapping in {path}")
+    default_boosting = HistGradientBoostingConfig(
+        random_state=_required_integer(model, "random_state", path)
+    )
+    default_policy = FeatureGroupPolicyConfig()
     config = ModelConfig(
         min_events=_required_integer(model, "min_events", path),
         random_state=_required_integer(model, "random_state", path),
@@ -265,6 +303,27 @@ def load_model_config(
             n_estimators=_required_integer(random_forest, "n_estimators", path),
             max_depth=_required_integer(random_forest, "max_depth", path),
             min_samples_leaf=_required_integer(random_forest, "min_samples_leaf", path),
+        ),
+        hist_gradient_boosting=HistGradientBoostingConfig(
+            enabled=bool(hist_gradient_boosting.get("enabled", default_boosting.enabled)),
+            max_iter=int(hist_gradient_boosting.get("max_iter", default_boosting.max_iter)),
+            learning_rate=float(
+                hist_gradient_boosting.get("learning_rate", default_boosting.learning_rate)
+            ),
+            max_leaf_nodes=int(
+                hist_gradient_boosting.get("max_leaf_nodes", default_boosting.max_leaf_nodes)
+            ),
+            l2_regularization=float(
+                hist_gradient_boosting.get("l2_regularization", default_boosting.l2_regularization)
+            ),
+            random_state=int(
+                hist_gradient_boosting.get("random_state", default_boosting.random_state)
+            ),
+        ),
+        feature_group_policy=FeatureGroupPolicyConfig(
+            after_fp1=str(feature_group_policy.get("after_fp1", default_policy.after_fp1)),
+            after_fp2=str(feature_group_policy.get("after_fp2", default_policy.after_fp2)),
+            after_fp3=str(feature_group_policy.get("after_fp3", default_policy.after_fp3)),
         ),
     )
     if config.min_events < 2 or config.ridge_alpha <= 0:
@@ -275,6 +334,14 @@ def load_model_config(
         or config.random_forest.min_samples_leaf < 1
     ):
         raise ConfigError(f"Random Forest settings must be positive in {path}")
+    boosting = config.hist_gradient_boosting
+    if (
+        boosting.max_iter < 1
+        or boosting.learning_rate <= 0
+        or boosting.max_leaf_nodes < 2
+        or boosting.l2_regularization < 0
+    ):
+        raise ConfigError(f"HistGradientBoosting settings are invalid in {path}")
     return config
 
 

@@ -89,6 +89,18 @@ model:
     n_estimators: 50
     max_depth: 4
     min_samples_leaf: 3
+  models:
+    hist_gradient_boosting:
+      enabled: true
+      max_iter: 75
+      learning_rate: 0.08
+      max_leaf_nodes: 15
+      l2_regularization: 0.2
+      random_state: 9
+  feature_group_policy:
+    after_fp1: base_lap_features
+    after_fp2: base_plus_quality
+    after_fp3: base_plus_relative
 """.strip(),
         encoding="utf-8",
     )
@@ -99,3 +111,7 @@ model:
     assert config.random_state == 7
     assert config.ridge_alpha == 2.0
     assert config.random_forest.n_estimators == 50
+    assert config.hist_gradient_boosting.max_iter == 75
+    assert config.hist_gradient_boosting.learning_rate == 0.08
+    assert config.hist_gradient_boosting.random_state == 9
+    assert config.feature_group_policy.after_fp2 == "base_plus_quality"

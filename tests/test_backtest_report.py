@@ -99,6 +99,44 @@ def test_backtest_report_includes_ablation_summary() -> None:
     )
 
 
+def test_backtest_report_includes_boosted_comparisons() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        walk_forward_metrics=_multi_fold_metrics("walk_forward", 4),
+        ablation_metrics={
+            "status": "complete",
+            "feature_groups": ["base_lap_features"],
+            "best_overall_by_checkpoint": {
+                "after_fp1": {"model_name": "random_forest", "mae_gap_sec": 0.28}
+            },
+        },
+        boosted_metrics={
+            "status": "complete",
+            "models": ["hist_gradient_boosting"],
+            "best_model_by_checkpoint": {
+                "after_fp1": {
+                    "model_name": "hist_gradient_boosting",
+                    "mae_gap_sec": 0.22,
+                }
+            },
+            "best_baseline_by_checkpoint": {
+                "after_fp1": {"baseline_name": "push", "mae_gap_sec": 0.4}
+            },
+        },
+    )
+
+    assert report["boosted_models_available"] == ["hist_gradient_boosting"]
+    assert report["boosted_vs_best_baseline_delta_mae_by_checkpoint"]["after_fp1"] == pytest.approx(
+        -0.18
+    )
+    assert report["boosted_vs_best_ablation_delta_mae_by_checkpoint"]["after_fp1"] == pytest.approx(
+        -0.06
+    )
+    assert report["preferred_model_family_by_checkpoint"]["after_fp1"] == "boosted"
+
+
 def _quality() -> dict[str, object]:
     return {
         "n_rows": 120,

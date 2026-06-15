@@ -6,3 +6,15 @@ model:
     n_estimators: 200
     max_depth: 8
     min_samples_leaf: 2
+  models:
+    hist_gradient_boosting:
+      enabled: true
+      max_iter: 200
+      learning_rate: 0.05
+      max_leaf_nodes: 31
+      l2_regularization: 0.1
+      random_state: 42
+  feature_group_policy:
+    after_fp1: base_lap_features
+    after_fp2: base_plus_quality
+    after_fp3: base_plus_relative
