@@ -35,6 +35,8 @@ from f1_prediction.modeling.dataset_report import DatasetQualitySummary
 from f1_prediction.modeling.dataset_report import (
     create_dataset_quality_report as run_dataset_quality_report,
 )
+from f1_prediction.modeling.diagnostics import DiagnosticsReportSummary
+from f1_prediction.modeling.diagnostics import create_diagnostics_report as run_diagnostics_report
 from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
 from f1_prediction.modeling.evaluate_baselines import evaluate_baselines as run_baseline_evaluation
 from f1_prediction.modeling.splits import DatasetSplitSummary, SplitStrategy
@@ -523,6 +525,58 @@ def backtest_tabular_models_command(
     _print_tabular_backtest_summary(summary, config.project_root)
 
 
+@app.command("diagnostics-report")
+def diagnostics_report_command(
+    walk_forward_path: Annotated[
+        Path | None,
+        typer.Option("--walk-forward", help="Optional walk-forward predictions path."),
+    ] = None,
+    repeated_path: Annotated[
+        Path | None,
+        typer.Option("--repeated-holdout", help="Optional repeated-holdout predictions path."),
+    ] = None,
+    baseline_path: Annotated[
+        Path | None,
+        typer.Option("--baselines", help="Optional full-dataset baseline predictions path."),
+    ] = None,
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Create event- and driver-level prediction error diagnostics."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    if feature_config.diagnostics is None:
+        raise typer.BadParameter("Diagnostics configuration is unavailable")
+    try:
+        summary = run_diagnostics_report(
+            data_config,
+            feature_config.diagnostics,
+            walk_forward_path=walk_forward_path,
+            repeated_path=repeated_path,
+            baseline_path=baseline_path,
+            dataset_path=dataset_path,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_diagnostics_summary(summary, data_config.project_root)
+
+
 def _print_summary(result: SessionLoadResult) -> None:
     typer.echo("Session loaded successfully")
     typer.echo(f"Season: {result.season}")
@@ -677,6 +731,20 @@ def _print_tabular_backtest_summary(
     typer.echo(f"Folds: {_display_path(summary.folds_path, project_root)}")
     if summary.predictions_path is not None:
         typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
+
+
+def _print_diagnostics_summary(
+    summary: DiagnosticsReportSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Diagnostics report complete")
+    typer.echo(f"Preferred source: {summary.preferred_prediction_source}")
+    typer.echo(f"Available sources: {', '.join(summary.available_prediction_sources)}")
+    typer.echo(f"Events: {summary.n_events}")
+    typer.echo(f"Drivers: {summary.n_drivers}")
+    typer.echo(f"Report: {_display_path(summary.report_path, project_root)}")
+    typer.echo(f"Event summary: {_display_path(summary.event_summary_path, project_root)}")
+    typer.echo(f"Driver summary: {_display_path(summary.driver_summary_path, project_root)}")
 
 
 if __name__ == "__main__":

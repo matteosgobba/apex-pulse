@@ -7,3 +7,7 @@ push_lap:
     - HARD
     - INTERMEDIATE
     - WET
+
+diagnostics:
+  extreme_mae_gap_threshold_sec: 1.5
+  top_n: 10

@@ -46,6 +46,15 @@ class FeatureConfig:
     """Feature engineering configuration."""
 
     push_lap: PushLapConfig
+    diagnostics: DiagnosticsConfig | None = None
+
+
+@dataclass(frozen=True)
+class DiagnosticsConfig:
+    """Thresholds and output limits for prediction diagnostics."""
+
+    extreme_mae_gap_threshold_sec: float
+    top_n: int
 
 
 @dataclass(frozen=True)
@@ -139,12 +148,25 @@ def load_feature_config(
     if driver_threshold < 1.0 or session_threshold < 1.0:
         raise ConfigError(f"Push-lap percentage thresholds must be at least 1.0 in {path}")
 
+    diagnostics_raw = raw_config.get("diagnostics", {})
+    if not isinstance(diagnostics_raw, dict):
+        raise ConfigError(f"'diagnostics' must be a mapping in {path}")
+    diagnostics = DiagnosticsConfig(
+        extreme_mae_gap_threshold_sec=float(
+            diagnostics_raw.get("extreme_mae_gap_threshold_sec", 1.5)
+        ),
+        top_n=int(diagnostics_raw.get("top_n", 10)),
+    )
+    if diagnostics.extreme_mae_gap_threshold_sec <= 0 or diagnostics.top_n < 1:
+        raise ConfigError(f"Diagnostics threshold and top_n must be positive in {path}")
+
     return FeatureConfig(
         push_lap=PushLapConfig(
             driver_best_pct_threshold=driver_threshold,
             session_best_pct_threshold=session_threshold,
             allowed_compounds=tuple(compound.upper() for compound in allowed_compounds),
-        )
+        ),
+        diagnostics=diagnostics,
     )
 
 

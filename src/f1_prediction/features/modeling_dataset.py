@@ -12,6 +12,7 @@ from f1_prediction.config import DataConfig
 from f1_prediction.data.fastf1_loader import build_lap_output_path
 from f1_prediction.features.build import build_session_features_output_path
 from f1_prediction.features.qualifying_targets import TARGET_COLUMNS, build_qualifying_targets
+from f1_prediction.features.relative_features import add_relative_practice_features
 from f1_prediction.utils.paths import ensure_directory, slugify
 
 CHECKPOINT_SESSIONS: dict[str, tuple[str, ...]] = {
@@ -55,6 +56,7 @@ def build_checkpoint_modeling_dataset(
     """Build after-FP1/FP2/FP3 rows without exposing future practice values."""
     _validate_target_columns(qualifying_targets)
     _validate_unique_session_driver_rows(practice_features)
+    practice_features = add_relative_practice_features(practice_features)
     source_feature_columns = [
         column
         for column in practice_features.columns

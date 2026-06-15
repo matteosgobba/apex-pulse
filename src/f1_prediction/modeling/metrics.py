@@ -52,7 +52,11 @@ def compute_prediction_metrics(predictions: pd.DataFrame) -> dict[str, float | N
 def _spearman(ranking: pd.DataFrame) -> float | None:
     event_correlations: list[float] = []
     for _, event_rows in ranking.groupby(["season", "event_slug"], sort=False):
-        if len(event_rows) < 2:
+        if (
+            len(event_rows) < 2
+            or event_rows["predicted_quali_position"].nunique() < 2
+            or event_rows["quali_position"].nunique() < 2
+        ):
             continue
         correlation = (
             event_rows["predicted_quali_position"]

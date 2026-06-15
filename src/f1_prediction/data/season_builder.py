@@ -185,7 +185,7 @@ def build_season_dataset(
                 reference.season,
                 reference.event,
                 data_config,
-                force=force,
+                force=False,
                 fail_fast=True,
                 progress=progress,
             )
