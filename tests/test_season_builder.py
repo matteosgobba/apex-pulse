@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from f1_prediction.data.season_builder import (
+    CONVENTIONAL_2023_EVENTS,
     CONVENTIONAL_2024_EVENTS,
     FailedEventBuild,
     SeasonDatasetBuildSummary,
@@ -74,6 +75,21 @@ def test_conventional_preset_resolves_to_non_empty_list() -> None:
     assert "Monza" in events
 
 
+def test_conventional_2023_preset_resolves_to_non_empty_list() -> None:
+    events = resolve_event_selection([2023], preset="conventional_2023")
+
+    assert events == CONVENTIONAL_2023_EVENTS
+    assert "Bahrain" in events
+
+
+def test_multi_season_conventional_preset_resolves_each_season() -> None:
+    events = resolve_event_selection([2023, 2024], preset="conventional")
+
+    assert isinstance(events, dict)
+    assert events[2023] == CONVENTIONAL_2023_EVENTS
+    assert events[2024] == CONVENTIONAL_2024_EVENTS
+
+
 def test_explicit_events_resolve_without_preset() -> None:
     assert resolve_event_selection([2024], events=["Monza", "Japan"]) == ("Monza", "Japan")
 
@@ -140,6 +156,8 @@ def test_dataset_build_report_contains_required_structure(tmp_path: Path) -> Non
         n_columns=90,
         rows_by_checkpoint=(("after_fp1", 20), ("after_fp2", 20), ("after_fp3", 20)),
         events_by_checkpoint=(("after_fp1", 1), ("after_fp2", 1), ("after_fp3", 1)),
+        rows_by_season=(("2024", 60),),
+        preset="conventional_2024",
     )
 
     report = build_dataset_report_payload(summary, tmp_path)
@@ -153,6 +171,8 @@ def test_dataset_build_report_contains_required_structure(tmp_path: Path) -> Non
     assert report["n_columns"] == 90
     assert report["rows_by_checkpoint"]["after_fp1"] == 20
     assert report["events_by_checkpoint"]["after_fp3"] == 1
+    assert report["rows_by_season"]["2024"] == 60
+    assert report["preset"] == "conventional_2024"
     assert report["failed_events"][0]["error_message"] == "RuntimeError: failed"
     assert report["output_path"] == "modeling/combined/modeling_dataset.parquet"
     assert isinstance(report["created_at_utc"], str)

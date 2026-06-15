@@ -24,6 +24,7 @@ from f1_prediction.features.modeling_dataset import ModelingDatasetBuildSummary
 from f1_prediction.features.modeling_dataset import (
     build_modeling_dataset_files as run_modeling_dataset_build,
 )
+from f1_prediction.modeling.ablation import AblationBacktestSummary, run_ablation_backtest
 from f1_prediction.modeling.backtest_report import BacktestReportSummary
 from f1_prediction.modeling.backtest_report import create_backtest_report as run_backtest_report
 from f1_prediction.modeling.backtest_tabular import (
@@ -230,13 +231,18 @@ def build_modeling_dataset_command(
 def build_season_dataset_command(
     seasons: Annotated[
         list[int],
-        typer.Option("--season", min=1950, help="Season to build. Repeat for multiple seasons."),
+        typer.Option(
+            "--season",
+            "--seasons",
+            min=1950,
+            help="Season to build. Repeat or list multiple seasons.",
+        ),
     ],
     events: Annotated[
         list[str] | None,
         typer.Option("--events", help="Optional event filter. Repeat for multiple events."),
     ] = None,
-    additional_events: Annotated[
+    additional_values: Annotated[
         list[str] | None,
         typer.Argument(hidden=True),
     ] = None,
@@ -269,17 +275,22 @@ def build_season_dataset_command(
         config_path=features_config_path,
         project_root=data_config.project_root,
     )
+    trailing_values = additional_values or []
+    trailing_seasons = [int(value) for value in trailing_values if value.isdigit()]
+    trailing_events = [value for value in trailing_values if not value.isdigit()]
+    requested_seasons = [*seasons, *trailing_seasons]
     try:
         requested_events = resolve_event_selection(
-            seasons,
-            [*(events or []), *(additional_events or [])],
+            requested_seasons,
+            [*(events or []), *trailing_events],
             preset,
         )
         summary = run_season_dataset_build(
-            seasons=seasons,
+            seasons=requested_seasons,
             data_config=data_config,
             feature_config=feature_config,
             events=requested_events,
+            preset=preset,
             force=force,
             fail_fast=fail_fast,
             progress=typer.echo,
@@ -470,6 +481,10 @@ def backtest_report_command(
         Path | None,
         typer.Option("--quality-report", help="Optional dataset quality JSON path."),
     ] = None,
+    ablation_metrics_path: Annotated[
+        Path | None,
+        typer.Option("--ablation-metrics", help="Optional ablation metrics JSON path."),
+    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Optional path to the data YAML configuration."),
@@ -486,6 +501,7 @@ def backtest_report_command(
             baseline_metrics_path=baseline_metrics_path,
             tabular_metrics_path=tabular_metrics_path,
             quality_report_path=quality_report_path,
+            ablation_metrics_path=ablation_metrics_path,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -614,6 +630,80 @@ def diagnostics_report_command(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     _print_diagnostics_summary(summary, data_config.project_root)
+
+
+@app.command("ablation-backtest")
+def ablation_backtest_command(
+    strategy: Annotated[
+        BacktestStrategy,
+        typer.Option(help="Event-safe backtesting strategy."),
+    ] = BacktestStrategy.walk_forward,
+    feature_groups: Annotated[
+        list[str] | None,
+        typer.Option("--feature-groups", help="Feature groups to compare."),
+    ] = None,
+    additional_feature_groups: Annotated[
+        list[str] | None,
+        typer.Argument(hidden=True),
+    ] = None,
+    min_events: Annotated[
+        int,
+        typer.Option(min=2, help="Minimum unique events required for ablation."),
+    ] = 10,
+    min_train_events: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum prior events for walk-forward folds."),
+    ] = 5,
+    fail_fast: Annotated[
+        bool,
+        typer.Option("--fail-fast", help="Stop after the first failed fold."),
+    ] = False,
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Compare feature groups using identical event-safe folds."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    requested_groups = [*(feature_groups or []), *(additional_feature_groups or [])]
+    try:
+        summary = run_ablation_backtest(
+            data_config,
+            strategy=strategy,
+            dataset_path=dataset_path,
+            feature_group_names=requested_groups or None,
+            min_events=min_events,
+            min_train_events=min_train_events,
+            fail_fast=fail_fast,
+            model_config=model_config,
+            feature_config=feature_config,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_ablation_summary(summary, data_config.project_root)
 
 
 def _print_summary(result: SessionLoadResult) -> None:
@@ -786,6 +876,23 @@ def _print_diagnostics_summary(
     typer.echo(f"Report: {_display_path(summary.report_path, project_root)}")
     typer.echo(f"Event summary: {_display_path(summary.event_summary_path, project_root)}")
     typer.echo(f"Driver summary: {_display_path(summary.driver_summary_path, project_root)}")
+
+
+def _print_ablation_summary(
+    summary: AblationBacktestSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Feature ablation backtest complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Strategy: {summary.strategy}")
+    typer.echo(f"Events: {summary.n_events}")
+    typer.echo(f"Folds successful: {summary.n_folds_successful}")
+    typer.echo(f"Folds failed: {summary.n_folds_failed}")
+    typer.echo(f"Feature groups: {', '.join(summary.feature_groups)}")
+    typer.echo(f"Metrics: {_display_path(summary.metrics_path, project_root)}")
+    typer.echo(f"Groups: {_display_path(summary.feature_groups_path, project_root)}")
+    if summary.predictions_path is not None:
+        typer.echo(f"Predictions: {_display_path(summary.predictions_path, project_root)}")
 
 
 if __name__ == "__main__":

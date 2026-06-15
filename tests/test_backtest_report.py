@@ -69,6 +69,36 @@ def test_backtest_report_prefers_walk_forward_over_repeated_holdout() -> None:
     assert report["best_model_by_checkpoint"]["after_fp1"]["model_name"] == "ridge"
 
 
+def test_backtest_report_includes_ablation_summary() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        walk_forward_metrics=_multi_fold_metrics("walk_forward", 4),
+        ablation_metrics={
+            "status": "complete",
+            "feature_groups": ["base_lap_features", "all_features"],
+            "best_overall_by_checkpoint": {
+                "after_fp1": {
+                    "feature_group": "all_features",
+                    "model_name": "ridge",
+                    "mae_gap_sec": 0.25,
+                    "mean_abs_position_error": 1.8,
+                }
+            },
+            "best_baseline_by_checkpoint": {
+                "after_fp1": {"baseline_name": "push", "mae_gap_sec": 0.4}
+            },
+        },
+    )
+
+    assert report["available_ablation_results"] == ["base_lap_features", "all_features"]
+    assert report["preferred_feature_group_by_checkpoint"]["after_fp1"] == "all_features"
+    assert report["best_ablation_delta_vs_baseline_by_checkpoint"]["after_fp1"] == pytest.approx(
+        -0.15
+    )
+
+
 def _quality() -> dict[str, object]:
     return {
         "n_rows": 120,

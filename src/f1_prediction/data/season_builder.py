@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,9 +40,31 @@ CONVENTIONAL_2024_EVENTS: tuple[str, ...] = (
     "Monza",
     "Abu Dhabi",
 )
+CONVENTIONAL_2023_EVENTS: tuple[str, ...] = (
+    "Bahrain",
+    "Saudi Arabia",
+    "Australia",
+    "Miami",
+    "Monaco",
+    "Spain",
+    "Canada",
+    "Great Britain",
+    "Hungary",
+    "Netherlands",
+    "Italy",
+    "Singapore",
+    "Japan",
+    "Abu Dhabi",
+)
 EVENT_PRESETS: dict[str, tuple[str, ...]] = {
+    "conventional_2023": CONVENTIONAL_2023_EVENTS,
     "conventional_2024": CONVENTIONAL_2024_EVENTS,
 }
+CONVENTIONAL_EVENTS_BY_SEASON: dict[int, tuple[str, ...]] = {
+    2023: CONVENTIONAL_2023_EVENTS,
+    2024: CONVENTIONAL_2024_EVENTS,
+}
+EventSelection = tuple[str, ...] | dict[int, tuple[str, ...]] | None
 COMMON_EVENT_ALIASES: dict[str, tuple[str, ...]] = {
     "abu-dhabi": ("yas-island", "united-arab-emirates"),
     "emilia-romagna": ("imola",),
@@ -98,6 +120,8 @@ class SeasonDatasetBuildSummary:
     n_columns: int = 0
     rows_by_checkpoint: tuple[tuple[str, int], ...] = ()
     events_by_checkpoint: tuple[tuple[str, int], ...] = ()
+    rows_by_season: tuple[tuple[str, int], ...] = ()
+    preset: str | None = None
 
     @property
     def n_events_successful(self) -> int:
@@ -139,18 +163,25 @@ def resolve_event_selection(
     seasons: Sequence[int],
     events: Sequence[str] | None = None,
     preset: str | None = None,
-) -> tuple[str, ...] | None:
+) -> EventSelection:
     """Resolve explicit events or a documented convenience preset."""
     if events and preset:
         raise ValueError("Use either explicit --events values or --preset, not both")
     if not preset:
         return tuple(events) if events else None
+    if preset == "conventional":
+        unsupported = sorted(set(seasons) - set(CONVENTIONAL_EVENTS_BY_SEASON))
+        if unsupported:
+            values = ", ".join(str(season) for season in unsupported)
+            raise ValueError(f"The conventional preset is unavailable for seasons: {values}")
+        return {season: CONVENTIONAL_EVENTS_BY_SEASON[season] for season in dict.fromkeys(seasons)}
     if preset not in EVENT_PRESETS:
-        available = ", ".join(sorted(EVENT_PRESETS))
+        available = ", ".join([*sorted(EVENT_PRESETS), "conventional"])
         raise ValueError(f"Unknown event preset '{preset}'. Available presets: {available}")
     unique_seasons = tuple(dict.fromkeys(seasons))
-    if preset == "conventional_2024" and unique_seasons != (2024,):
-        raise ValueError("The conventional_2024 preset requires exactly --season 2024")
+    expected_season = int(preset.rsplit("_", maxsplit=1)[-1])
+    if unique_seasons != (expected_season,):
+        raise ValueError(f"The {preset} preset requires exactly --season {expected_season}")
     return EVENT_PRESETS[preset]
 
 
@@ -159,7 +190,8 @@ def build_season_dataset(
     data_config: DataConfig,
     feature_config: FeatureConfig,
     *,
-    events: Sequence[str] | None = None,
+    events: Sequence[str] | Mapping[int, Sequence[str]] | None = None,
+    preset: str | None = None,
     force: bool = False,
     fail_fast: bool = False,
     progress: ProgressCallback | None = None,
@@ -173,7 +205,7 @@ def build_season_dataset(
     event_references = tuple(
         reference
         for season in requested_seasons
-        for reference in discover_season_events(season, events)
+        for reference in discover_season_events(season, _events_for_season(events, season))
     )
     successful: list[SuccessfulEventBuild] = []
     failed: list[FailedEventBuild] = []
@@ -271,6 +303,8 @@ def build_season_dataset(
         n_columns=len(combined.columns),
         rows_by_checkpoint=_checkpoint_counts(combined),
         events_by_checkpoint=_checkpoint_event_counts(combined),
+        rows_by_season=_season_counts(combined),
+        preset=preset,
     )
     save_dataset_build_report(summary, data_config.project_root)
     return summary
@@ -323,6 +357,7 @@ def build_dataset_report_payload(
     """Build the serializable dataset report required by the milestone."""
     return {
         "requested_seasons": list(summary.requested_seasons),
+        "preset": summary.preset,
         "n_events_requested": summary.n_events_requested,
         "n_events_successful": summary.n_events_successful,
         "n_events_failed": summary.n_events_failed,
@@ -333,6 +368,7 @@ def build_dataset_report_payload(
         "n_drivers": summary.n_drivers,
         "checkpoints": list(summary.checkpoints),
         "rows_by_checkpoint": dict(summary.rows_by_checkpoint),
+        "rows_by_season": dict(summary.rows_by_season),
         "events_by_checkpoint": dict(summary.events_by_checkpoint),
         "output_path": _portable_path(summary.output_path, project_root),
         "created_at_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -417,6 +453,24 @@ def _checkpoint_event_counts(dataset: pd.DataFrame) -> tuple[tuple[str, int], ..
         lambda rows: len(rows.drop_duplicates())
     )
     return tuple((str(checkpoint), int(count)) for checkpoint, count in counts.items())
+
+
+def _season_counts(dataset: pd.DataFrame) -> tuple[tuple[str, int], ...]:
+    if dataset.empty or "season" not in dataset:
+        return ()
+    return tuple(
+        (str(season), int(count))
+        for season, count in dataset.groupby("season", sort=True).size().items()
+    )
+
+
+def _events_for_season(
+    events: Sequence[str] | Mapping[int, Sequence[str]] | None,
+    season: int,
+) -> Sequence[str] | None:
+    if isinstance(events, Mapping):
+        return events.get(season)
+    return events
 
 
 def _portable_path(path: Path, project_root: Path) -> str:

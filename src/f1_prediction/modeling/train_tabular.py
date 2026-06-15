@@ -212,6 +212,7 @@ def fit_and_predict(
     test: pd.DataFrame,
     *,
     model_config: ModelConfig,
+    candidate_features: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, dict[str, object]]]]:
     prediction_frames: list[pd.DataFrame] = []
     fitted: dict[str, dict[str, dict[str, object]]] = {"ridge": {}, "random_forest": {}}
@@ -221,6 +222,9 @@ def fit_and_predict(
         if train_rows.empty or test_rows.empty:
             continue
         features = usable_checkpoint_features(train_rows, checkpoint)
+        if candidate_features is not None:
+            allowed = set(candidate_features)
+            features = [column for column in features if column in allowed]
         if not features:
             raise ValueError(f"No usable numeric features for {checkpoint}")
 

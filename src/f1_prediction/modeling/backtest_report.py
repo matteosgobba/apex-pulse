@@ -38,6 +38,7 @@ def create_backtest_report(
     quality_report_path: Path | None = None,
     repeated_metrics_path: Path | None = None,
     walk_forward_metrics_path: Path | None = None,
+    ablation_metrics_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -65,6 +66,10 @@ def create_backtest_report(
         walk_forward_metrics_path or config.metrics_output_dir / "walk_forward_metrics.json",
         config.project_root,
     )
+    ablation_path = _resolve_path(
+        ablation_metrics_path or config.metrics_output_dir / "ablation_metrics.json",
+        config.project_root,
+    )
     dataset = pd.read_parquet(source_path)
     quality = (
         _read_json(quality_path)
@@ -75,12 +80,14 @@ def create_backtest_report(
     tabular_metrics = _read_json(tabular_path) if tabular_path.is_file() else None
     repeated_metrics = _read_json(repeated_path) if repeated_path.is_file() else None
     walk_forward_metrics = _read_json(walk_forward_path) if walk_forward_path.is_file() else None
+    ablation_metrics = _read_json(ablation_path) if ablation_path.is_file() else None
     payload = build_backtest_report_payload(
         quality,
         baseline_metrics,
         tabular_metrics,
         repeated_metrics=repeated_metrics,
         walk_forward_metrics=walk_forward_metrics,
+        ablation_metrics=ablation_metrics,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -104,6 +111,7 @@ def build_backtest_report_payload(
     *,
     repeated_metrics: dict[str, Any] | None = None,
     walk_forward_metrics: dict[str, Any] | None = None,
+    ablation_metrics: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -116,12 +124,14 @@ def build_backtest_report_payload(
         repeated_metrics,
     )
     if preferred_metrics is not None:
-        return _multi_fold_report_payload(
+        payload = _multi_fold_report_payload(
             quality,
             preferred_strategy,
             preferred_metrics,
             available_backtests,
         )
+        payload.update(_ablation_summary(ablation_metrics))
+        return payload
 
     training_status = (
         str(tabular_metrics.get("status", "unavailable")) if tabular_metrics else "unavailable"
@@ -144,7 +154,7 @@ def build_backtest_report_payload(
         best_baselines,
         best_models,
     )
-    return {
+    payload = {
         "dataset_rows": int(quality.get("n_rows", 0)),
         "n_events": int(quality.get("n_events", 0)),
         "events": list(quality.get("events", [])),
@@ -165,6 +175,8 @@ def build_backtest_report_payload(
         "n_folds_failed": 0,
         "created_at_utc": _utc_now(),
     }
+    payload.update(_ablation_summary(ablation_metrics))
+    return payload
 
 
 def _multi_fold_report_payload(
@@ -300,6 +312,35 @@ def _comparison_deltas(
             baseline.get("mean_abs_position_error"),
         )
     return mae, position
+
+
+def _ablation_summary(metrics: dict[str, Any] | None) -> dict[str, object]:
+    usable = metrics is not None and metrics.get("status") in {"complete", "partial"}
+    if not usable:
+        return {
+            "available_ablation_results": [],
+            "preferred_feature_group_by_checkpoint": {},
+            "best_ablation_model_by_checkpoint": {},
+            "best_ablation_delta_vs_baseline_by_checkpoint": {},
+        }
+    best_overall = metrics.get("best_overall_by_checkpoint", {})
+    best_baselines = metrics.get("best_baseline_by_checkpoint", {})
+    preferred_groups: dict[str, str] = {}
+    best_models: dict[str, dict[str, object]] = {}
+    deltas: dict[str, float | None] = {}
+    for checkpoint, values in best_overall.items():
+        preferred_groups[str(checkpoint)] = str(values.get("feature_group"))
+        best_models[str(checkpoint)] = dict(values)
+        deltas[str(checkpoint)] = _delta(
+            values.get("mae_gap_sec"),
+            best_baselines.get(checkpoint, {}).get("mae_gap_sec"),
+        )
+    return {
+        "available_ablation_results": list(metrics.get("feature_groups", [])),
+        "preferred_feature_group_by_checkpoint": preferred_groups,
+        "best_ablation_model_by_checkpoint": best_models,
+        "best_ablation_delta_vs_baseline_by_checkpoint": deltas,
+    }
 
 
 def _delta(model_value: object, baseline_value: object) -> float | None:
