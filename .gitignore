@@ -37,3 +37,4 @@ reports/metrics/*
 !models/.gitkeep
 !reports/figures/.gitkeep
 !reports/metrics/.gitkeep
+.matplotlib-cache/

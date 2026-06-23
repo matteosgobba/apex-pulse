@@ -103,13 +103,36 @@ model:
     after_fp3: base_plus_relative
   champion_policy:
     selection_metric: mae_gap_sec
+    stabilized_nested:
+      min_prior_folds: 4
+      min_prior_predictions: 80
+      selection_metric: mae_gap_sec
+      improvement_margin_sec: 0.07
+    stabilized_nested_guarded:
+      base_mode: stabilized_nested
+      fp3_no_baseline_switch: true
+      guarded_checkpoint: after_fp3
+      guarded_default_family: ablation
+      guarded_default_model_name: random_forest
+      guarded_default_feature_group: base_plus_relative
     static:
       after_fp1:
         family: robust_baseline
         model_name: robust_best_push_lap
   uncertainty:
     interval_z: 1.5
+    confidence_level: 0.85
     min_residual_count: 12
+  champion_diagnostics:
+    harmful_switch_tolerance_sec: 0.08
+  policy_simulation:
+    conformal:
+      confidence_level: 0.88
+      min_residual_count: 9
+      fallback_order:
+        - checkpoint_method_bucket
+        - checkpoint
+        - global
 """.strip(),
         encoding="utf-8",
     )
@@ -126,5 +149,24 @@ model:
     assert config.feature_group_policy.after_fp2 == "base_plus_quality"
     assert config.champion_policy.static["after_fp1"].model_name == "robust_best_push_lap"
     assert config.champion_policy.static["after_fp3"].feature_group == "base_plus_relative"
+    assert config.champion_policy.stabilized_nested.min_prior_folds == 4
+    assert config.champion_policy.stabilized_nested.min_prior_predictions == 80
+    assert config.champion_policy.stabilized_nested.improvement_margin_sec == 0.07
+    guarded = config.champion_policy.stabilized_nested_guarded
+    assert guarded.base_mode == "stabilized_nested"
+    assert guarded.fp3_no_baseline_switch is True
+    assert guarded.guarded_checkpoint == "after_fp3"
+    assert guarded.guarded_default_family == "ablation"
+    assert guarded.guarded_default_model_name == "random_forest"
+    assert guarded.guarded_default_feature_group == "base_plus_relative"
     assert config.uncertainty.interval_z == 1.5
+    assert config.uncertainty.confidence_level == 0.85
     assert config.uncertainty.min_residual_count == 12
+    assert config.champion_diagnostics.harmful_switch_tolerance_sec == 0.08
+    assert config.policy_simulation.conformal.confidence_level == 0.88
+    assert config.policy_simulation.conformal.min_residual_count == 9
+    assert config.policy_simulation.conformal.fallback_order == (
+        "checkpoint_method_bucket",
+        "checkpoint",
+        "global",
+    )

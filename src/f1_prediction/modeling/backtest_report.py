@@ -80,6 +80,7 @@ def create_backtest_report(
         champion_metrics_path or config.metrics_output_dir / "champion_metrics.json",
         config.project_root,
     )
+    champion_mode_metrics = _read_champion_mode_metrics(config.metrics_output_dir)
     dataset = pd.read_parquet(source_path)
     quality = (
         _read_json(quality_path)
@@ -93,6 +94,10 @@ def create_backtest_report(
     ablation_metrics = _read_json(ablation_path) if ablation_path.is_file() else None
     boosted_metrics = _read_json(boosted_path) if boosted_path.is_file() else None
     champion_metrics = _read_json(champion_path) if champion_path.is_file() else None
+    if champion_metrics is not None:
+        mode = str(champion_metrics.get("selection_mode", ""))
+        if mode:
+            champion_mode_metrics.setdefault(mode, champion_metrics)
     payload = build_backtest_report_payload(
         quality,
         baseline_metrics,
@@ -102,6 +107,7 @@ def create_backtest_report(
         ablation_metrics=ablation_metrics,
         boosted_metrics=boosted_metrics,
         champion_metrics=champion_metrics,
+        champion_mode_metrics=champion_mode_metrics,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -128,6 +134,7 @@ def build_backtest_report_payload(
     ablation_metrics: dict[str, Any] | None = None,
     boosted_metrics: dict[str, Any] | None = None,
     champion_metrics: dict[str, Any] | None = None,
+    champion_mode_metrics: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -148,7 +155,7 @@ def build_backtest_report_payload(
         )
         payload.update(_ablation_summary(ablation_metrics))
         payload.update(_boosted_summary(payload, ablation_metrics, boosted_metrics))
-        payload.update(_champion_summary(champion_metrics))
+        payload.update(_champion_summary(champion_metrics, champion_mode_metrics))
         return payload
 
     training_status = (
@@ -195,7 +202,7 @@ def build_backtest_report_payload(
     }
     payload.update(_ablation_summary(ablation_metrics))
     payload.update(_boosted_summary(payload, ablation_metrics, boosted_metrics))
-    payload.update(_champion_summary(champion_metrics))
+    payload.update(_champion_summary(champion_metrics, champion_mode_metrics))
     return payload
 
 
@@ -450,19 +457,47 @@ def _preferred_model_families(
     return preferred
 
 
-def _champion_summary(metrics: dict[str, Any] | None) -> dict[str, object]:
+def _champion_summary(
+    metrics: dict[str, Any] | None,
+    mode_metrics: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, object]:
+    usable_modes = {
+        mode: payload
+        for mode, payload in (mode_metrics or {}).items()
+        if payload.get("status") in {"complete", "partial"}
+    }
     usable = metrics is not None and metrics.get("status") in {"complete", "partial"}
-    if not usable:
+    if not usable and not usable_modes:
         return {
             "champion_available": False,
             "champion_selection_mode": None,
+            "champion_selection_modes_available": [],
             "champion_metrics_by_checkpoint": {},
             "champion_vs_best_baseline_delta_mae": {},
             "champion_vs_best_single_family_delta_mae": {},
+            "best_champion_selection_mode_by_checkpoint": {},
+            "best_champion_selection_mode_overall": None,
+            "champion_interval_coverage_by_checkpoint": {},
+            "champion_interval_width_by_checkpoint": {},
             "preferred_final_policy_by_checkpoint": {},
         }
-    checkpoint_metrics = metrics.get("metrics_by_checkpoint", {})
-    selection_mode = str(metrics.get("selection_mode", "unknown"))
+    latest = metrics if usable else next(iter(usable_modes.values()))
+    checkpoint_metrics = latest.get("metrics_by_checkpoint", {})
+    selection_mode = str(latest.get("selection_mode", "unknown"))
+    best_by_checkpoint = _best_champion_modes_by_checkpoint(usable_modes)
+    best_overall = _best_champion_mode_overall(usable_modes)
+    interval_coverage = {
+        str(checkpoint): values.get("interval_coverage")
+        for checkpoint, values in checkpoint_metrics.items()
+    }
+    interval_width = {
+        str(checkpoint): {
+            "mean_interval_width_sec": values.get("mean_interval_width_sec"),
+            "median_interval_width_sec": values.get("median_interval_width_sec"),
+            "interval_availability_rate": values.get("interval_availability_rate"),
+        }
+        for checkpoint, values in checkpoint_metrics.items()
+    }
     preferred = {
         str(checkpoint): {
             "family": "champion",
@@ -475,15 +510,63 @@ def _champion_summary(metrics: dict[str, Any] | None) -> dict[str, object]:
     return {
         "champion_available": True,
         "champion_selection_mode": selection_mode,
+        "champion_selection_modes_available": sorted(usable_modes),
         "champion_metrics_by_checkpoint": checkpoint_metrics,
-        "champion_vs_best_baseline_delta_mae": metrics.get(
+        "champion_vs_best_baseline_delta_mae": latest.get(
             "champion_vs_best_baseline_delta_mae", {}
         ),
-        "champion_vs_best_single_family_delta_mae": metrics.get(
+        "champion_vs_best_single_family_delta_mae": latest.get(
             "champion_vs_best_single_family_delta_mae", {}
         ),
+        "best_champion_selection_mode_by_checkpoint": best_by_checkpoint,
+        "best_champion_selection_mode_overall": best_overall,
+        "champion_interval_coverage_by_checkpoint": interval_coverage,
+        "champion_interval_width_by_checkpoint": interval_width,
         "preferred_final_policy_by_checkpoint": preferred,
     }
+
+
+def _best_champion_modes_by_checkpoint(
+    mode_metrics: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, object]]:
+    checkpoints: set[str] = set()
+    for payload in mode_metrics.values():
+        checkpoints.update(
+            str(checkpoint) for checkpoint in payload.get("metrics_by_checkpoint", {})
+        )
+    best: dict[str, dict[str, object]] = {}
+    for checkpoint in sorted(checkpoints):
+        choices: list[tuple[str, dict[str, Any]]] = []
+        for mode, payload in mode_metrics.items():
+            values = payload.get("metrics_by_checkpoint", {}).get(checkpoint, {})
+            if values.get("mae_gap_sec") is not None:
+                choices.append((mode, values))
+        if choices:
+            mode, values = min(choices, key=lambda item: float(item[1]["mae_gap_sec"]))
+            best[checkpoint] = {
+                "selection_mode": mode,
+                "mae_gap_sec": values.get("mae_gap_sec"),
+                "mean_abs_position_error": values.get("mean_abs_position_error"),
+            }
+    return best
+
+
+def _best_champion_mode_overall(
+    mode_metrics: dict[str, dict[str, Any]],
+) -> dict[str, object] | None:
+    choices: list[tuple[str, float]] = []
+    for mode, payload in mode_metrics.items():
+        values = [
+            float(metrics["mae_gap_sec"])
+            for metrics in payload.get("metrics_by_checkpoint", {}).values()
+            if metrics.get("mae_gap_sec") is not None
+        ]
+        if values:
+            choices.append((mode, sum(values) / len(values)))
+    if not choices:
+        return None
+    mode, mean_mae = min(choices, key=lambda item: item[1])
+    return {"selection_mode": mode, "mean_mae_gap_sec": mean_mae}
 
 
 def _delta(model_value: object, baseline_value: object) -> float | None:
@@ -515,6 +598,17 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"JSON report root must be an object: {path}")
     return payload
+
+
+def _read_champion_mode_metrics(metrics_dir: Path) -> dict[str, dict[str, Any]]:
+    payloads: dict[str, dict[str, Any]] = {}
+    for mode in ("static", "nested", "stabilized_nested", "stabilized_nested_guarded"):
+        path = metrics_dir / f"champion_{mode}_metrics.json"
+        if not path.is_file():
+            continue
+        payload = _read_json(path)
+        payloads[str(payload.get("selection_mode", mode))] = payload
+    return payloads
 
 
 def _utc_now() -> str:

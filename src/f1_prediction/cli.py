@@ -36,9 +36,14 @@ from f1_prediction.modeling.boosted_backtest import (
     BoostedBacktestSummary,
     run_boosted_backtest,
 )
+from f1_prediction.modeling.champion_diagnostics import ChampionDiagnosticsSummary
+from f1_prediction.modeling.champion_diagnostics import (
+    create_champion_diagnostics_report as run_champion_diagnostics_report,
+)
 from f1_prediction.modeling.champion_policy import (
     ChampionBacktestSummary,
     ChampionSelectionMode,
+    ChampionUncertaintyMethod,
     run_champion_backtest,
 )
 from f1_prediction.modeling.dataset_report import DatasetQualitySummary
@@ -49,6 +54,12 @@ from f1_prediction.modeling.diagnostics import DiagnosticsReportSummary
 from f1_prediction.modeling.diagnostics import create_diagnostics_report as run_diagnostics_report
 from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
 from f1_prediction.modeling.evaluate_baselines import evaluate_baselines as run_baseline_evaluation
+from f1_prediction.modeling.policy_simulation import PolicySimulationSummary
+from f1_prediction.modeling.policy_simulation import (
+    create_policy_simulation_report as run_policy_simulation_report,
+)
+from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
+from f1_prediction.modeling.portfolio_report import create_portfolio_report as run_portfolio_report
 from f1_prediction.modeling.splits import DatasetSplitSummary, SplitStrategy
 from f1_prediction.modeling.splits import write_dataset_split_report as run_dataset_split
 from f1_prediction.modeling.train_tabular import TabularTrainingSummary
@@ -694,8 +705,17 @@ def champion_backtest_command(
     ] = BacktestStrategy.walk_forward,
     selection_mode: Annotated[
         ChampionSelectionMode,
-        typer.Option(help="Champion selection mode: static or nested."),
+        typer.Option(
+            help=(
+                "Champion selection mode: static, nested, stabilized_nested, "
+                "or stabilized_nested_guarded."
+            )
+        ),
     ] = ChampionSelectionMode.nested,
+    uncertainty: Annotated[
+        ChampionUncertaintyMethod,
+        typer.Option(help="Prediction interval method: residual_std or conformal."),
+    ] = ChampionUncertaintyMethod.residual_std,
     dataset_path: Annotated[
         Path | None,
         typer.Option("--dataset", help="Optional combined modeling dataset path."),
@@ -734,6 +754,7 @@ def champion_backtest_command(
             min_events=min_events,
             min_train_events=min_train_events,
             model_config=model_config,
+            uncertainty_method=uncertainty,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -796,6 +817,85 @@ def diagnostics_report_command(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     _print_diagnostics_summary(summary, data_config.project_root)
+
+
+@app.command("portfolio-report")
+def portfolio_report_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Generate portfolio-ready summary tables, figures, and model card."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_portfolio_report(data_config)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_portfolio_report_summary(summary, data_config.project_root)
+
+
+@app.command("champion-diagnostics")
+def champion_diagnostics_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Generate champion-policy and conformal interval diagnostic reports."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_champion_diagnostics_report(
+            data_config,
+            model_config.champion_diagnostics,
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_champion_diagnostics_summary(summary, data_config.project_root)
+
+
+@app.command("policy-simulation")
+def policy_simulation_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Generate artifact-based champion guardrail and conformal simulations."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_policy_simulation_report(
+            data_config,
+            model_config.policy_simulation,
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_policy_simulation_summary(summary, data_config.project_root)
 
 
 @app.command("ablation-backtest")
@@ -1080,6 +1180,51 @@ def _print_diagnostics_summary(
     typer.echo(f"Report: {_display_path(summary.report_path, project_root)}")
     typer.echo(f"Event summary: {_display_path(summary.event_summary_path, project_root)}")
     typer.echo(f"Driver summary: {_display_path(summary.driver_summary_path, project_root)}")
+
+
+def _print_portfolio_report_summary(
+    summary: PortfolioReportSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Portfolio report complete")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Model card: {_display_path(summary.model_card_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_artifacts:
+        typer.echo(f"Missing artifacts: {', '.join(summary.missing_artifacts)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_champion_diagnostics_summary(
+    summary: ChampionDiagnosticsSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Champion diagnostics complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_policy_simulation_summary(
+    summary: PolicySimulationSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Policy simulation complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
 
 
 def _print_ablation_summary(

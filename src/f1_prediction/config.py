@@ -123,6 +123,28 @@ class ChampionMethodConfig:
     feature_group: str | None = None
 
 
+@dataclass(frozen=True)
+class StabilizedNestedChampionConfig:
+    """Stabilized nested champion selection guardrails."""
+
+    min_prior_folds: int = 5
+    min_prior_predictions: int = 100
+    selection_metric: str = "mae_gap_sec"
+    improvement_margin_sec: float = 0.05
+
+
+@dataclass(frozen=True)
+class StabilizedNestedGuardedChampionConfig:
+    """Opt-in FP3 guardrail settings layered on stabilized nested selection."""
+
+    base_mode: str = "stabilized_nested"
+    fp3_no_baseline_switch: bool = True
+    guarded_checkpoint: str = "after_fp3"
+    guarded_default_family: str = "ablation"
+    guarded_default_model_name: str = "random_forest"
+    guarded_default_feature_group: str | None = "base_plus_relative"
+
+
 def _default_champion_static_policy() -> dict[str, ChampionMethodConfig]:
     return {
         "after_fp1": ChampionMethodConfig(
@@ -147,6 +169,12 @@ class ChampionPolicyConfig:
 
     static: dict[str, ChampionMethodConfig] = field(default_factory=_default_champion_static_policy)
     selection_metric: str = "mae_gap_sec"
+    stabilized_nested: StabilizedNestedChampionConfig = field(
+        default_factory=StabilizedNestedChampionConfig
+    )
+    stabilized_nested_guarded: StabilizedNestedGuardedChampionConfig = field(
+        default_factory=StabilizedNestedGuardedChampionConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -154,7 +182,39 @@ class UncertaintyConfig:
     """Prior-residual prediction interval settings."""
 
     interval_z: float = 1.64
+    confidence_level: float = 0.90
     min_residual_count: int = 20
+
+
+@dataclass(frozen=True)
+class ChampionDiagnosticsConfig:
+    """Champion policy diagnostic thresholds."""
+
+    harmful_switch_tolerance_sec: float = 0.05
+
+
+@dataclass(frozen=True)
+class PolicySimulationConformalConfig:
+    """Regime-aware conformal simulation settings."""
+
+    confidence_level: float = 0.90
+    min_residual_count: int = 20
+    fallback_order: tuple[str, ...] = (
+        "checkpoint_method_bucket",
+        "checkpoint_bucket",
+        "checkpoint_method",
+        "checkpoint",
+        "global",
+    )
+
+
+@dataclass(frozen=True)
+class PolicySimulationConfig:
+    """Artifact-based policy simulation settings."""
+
+    conformal: PolicySimulationConformalConfig = field(
+        default_factory=PolicySimulationConformalConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -171,6 +231,10 @@ class ModelConfig:
     feature_group_policy: FeatureGroupPolicyConfig = field(default_factory=FeatureGroupPolicyConfig)
     champion_policy: ChampionPolicyConfig = field(default_factory=ChampionPolicyConfig)
     uncertainty: UncertaintyConfig = field(default_factory=UncertaintyConfig)
+    champion_diagnostics: ChampionDiagnosticsConfig = field(
+        default_factory=ChampionDiagnosticsConfig
+    )
+    policy_simulation: PolicySimulationConfig = field(default_factory=PolicySimulationConfig)
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:
@@ -342,15 +406,45 @@ def load_model_config(
     static_policy = champion_policy.get("static", {})
     if not isinstance(static_policy, dict):
         raise ConfigError(f"'champion_policy.static' must be a mapping in {path}")
+    stabilized_nested = champion_policy.get("stabilized_nested", {})
+    if not isinstance(stabilized_nested, dict):
+        raise ConfigError(f"'champion_policy.stabilized_nested' must be a mapping in {path}")
+    stabilized_nested_guarded = champion_policy.get("stabilized_nested_guarded", {})
+    if not isinstance(stabilized_nested_guarded, dict):
+        raise ConfigError(
+            f"'champion_policy.stabilized_nested_guarded' must be a mapping in {path}"
+        )
     uncertainty = model.get("uncertainty", {})
     if not isinstance(uncertainty, dict):
         raise ConfigError(f"'uncertainty' must be a mapping in {path}")
+    champion_diagnostics = model.get("champion_diagnostics", {})
+    if not isinstance(champion_diagnostics, dict):
+        raise ConfigError(f"'champion_diagnostics' must be a mapping in {path}")
+    policy_simulation = model.get("policy_simulation", {})
+    if not isinstance(policy_simulation, dict):
+        raise ConfigError(f"'policy_simulation' must be a mapping in {path}")
+    policy_simulation_conformal = policy_simulation.get("conformal", {})
+    if not isinstance(policy_simulation_conformal, dict):
+        raise ConfigError(f"'policy_simulation.conformal' must be a mapping in {path}")
     default_boosting = HistGradientBoostingConfig(
         random_state=_required_integer(model, "random_state", path)
     )
     default_policy = FeatureGroupPolicyConfig()
     default_champion = ChampionPolicyConfig()
+    default_guarded = default_champion.stabilized_nested_guarded
     default_uncertainty = UncertaintyConfig()
+    default_champion_diagnostics = ChampionDiagnosticsConfig()
+    default_policy_simulation = PolicySimulationConfig()
+    fallback_order_raw = policy_simulation_conformal.get(
+        "fallback_order",
+        list(default_policy_simulation.conformal.fallback_order),
+    )
+    if (
+        not isinstance(fallback_order_raw, list)
+        or not fallback_order_raw
+        or not all(isinstance(value, str) and value.strip() for value in fallback_order_raw)
+    ):
+        raise ConfigError(f"'policy_simulation.conformal.fallback_order' is invalid in {path}")
     config = ModelConfig(
         min_events=_required_integer(model, "min_events", path),
         random_state=_required_integer(model, "random_state", path),
@@ -394,12 +488,101 @@ def load_model_config(
             selection_metric=str(
                 champion_policy.get("selection_metric", default_champion.selection_metric)
             ),
+            stabilized_nested=StabilizedNestedChampionConfig(
+                min_prior_folds=int(
+                    stabilized_nested.get(
+                        "min_prior_folds",
+                        default_champion.stabilized_nested.min_prior_folds,
+                    )
+                ),
+                min_prior_predictions=int(
+                    stabilized_nested.get(
+                        "min_prior_predictions",
+                        default_champion.stabilized_nested.min_prior_predictions,
+                    )
+                ),
+                selection_metric=str(
+                    stabilized_nested.get(
+                        "selection_metric",
+                        default_champion.stabilized_nested.selection_metric,
+                    )
+                ),
+                improvement_margin_sec=float(
+                    stabilized_nested.get(
+                        "improvement_margin_sec",
+                        default_champion.stabilized_nested.improvement_margin_sec,
+                    )
+                ),
+            ),
+            stabilized_nested_guarded=StabilizedNestedGuardedChampionConfig(
+                base_mode=str(
+                    stabilized_nested_guarded.get("base_mode", default_guarded.base_mode)
+                ),
+                fp3_no_baseline_switch=bool(
+                    stabilized_nested_guarded.get(
+                        "fp3_no_baseline_switch",
+                        default_guarded.fp3_no_baseline_switch,
+                    )
+                ),
+                guarded_checkpoint=str(
+                    stabilized_nested_guarded.get(
+                        "guarded_checkpoint",
+                        default_guarded.guarded_checkpoint,
+                    )
+                ),
+                guarded_default_family=str(
+                    stabilized_nested_guarded.get(
+                        "guarded_default_family",
+                        default_guarded.guarded_default_family,
+                    )
+                ),
+                guarded_default_model_name=str(
+                    stabilized_nested_guarded.get(
+                        "guarded_default_model_name",
+                        default_guarded.guarded_default_model_name,
+                    )
+                ),
+                guarded_default_feature_group=_optional_config_string(
+                    stabilized_nested_guarded.get(
+                        "guarded_default_feature_group",
+                        default_guarded.guarded_default_feature_group,
+                    )
+                ),
+            ),
         ),
         uncertainty=UncertaintyConfig(
             interval_z=float(uncertainty.get("interval_z", default_uncertainty.interval_z)),
+            confidence_level=float(
+                uncertainty.get("confidence_level", default_uncertainty.confidence_level)
+            ),
             min_residual_count=int(
                 uncertainty.get("min_residual_count", default_uncertainty.min_residual_count)
             ),
+        ),
+        champion_diagnostics=ChampionDiagnosticsConfig(
+            harmful_switch_tolerance_sec=float(
+                champion_diagnostics.get(
+                    "harmful_switch_tolerance_sec",
+                    default_champion_diagnostics.harmful_switch_tolerance_sec,
+                )
+            )
+        ),
+        policy_simulation=PolicySimulationConfig(
+            conformal=PolicySimulationConformalConfig(
+                confidence_level=float(
+                    policy_simulation_conformal.get(
+                        "confidence_level",
+                        default_policy_simulation.conformal.confidence_level,
+                    )
+                ),
+                min_residual_count=int(
+                    policy_simulation_conformal.get(
+                        "min_residual_count",
+                        default_policy_simulation.conformal.min_residual_count,
+                    )
+                ),
+                fallback_order=tuple(fallback_order_raw),
+            )
         ),
     )
     if config.min_events < 2 or config.ridge_alpha <= 0:
@@ -420,8 +603,35 @@ def load_model_config(
         raise ConfigError(f"HistGradientBoosting settings are invalid in {path}")
     if config.champion_policy.selection_metric != "mae_gap_sec":
         raise ConfigError(f"Only champion selection_metric 'mae_gap_sec' is supported in {path}")
-    if config.uncertainty.interval_z <= 0 or config.uncertainty.min_residual_count < 2:
+    stabilized = config.champion_policy.stabilized_nested
+    if (
+        stabilized.selection_metric != "mae_gap_sec"
+        or stabilized.min_prior_folds < 1
+        or stabilized.min_prior_predictions < 1
+        or stabilized.improvement_margin_sec < 0
+    ):
+        raise ConfigError(f"Stabilized nested champion settings are invalid in {path}")
+    guarded = config.champion_policy.stabilized_nested_guarded
+    if (
+        guarded.base_mode != "stabilized_nested"
+        or guarded.guarded_checkpoint not in {"after_fp1", "after_fp2", "after_fp3"}
+        or not guarded.guarded_default_family
+        or not guarded.guarded_default_model_name
+    ):
+        raise ConfigError(f"Guarded stabilized nested champion settings are invalid in {path}")
+    if (
+        config.uncertainty.interval_z <= 0
+        or not 0 < config.uncertainty.confidence_level < 1
+        or config.uncertainty.min_residual_count < 2
+    ):
         raise ConfigError(f"Uncertainty settings are invalid in {path}")
+    if config.champion_diagnostics.harmful_switch_tolerance_sec < 0:
+        raise ConfigError(f"Champion diagnostics tolerance must be non-negative in {path}")
+    if (
+        not 0 < config.policy_simulation.conformal.confidence_level < 1
+        or config.policy_simulation.conformal.min_residual_count < 2
+    ):
+        raise ConfigError(f"Policy simulation conformal settings are invalid in {path}")
     return config
 
 
@@ -449,6 +659,14 @@ def _load_champion_method(
         model_name=model_name,
         feature_group=feature_group,
     )
+
+
+def _optional_config_string(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return str(value)
+    return value if value.strip() else None
 
 
 def _required_mapping(config: dict[str, Any], key: str, path: Path) -> dict[str, Any]:

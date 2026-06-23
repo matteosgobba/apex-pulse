@@ -20,6 +20,18 @@ model:
     after_fp3: base_plus_relative
   champion_policy:
     selection_metric: mae_gap_sec
+    stabilized_nested:
+      min_prior_folds: 5
+      min_prior_predictions: 100
+      selection_metric: mae_gap_sec
+      improvement_margin_sec: 0.05
+    stabilized_nested_guarded:
+      base_mode: stabilized_nested
+      fp3_no_baseline_switch: true
+      guarded_checkpoint: after_fp3
+      guarded_default_family: ablation
+      guarded_default_model_name: random_forest
+      guarded_default_feature_group: base_plus_relative
     static:
       after_fp1:
         family: robust_baseline
@@ -33,4 +45,17 @@ model:
         feature_group: base_plus_relative
   uncertainty:
     interval_z: 1.64
+    confidence_level: 0.90
     min_residual_count: 20
+  champion_diagnostics:
+    harmful_switch_tolerance_sec: 0.05
+  policy_simulation:
+    conformal:
+      confidence_level: 0.90
+      min_residual_count: 20
+      fallback_order:
+        - checkpoint_method_bucket
+        - checkpoint_bucket
+        - checkpoint_method
+        - checkpoint
+        - global

@@ -162,6 +162,43 @@ def test_backtest_report_includes_champion_fields() -> None:
     assert report["preferred_final_policy_by_checkpoint"]["after_fp1"]["family"] == "champion"
 
 
+def test_backtest_report_includes_champion_mode_and_interval_diagnostics() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        champion_metrics=_champion_metrics("stabilized_nested", 0.35),
+        champion_mode_metrics={
+            "static": _champion_metrics("static", 0.4),
+            "nested": _champion_metrics("nested", 0.5),
+            "stabilized_nested": _champion_metrics("stabilized_nested", 0.35),
+            "stabilized_nested_guarded": _champion_metrics(
+                "stabilized_nested_guarded",
+                0.34,
+            ),
+        },
+    )
+
+    assert report["champion_selection_modes_available"] == [
+        "nested",
+        "stabilized_nested",
+        "stabilized_nested_guarded",
+        "static",
+    ]
+    assert (
+        report["best_champion_selection_mode_by_checkpoint"]["after_fp1"]["selection_mode"]
+        == "stabilized_nested_guarded"
+    )
+    assert (
+        report["best_champion_selection_mode_overall"]["selection_mode"]
+        == "stabilized_nested_guarded"
+    )
+    assert report["champion_interval_coverage_by_checkpoint"]["after_fp1"] == pytest.approx(0.9)
+    assert report["champion_interval_width_by_checkpoint"]["after_fp1"][
+        "mean_interval_width_sec"
+    ] == pytest.approx(1.2)
+
+
 def _quality() -> dict[str, object]:
     return {
         "n_rows": 120,
@@ -243,4 +280,23 @@ def _multi_fold_metrics(strategy: str, folds: int) -> dict[str, object]:
                 "mean_abs_position_error": 3.0,
             }
         },
+    }
+
+
+def _champion_metrics(selection_mode: str, mae: float) -> dict[str, object]:
+    return {
+        "status": "complete",
+        "selection_mode": selection_mode,
+        "metrics_by_checkpoint": {
+            "after_fp1": {
+                "mae_gap_sec": mae,
+                "mean_abs_position_error": 2.0,
+                "interval_coverage": 0.9,
+                "mean_interval_width_sec": 1.2,
+                "median_interval_width_sec": 1.0,
+                "interval_availability_rate": 0.8,
+            }
+        },
+        "champion_vs_best_baseline_delta_mae": {"after_fp1": mae - 0.4},
+        "champion_vs_best_single_family_delta_mae": {"after_fp1": mae - 0.35},
     }

@@ -10,16 +10,22 @@ from f1_prediction.config import (
     DataConfig,
     ModelConfig,
     RandomForestConfig,
+    StabilizedNestedChampionConfig,
+    StabilizedNestedGuardedChampionConfig,
     UncertaintyConfig,
 )
 from f1_prediction.modeling.backtest_tabular import BacktestStrategy, build_backtest_folds
 from f1_prediction.modeling.champion_policy import (
     ChampionSelectionMode,
+    ChampionUncertaintyMethod,
     add_prior_residual_uncertainty,
+    apply_stabilized_nested_guardrail,
     build_champion_metrics_payload,
+    is_practice_baseline_method,
     resolve_static_champion_policy,
     run_champion_backtest,
     select_nested_method,
+    select_stabilized_nested_method,
 )
 
 
@@ -33,6 +39,73 @@ def test_static_champion_policy_resolves_expected_methods() -> None:
         model_name="random_forest",
         feature_group="base_plus_relative",
     )
+
+
+def test_practice_baseline_detection_uses_family_and_model_name() -> None:
+    assert is_practice_baseline_method(
+        ChampionMethodConfig("robust_baseline", "robust_best_valid_lap")
+    )
+    assert is_practice_baseline_method(ChampionMethodConfig("baseline", "best_push_lap"))
+    assert not is_practice_baseline_method(
+        ChampionMethodConfig("ablation", "random_forest", "base_plus_relative")
+    )
+
+
+def test_guardrail_does_not_apply_to_fp1_or_fp2() -> None:
+    fallback = _static_fp3_method()
+    selected = ChampionMethodConfig("robust_baseline", "best_valid_lap")
+
+    for checkpoint in ("after_fp1", "after_fp2"):
+        decision = apply_stabilized_nested_guardrail(
+            selected=selected,
+            fallback=fallback,
+            checkpoint=checkpoint,
+            settings=StabilizedNestedGuardedChampionConfig(),
+        )
+
+        assert decision.selected == selected
+        assert decision.guardrail_applied is False
+
+
+def test_guardrail_applies_to_fp3_static_rf_to_baseline_switch() -> None:
+    fallback = _static_fp3_method()
+    selected = ChampionMethodConfig("robust_baseline", "best_valid_lap")
+
+    decision = apply_stabilized_nested_guardrail(
+        selected=selected,
+        fallback=fallback,
+        checkpoint="after_fp3",
+        settings=StabilizedNestedGuardedChampionConfig(),
+    )
+
+    assert decision.selected == fallback
+    assert decision.pre_guardrail_selected == selected
+    assert decision.guardrail_applied is True
+    assert decision.guardrail_name == "fp3_no_baseline_switch"
+    assert decision.guardrail_reason == "prevent_fp3_baseline_switch_from_static_rf"
+
+
+def test_guardrail_does_not_apply_when_fp3_selection_is_default_or_non_baseline_ml() -> None:
+    fallback = _static_fp3_method()
+    non_baseline = ChampionMethodConfig("boosted", "hist_gradient_boosting", "base_plus_relative")
+
+    already_default = apply_stabilized_nested_guardrail(
+        selected=fallback,
+        fallback=fallback,
+        checkpoint="after_fp3",
+        settings=StabilizedNestedGuardedChampionConfig(),
+    )
+    ml_switch = apply_stabilized_nested_guardrail(
+        selected=non_baseline,
+        fallback=fallback,
+        checkpoint="after_fp3",
+        settings=StabilizedNestedGuardedChampionConfig(),
+    )
+
+    assert already_default.selected == fallback
+    assert already_default.guardrail_applied is False
+    assert ml_switch.selected == non_baseline
+    assert ml_switch.guardrail_applied is False
 
 
 def test_nested_selection_uses_only_prior_folds_and_ignores_current_event() -> None:
@@ -74,6 +147,122 @@ def test_nested_selection_falls_back_without_prior_history() -> None:
     assert fallback_used is True
 
 
+def test_stabilized_nested_falls_back_when_prior_folds_are_too_few() -> None:
+    fallback = ChampionMethodConfig("robust_baseline", "robust_best_push_lap")
+    candidates = pd.concat(
+        [
+            _candidate_rows(1, "event-1", "baseline", "method-a", [0.1, 0.1]),
+            _candidate_rows(2, "event-2", "baseline", "method-a", [0.1, 0.1]),
+        ],
+        ignore_index=True,
+    )
+
+    decision = select_stabilized_nested_method(
+        candidates,
+        fold_id=2,
+        checkpoint="after_fp1",
+        fallback=fallback,
+        settings=StabilizedNestedChampionConfig(min_prior_folds=2, min_prior_predictions=1),
+    )
+
+    assert decision.selected == fallback
+    assert decision.fallback_used is True
+    assert decision.fallback_reason == "insufficient_history"
+    assert decision.prior_folds_used == 1
+
+
+def test_stabilized_nested_falls_back_when_prior_predictions_are_too_few() -> None:
+    fallback = ChampionMethodConfig("robust_baseline", "robust_best_push_lap")
+    candidates = pd.concat(
+        [
+            _candidate_rows(1, "event-1", "baseline", "method-a", [0.1, 0.1]),
+            _candidate_rows(2, "event-2", "baseline", "method-a", [0.1, 0.1]),
+        ],
+        ignore_index=True,
+    )
+
+    decision = select_stabilized_nested_method(
+        candidates,
+        fold_id=2,
+        checkpoint="after_fp1",
+        fallback=fallback,
+        settings=StabilizedNestedChampionConfig(min_prior_folds=1, min_prior_predictions=3),
+    )
+
+    assert decision.selected == fallback
+    assert decision.fallback_reason == "insufficient_history"
+    assert decision.prior_predictions_used == 2
+
+
+def test_stabilized_nested_switches_only_when_margin_is_exceeded() -> None:
+    fallback = ChampionMethodConfig("robust_baseline", "default")
+    candidates = pd.concat(
+        [
+            _candidate_rows(1, "event-1", "robust_baseline", "default", [0.2, 0.2]),
+            _candidate_rows(1, "event-1", "baseline", "method-a", [0.17, 0.17]),
+            _candidate_rows(2, "event-2", "robust_baseline", "default", [0.2, 0.2]),
+            _candidate_rows(2, "event-2", "baseline", "method-a", [0.17, 0.17]),
+        ],
+        ignore_index=True,
+    )
+
+    keep_default = select_stabilized_nested_method(
+        candidates,
+        fold_id=2,
+        checkpoint="after_fp1",
+        fallback=fallback,
+        settings=StabilizedNestedChampionConfig(
+            min_prior_folds=1,
+            min_prior_predictions=1,
+            improvement_margin_sec=0.05,
+        ),
+    )
+    switch = select_stabilized_nested_method(
+        candidates,
+        fold_id=2,
+        checkpoint="after_fp1",
+        fallback=fallback,
+        settings=StabilizedNestedChampionConfig(
+            min_prior_folds=1,
+            min_prior_predictions=1,
+            improvement_margin_sec=0.02,
+        ),
+    )
+
+    assert keep_default.selected == fallback
+    assert keep_default.fallback_reason == "hysteresis_margin_not_met"
+    assert switch.selected.model_name == "method-a"
+    assert switch.fallback_used is False
+
+
+def test_stabilized_nested_never_uses_current_test_event() -> None:
+    fallback = ChampionMethodConfig("robust_baseline", "default")
+    candidates = pd.concat(
+        [
+            _candidate_rows(1, "event-1", "robust_baseline", "default", [0.1, 0.1]),
+            _candidate_rows(1, "event-1", "baseline", "method-a", [0.3, 0.3]),
+            _candidate_rows(2, "event-2", "robust_baseline", "default", [10.0, 10.0]),
+            _candidate_rows(2, "event-2", "baseline", "method-a", [0.0, 0.0]),
+        ],
+        ignore_index=True,
+    )
+
+    decision = select_stabilized_nested_method(
+        candidates,
+        fold_id=2,
+        checkpoint="after_fp1",
+        fallback=fallback,
+        settings=StabilizedNestedChampionConfig(
+            min_prior_folds=1,
+            min_prior_predictions=1,
+            improvement_margin_sec=0.0,
+        ),
+    )
+
+    assert decision.selected == fallback
+    assert decision.source_events == ["event-1"]
+
+
 def test_uncertainty_uses_only_prior_residuals() -> None:
     candidates = pd.concat(
         [
@@ -92,9 +281,44 @@ def test_uncertainty_uses_only_prior_residuals() -> None:
 
     expected_std = pd.Series([0.0, -2.0]).std(ddof=1)
     assert result["residual_std_sec"].iloc[0] == pytest.approx(expected_std)
-    assert set(result["uncertainty_method"]) == {"prior_residual_std"}
+    assert set(result["uncertainty_method"]) == {"residual_std"}
     assert result["prediction_interval_low_sec"].notna().all()
     assert result["prediction_interval_high_sec"].notna().all()
+
+
+def test_conformal_uncertainty_quantile_uses_only_prior_residuals() -> None:
+    candidates = pd.concat(
+        [
+            _candidate_rows(1, "event-1", "baseline", "method-a", [0.0, 2.0]),
+            _candidate_rows(2, "event-2", "baseline", "method-a", [100.0, 100.0]),
+        ],
+        ignore_index=True,
+    )
+    predictions = _champion_rows(2, "method-a")
+
+    result = add_prior_residual_uncertainty(
+        predictions,
+        candidates,
+        UncertaintyConfig(confidence_level=0.9, min_residual_count=2),
+        method=ChampionUncertaintyMethod.conformal,
+    )
+
+    assert set(result["uncertainty_method"]) == {"conformal"}
+    assert result["residual_quantile_sec"].iloc[0] == pytest.approx(2.0)
+    assert result["residual_count"].iloc[0] == 2
+
+
+def test_conformal_uncertainty_is_unavailable_with_insufficient_history() -> None:
+    result = add_prior_residual_uncertainty(
+        _champion_rows(1, "method-a"),
+        _candidate_rows(1, "event-1", "baseline", "method-a", [0.1, 0.2]),
+        UncertaintyConfig(confidence_level=0.9, min_residual_count=20),
+        method=ChampionUncertaintyMethod.conformal,
+    )
+
+    assert result["prediction_interval_low_sec"].isna().all()
+    assert set(result["uncertainty_method"]) == {"insufficient_history"}
+    assert result["residual_count"].eq(0).all()
 
 
 def test_uncertainty_is_null_when_history_is_insufficient() -> None:
@@ -133,6 +357,30 @@ def test_champion_metrics_and_delta_sign() -> None:
     assert payload["champion_vs_best_single_family_delta_mae"]["after_fp1"] < 0
 
 
+def test_champion_interval_metrics_are_computed() -> None:
+    champion = _champion_metric_rows([0.1, 0.2])
+    champion["prediction_interval_low_sec"] = [-0.2, 0.15]
+    champion["prediction_interval_high_sec"] = [0.2, 0.25]
+    champion["interval_contains_actual"] = [True, False]
+    candidates = _metric_candidate_rows("robust_baseline", "baseline", [0.3, 0.5])
+
+    payload = build_champion_metrics_payload(
+        BacktestStrategy.walk_forward,
+        ChampionSelectionMode.nested,
+        2,
+        2,
+        0,
+        champion,
+        candidates,
+    )
+    metrics = payload["metrics_by_checkpoint"]["after_fp1"]
+
+    assert metrics["interval_coverage"] == pytest.approx(0.5)
+    assert metrics["mean_interval_width_sec"] == pytest.approx(0.25)
+    assert metrics["median_interval_width_sec"] == pytest.approx(0.25)
+    assert metrics["interval_availability_rate"] == pytest.approx(1.0)
+
+
 def test_static_champion_backtest_writes_prediction_and_selection_schemas(
     tmp_path: Path,
 ) -> None:
@@ -158,13 +406,91 @@ def test_static_champion_backtest_writes_prediction_and_selection_schemas(
         "selected_family",
         "selected_model_name",
         "selected_feature_group",
+        "residual_count",
+        "residual_quantile_sec",
         "prediction_interval_low_sec",
         "prediction_interval_high_sec",
+        "interval_contains_actual",
         "uncertainty_method",
     }
     assert summary.n_folds_successful == len(folds)
     assert prediction_columns <= set(predictions.columns)
     assert set(selection["checkpoint"]) == {"after_fp1", "after_fp2", "after_fp3"}
+    assert {
+        "fallback_reason",
+        "prior_folds_used",
+        "prior_predictions_used",
+        "default_model_name",
+        "guardrail_applied",
+        "pre_guardrail_selected_model_name",
+        "post_guardrail_selected_model_name",
+    } <= set(selection.columns)
+
+
+def test_champion_mode_specific_outputs_coexist(tmp_path: Path) -> None:
+    dataset = _dataset(6)
+    dataset_path = tmp_path / "dataset.parquet"
+    dataset.to_parquet(dataset_path, index=False)
+    config = _config(tmp_path)
+    folds = build_backtest_folds(dataset, BacktestStrategy.walk_forward, min_train_events=3)
+    _write_prediction_artifacts(config.metrics_output_dir, dataset, folds)
+
+    for mode in (
+        ChampionSelectionMode.static,
+        ChampionSelectionMode.nested,
+        ChampionSelectionMode.stabilized_nested,
+        ChampionSelectionMode.stabilized_nested_guarded,
+    ):
+        run_champion_backtest(
+            config,
+            selection_mode=mode,
+            dataset_path=dataset_path,
+            min_events=5,
+            min_train_events=3,
+            model_config=_model_config(),
+        )
+
+    assert (config.metrics_output_dir / "champion_static_metrics.json").is_file()
+    assert (config.metrics_output_dir / "champion_nested_metrics.json").is_file()
+    assert (config.metrics_output_dir / "champion_stabilized_nested_metrics.json").is_file()
+    assert (config.metrics_output_dir / "champion_stabilized_nested_guarded_metrics.json").is_file()
+
+
+def test_guarded_champion_backtest_records_guardrail_metadata(tmp_path: Path) -> None:
+    dataset = _dataset(8)
+    dataset_path = tmp_path / "dataset.parquet"
+    dataset.to_parquet(dataset_path, index=False)
+    config = _config(tmp_path)
+    folds = build_backtest_folds(dataset, BacktestStrategy.walk_forward, min_train_events=3)
+    _write_prediction_artifacts(
+        config.metrics_output_dir,
+        dataset,
+        folds,
+        include_best_valid_switch=True,
+    )
+
+    summary = run_champion_backtest(
+        config,
+        selection_mode=ChampionSelectionMode.stabilized_nested_guarded,
+        dataset_path=dataset_path,
+        min_events=5,
+        min_train_events=3,
+        model_config=_guarded_model_config(),
+    )
+
+    predictions = pd.read_parquet(summary.predictions_path)
+    selection = pd.read_parquet(summary.selection_path)
+    guarded = selection[selection["guardrail_applied"].astype(bool)]
+
+    assert (config.metrics_output_dir / "champion_stabilized_nested_guarded_metrics.json").is_file()
+    assert not guarded.empty
+    assert set(guarded["checkpoint"]) == {"after_fp3"}
+    assert set(guarded["guardrail_name"]) == {"fp3_no_baseline_switch"}
+    assert set(guarded["guardrail_reason"]) == {"prevent_fp3_baseline_switch_from_static_rf"}
+    assert set(guarded["pre_guardrail_selected_model_name"]) == {"best_valid_lap"}
+    assert set(guarded["post_guardrail_selected_model_name"]) == {"random_forest"}
+    fp3_predictions = predictions[predictions["checkpoint"].eq("after_fp3")]
+    assert set(fp3_predictions["selected_model_name"]) == {"random_forest"}
 
 
 def test_champion_backtest_skips_when_dataset_is_too_small(tmp_path: Path) -> None:
@@ -213,6 +539,7 @@ def _champion_rows(fold_id: int, model_name: str) -> pd.DataFrame:
             "selected_family": ["baseline", "baseline"],
             "selected_model_name": [model_name, model_name],
             "selected_feature_group": pd.Series([pd.NA, pd.NA], dtype="string"),
+            "quali_gap_to_pole_sec": [0.0, 0.0],
             "predicted_quali_gap_to_pole_sec": [0.4, 0.6],
         }
     )
@@ -280,6 +607,8 @@ def _write_prediction_artifacts(
     metrics_dir: Path,
     dataset: pd.DataFrame,
     folds,
+    *,
+    include_best_valid_switch: bool = False,
 ) -> None:
     metrics_dir.mkdir(parents=True, exist_ok=True)
     event_to_fold = {fold.test_event: fold.fold_id for fold in folds}
@@ -289,13 +618,19 @@ def _write_prediction_artifacts(
     test["fold_id"] = test["test_event"].map(event_to_fold)
     base_columns = list(test.columns)
     baseline_frames = []
-    for model_name in ("robust_best_push_lap", "robust_theoretical_best_lap"):
+    baseline_names = ["robust_best_push_lap", "robust_theoretical_best_lap"]
+    if include_best_valid_switch:
+        baseline_names.append("best_valid_lap")
+    for model_name in baseline_names:
         frame = test.loc[:, base_columns].copy()
         frame["model_name"] = model_name
         frame["baseline_name"] = model_name
         frame["prediction_type"] = "baseline"
         frame["strategy"] = "walk_forward"
-        frame["predicted_quali_gap_to_pole_sec"] = frame["quali_gap_to_pole_sec"] + 0.2
+        if model_name == "best_valid_lap":
+            frame["predicted_quali_gap_to_pole_sec"] = frame["quali_gap_to_pole_sec"]
+        else:
+            frame["predicted_quali_gap_to_pole_sec"] = frame["quali_gap_to_pole_sec"] + 0.2
         frame["predicted_quali_position"] = frame["quali_position"]
         frame["predicted_reached_q3"] = 1
         baseline_frames.append(frame)
@@ -326,6 +661,14 @@ def _config(project_root: Path) -> DataConfig:
     )
 
 
+def _static_fp3_method() -> ChampionMethodConfig:
+    return ChampionMethodConfig(
+        family="ablation",
+        model_name="random_forest",
+        feature_group="base_plus_relative",
+    )
+
+
 def _model_config() -> ModelConfig:
     return ModelConfig(
         min_events=5,
@@ -333,5 +676,23 @@ def _model_config() -> ModelConfig:
         ridge_alpha=1.0,
         random_forest=RandomForestConfig(5, 3, 1),
         champion_policy=ChampionPolicyConfig(),
+        uncertainty=UncertaintyConfig(interval_z=1.64, min_residual_count=2),
+    )
+
+
+def _guarded_model_config() -> ModelConfig:
+    return ModelConfig(
+        min_events=5,
+        random_state=42,
+        ridge_alpha=1.0,
+        random_forest=RandomForestConfig(5, 3, 1),
+        champion_policy=ChampionPolicyConfig(
+            stabilized_nested=StabilizedNestedChampionConfig(
+                min_prior_folds=1,
+                min_prior_predictions=2,
+                improvement_margin_sec=0.0,
+            ),
+            stabilized_nested_guarded=StabilizedNestedGuardedChampionConfig(),
+        ),
         uncertainty=UncertaintyConfig(interval_z=1.64, min_residual_count=2),
     )
