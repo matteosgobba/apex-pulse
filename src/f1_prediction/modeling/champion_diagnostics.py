@@ -80,7 +80,7 @@ def create_champion_diagnostics_report(
         selections.get("stabilized_nested"),
         tolerance_sec=diagnostics_config.harmful_switch_tolerance_sec,
     )
-    conformal_cases = build_conformal_miss_cases(predictions.get("stabilized_nested"))
+    conformal_cases = build_conformal_miss_cases(_interval_diagnostic_predictions(predictions))
     conformal_summaries = build_conformal_miss_summaries(conformal_cases)
     coverage_by_regime = build_conformal_coverage_by_error_regime(conformal_cases)
 
@@ -347,6 +347,21 @@ def build_fp3_policy_failure_analysis(
     return pd.DataFrame(output_rows, columns=_fp3_failure_columns())
 
 
+def _interval_diagnostic_predictions(predictions: dict[str, pd.DataFrame]) -> pd.DataFrame | None:
+    """Choose the richest available interval artifact for conformal diagnostics."""
+    guarded = predictions.get("stabilized_nested_guarded")
+    if guarded is not None and not guarded.empty and "uncertainty_method" in guarded.columns:
+        predicted_bucket = guarded[
+            guarded["uncertainty_method"].eq("conformal_predicted_gap_bucket")
+        ]
+        if not predicted_bucket.empty:
+            return guarded
+        conformal = guarded[guarded["uncertainty_method"].eq("conformal")]
+        if not conformal.empty:
+            return guarded
+    return predictions.get("stabilized_nested")
+
+
 def build_conformal_miss_cases(predictions: pd.DataFrame | None) -> pd.DataFrame:
     """Create row-level conformal interval miss diagnostics."""
     if predictions is None or predictions.empty:
@@ -374,6 +389,9 @@ def build_conformal_miss_cases(predictions: pd.DataFrame | None) -> pd.DataFrame
         "residual_count",
         "residual_quantile_sec",
         "interval_contains_actual",
+        "uncertainty_method",
+        "predicted_gap_bucket",
+        "uncertainty_calibration_level",
     ):
         if column not in frame:
             frame[column] = pd.NA
@@ -404,6 +422,9 @@ def build_conformal_miss_cases(predictions: pd.DataFrame | None) -> pd.DataFrame
             "selected_family": available["selected_family"],
             "selected_model_name": available["selected_model_name"],
             "selected_feature_group": available["selected_feature_group"],
+            "uncertainty_method": available["uncertainty_method"],
+            "predicted_gap_bucket": available["predicted_gap_bucket"],
+            "uncertainty_calibration_level": available["uncertainty_calibration_level"],
             "actual_quali_gap_to_pole_sec": actual,
             "predicted_quali_gap_to_pole_sec": predicted,
             "prediction_interval_low_sec": low,
@@ -1197,6 +1218,9 @@ def _conformal_case_columns() -> list[str]:
         "selected_family",
         "selected_model_name",
         "selected_feature_group",
+        "uncertainty_method",
+        "predicted_gap_bucket",
+        "uncertainty_calibration_level",
         "actual_quali_gap_to_pole_sec",
         "predicted_quali_gap_to_pole_sec",
         "prediction_interval_low_sec",

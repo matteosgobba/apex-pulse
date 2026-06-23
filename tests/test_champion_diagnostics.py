@@ -137,6 +137,25 @@ def test_conformal_miss_side_for_covered_below_and_above() -> None:
     assert cases["miss_side"].iloc[2] == "above_interval"
 
 
+def test_conformal_miss_cases_keep_predicted_bucket_metadata() -> None:
+    predictions = _interval_predictions(
+        actual=[1.0],
+        predicted=[1.0],
+        low=[0.5],
+        high=[1.5],
+        contains=[True],
+    )
+    predictions["uncertainty_method"] = "conformal_predicted_gap_bucket"
+    predictions["predicted_gap_bucket"] = "close_midfield"
+    predictions["uncertainty_calibration_level"] = "checkpoint_method_bucket"
+
+    cases = build_conformal_miss_cases(predictions)
+
+    assert cases["uncertainty_method"].iloc[0] == "conformal_predicted_gap_bucket"
+    assert cases["predicted_gap_bucket"].iloc[0] == "close_midfield"
+    assert cases["uncertainty_calibration_level"].iloc[0] == "checkpoint_method_bucket"
+
+
 def test_conformal_miss_summaries_compute_coverage_and_miss_count() -> None:
     cases = build_conformal_miss_cases(
         _interval_predictions(

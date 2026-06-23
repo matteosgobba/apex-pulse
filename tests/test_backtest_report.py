@@ -197,6 +197,9 @@ def test_backtest_report_includes_champion_mode_and_interval_diagnostics() -> No
     assert report["champion_interval_width_by_checkpoint"]["after_fp1"][
         "mean_interval_width_sec"
     ] == pytest.approx(1.2)
+    assert report["champion_interval_metrics_by_predicted_gap_bucket"]["after_fp1"][
+        "pole_contender"
+    ]["coverage"] == pytest.approx(0.95)
 
 
 def _quality() -> dict[str, object]:
@@ -299,4 +302,16 @@ def _champion_metrics(selection_mode: str, mae: float) -> dict[str, object]:
         },
         "champion_vs_best_baseline_delta_mae": {"after_fp1": mae - 0.4},
         "champion_vs_best_single_family_delta_mae": {"after_fp1": mae - 0.35},
+        "interval_metrics_by_predicted_gap_bucket": {
+            "after_fp1": {
+                "pole_contender": {
+                    "rows_with_interval": 20,
+                    "coverage": 0.95,
+                    "mean_interval_width_sec": 1.0,
+                    "median_interval_width_sec": 0.9,
+                    "mean_abs_error_gap_sec": 0.2,
+                    "miss_count": 1,
+                }
+            }
+        },
     }

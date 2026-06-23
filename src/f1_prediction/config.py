@@ -145,6 +145,28 @@ class StabilizedNestedGuardedChampionConfig:
     guarded_default_feature_group: str | None = "base_plus_relative"
 
 
+@dataclass(frozen=True)
+class PredictedGapBucketUncertaintyConfig:
+    """Predicted-gap bucket conformal calibration settings."""
+
+    confidence_level: float = 0.90
+    min_residual_count: int = 20
+    bucket_thresholds_sec: dict[str, float] = field(
+        default_factory=lambda: {
+            "pole_contender": 0.5,
+            "close_midfield": 1.5,
+            "midfield": 3.0,
+        }
+    )
+    fallback_order: tuple[str, ...] = (
+        "checkpoint_method_bucket",
+        "checkpoint_bucket",
+        "checkpoint_method",
+        "checkpoint",
+        "global",
+    )
+
+
 def _default_champion_static_policy() -> dict[str, ChampionMethodConfig]:
     return {
         "after_fp1": ChampionMethodConfig(
@@ -184,6 +206,9 @@ class UncertaintyConfig:
     interval_z: float = 1.64
     confidence_level: float = 0.90
     min_residual_count: int = 20
+    predicted_gap_bucket: PredictedGapBucketUncertaintyConfig = field(
+        default_factory=PredictedGapBucketUncertaintyConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -417,6 +442,9 @@ def load_model_config(
     uncertainty = model.get("uncertainty", {})
     if not isinstance(uncertainty, dict):
         raise ConfigError(f"'uncertainty' must be a mapping in {path}")
+    predicted_gap_bucket = uncertainty.get("predicted_gap_bucket", {})
+    if not isinstance(predicted_gap_bucket, dict):
+        raise ConfigError(f"'uncertainty.predicted_gap_bucket' must be a mapping in {path}")
     champion_diagnostics = model.get("champion_diagnostics", {})
     if not isinstance(champion_diagnostics, dict):
         raise ConfigError(f"'champion_diagnostics' must be a mapping in {path}")
@@ -433,8 +461,47 @@ def load_model_config(
     default_champion = ChampionPolicyConfig()
     default_guarded = default_champion.stabilized_nested_guarded
     default_uncertainty = UncertaintyConfig()
+    default_bucket_uncertainty = default_uncertainty.predicted_gap_bucket
     default_champion_diagnostics = ChampionDiagnosticsConfig()
     default_policy_simulation = PolicySimulationConfig()
+    bucket_thresholds_raw = predicted_gap_bucket.get(
+        "bucket_thresholds_sec",
+        default_bucket_uncertainty.bucket_thresholds_sec,
+    )
+    if not isinstance(bucket_thresholds_raw, dict):
+        raise ConfigError(
+            f"'uncertainty.predicted_gap_bucket.bucket_thresholds_sec' is invalid in {path}"
+        )
+    bucket_thresholds = {
+        "pole_contender": float(
+            bucket_thresholds_raw.get(
+                "pole_contender",
+                default_bucket_uncertainty.bucket_thresholds_sec["pole_contender"],
+            )
+        ),
+        "close_midfield": float(
+            bucket_thresholds_raw.get(
+                "close_midfield",
+                default_bucket_uncertainty.bucket_thresholds_sec["close_midfield"],
+            )
+        ),
+        "midfield": float(
+            bucket_thresholds_raw.get(
+                "midfield",
+                default_bucket_uncertainty.bucket_thresholds_sec["midfield"],
+            )
+        ),
+    }
+    bucket_fallback_order_raw = predicted_gap_bucket.get(
+        "fallback_order",
+        list(default_bucket_uncertainty.fallback_order),
+    )
+    if (
+        not isinstance(bucket_fallback_order_raw, list)
+        or not bucket_fallback_order_raw
+        or not all(isinstance(value, str) and value.strip() for value in bucket_fallback_order_raw)
+    ):
+        raise ConfigError(f"'uncertainty.predicted_gap_bucket.fallback_order' is invalid in {path}")
     fallback_order_raw = policy_simulation_conformal.get(
         "fallback_order",
         list(default_policy_simulation.conformal.fallback_order),
@@ -558,6 +625,22 @@ def load_model_config(
             min_residual_count=int(
                 uncertainty.get("min_residual_count", default_uncertainty.min_residual_count)
             ),
+            predicted_gap_bucket=PredictedGapBucketUncertaintyConfig(
+                confidence_level=float(
+                    predicted_gap_bucket.get(
+                        "confidence_level",
+                        default_bucket_uncertainty.confidence_level,
+                    )
+                ),
+                min_residual_count=int(
+                    predicted_gap_bucket.get(
+                        "min_residual_count",
+                        default_bucket_uncertainty.min_residual_count,
+                    )
+                ),
+                bucket_thresholds_sec=bucket_thresholds,
+                fallback_order=tuple(bucket_fallback_order_raw),
+            ),
         ),
         champion_diagnostics=ChampionDiagnosticsConfig(
             harmful_switch_tolerance_sec=float(
@@ -625,6 +708,24 @@ def load_model_config(
         or config.uncertainty.min_residual_count < 2
     ):
         raise ConfigError(f"Uncertainty settings are invalid in {path}")
+    bucket_uncertainty = config.uncertainty.predicted_gap_bucket
+    bucket_thresholds = bucket_uncertainty.bucket_thresholds_sec
+    allowed_bucket_fallbacks = {
+        "checkpoint_method_bucket",
+        "checkpoint_bucket",
+        "checkpoint_method",
+        "checkpoint",
+        "global",
+    }
+    if (
+        not 0 < bucket_uncertainty.confidence_level < 1
+        or bucket_uncertainty.min_residual_count < 2
+        or bucket_thresholds["pole_contender"] <= 0
+        or bucket_thresholds["pole_contender"] >= bucket_thresholds["close_midfield"]
+        or bucket_thresholds["close_midfield"] >= bucket_thresholds["midfield"]
+        or not set(bucket_uncertainty.fallback_order) <= allowed_bucket_fallbacks
+    ):
+        raise ConfigError(f"Predicted-gap bucket uncertainty settings are invalid in {path}")
     if config.champion_diagnostics.harmful_switch_tolerance_sec < 0:
         raise ConfigError(f"Champion diagnostics tolerance must be non-negative in {path}")
     if (

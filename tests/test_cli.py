@@ -427,6 +427,48 @@ def test_champion_backtest_accepts_stabilized_nested_guarded(
     assert "Selection mode: stabilized_nested_guarded" in result.output
 
 
+def test_champion_backtest_accepts_predicted_gap_bucket_uncertainty(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: object())
+
+    def fake_champion_backtest(*args, **kwargs):
+        captured.update(kwargs)
+        return ChampionBacktestSummary(
+            status="complete",
+            strategy="walk_forward",
+            selection_mode=str(kwargs["selection_mode"].value),
+            n_events=10,
+            n_folds_total=5,
+            n_folds_successful=5,
+            n_folds_failed=0,
+            prediction_rows=300,
+            metrics_path=tmp_path / "metrics/champion_metrics.json",
+            predictions_path=tmp_path / "metrics/champion_predictions.parquet",
+            selection_path=tmp_path / "metrics/champion_selection.parquet",
+        )
+
+    monkeypatch.setattr("f1_prediction.cli.run_champion_backtest", fake_champion_backtest)
+    result = CliRunner().invoke(
+        app,
+        [
+            "champion-backtest",
+            "--selection-mode",
+            "stabilized_nested_guarded",
+            "--uncertainty",
+            "conformal_predicted_gap_bucket",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["uncertainty_method"].value == "conformal_predicted_gap_bucket"
+    assert "Selection mode: stabilized_nested_guarded" in result.output
+
+
 def test_portfolio_report_command_is_registered(monkeypatch, tmp_path: Path) -> None:
     config = _config(tmp_path)
     monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)

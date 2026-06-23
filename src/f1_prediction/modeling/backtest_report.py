@@ -479,6 +479,7 @@ def _champion_summary(
             "best_champion_selection_mode_overall": None,
             "champion_interval_coverage_by_checkpoint": {},
             "champion_interval_width_by_checkpoint": {},
+            "champion_interval_metrics_by_predicted_gap_bucket": {},
             "preferred_final_policy_by_checkpoint": {},
         }
     latest = metrics if usable else next(iter(usable_modes.values()))
@@ -522,6 +523,9 @@ def _champion_summary(
         "best_champion_selection_mode_overall": best_overall,
         "champion_interval_coverage_by_checkpoint": interval_coverage,
         "champion_interval_width_by_checkpoint": interval_width,
+        "champion_interval_metrics_by_predicted_gap_bucket": latest.get(
+            "interval_metrics_by_predicted_gap_bucket", {}
+        ),
         "preferred_final_policy_by_checkpoint": preferred,
     }
 

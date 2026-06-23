@@ -47,6 +47,19 @@ model:
     interval_z: 1.64
     confidence_level: 0.90
     min_residual_count: 20
+    predicted_gap_bucket:
+      confidence_level: 0.90
+      min_residual_count: 20
+      bucket_thresholds_sec:
+        pole_contender: 0.5
+        close_midfield: 1.5
+        midfield: 3.0
+      fallback_order:
+        - checkpoint_method_bucket
+        - checkpoint_bucket
+        - checkpoint_method
+        - checkpoint
+        - global
   champion_diagnostics:
     harmful_switch_tolerance_sec: 0.05
   policy_simulation:

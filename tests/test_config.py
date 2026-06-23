@@ -123,6 +123,17 @@ model:
     interval_z: 1.5
     confidence_level: 0.85
     min_residual_count: 12
+    predicted_gap_bucket:
+      confidence_level: 0.91
+      min_residual_count: 14
+      bucket_thresholds_sec:
+        pole_contender: 0.4
+        close_midfield: 1.4
+        midfield: 2.8
+      fallback_order:
+        - checkpoint_method_bucket
+        - checkpoint_bucket
+        - global
   champion_diagnostics:
     harmful_switch_tolerance_sec: 0.08
   policy_simulation:
@@ -162,6 +173,19 @@ model:
     assert config.uncertainty.interval_z == 1.5
     assert config.uncertainty.confidence_level == 0.85
     assert config.uncertainty.min_residual_count == 12
+    bucket_uncertainty = config.uncertainty.predicted_gap_bucket
+    assert bucket_uncertainty.confidence_level == 0.91
+    assert bucket_uncertainty.min_residual_count == 14
+    assert bucket_uncertainty.bucket_thresholds_sec == {
+        "pole_contender": 0.4,
+        "close_midfield": 1.4,
+        "midfield": 2.8,
+    }
+    assert bucket_uncertainty.fallback_order == (
+        "checkpoint_method_bucket",
+        "checkpoint_bucket",
+        "global",
+    )
     assert config.champion_diagnostics.harmful_switch_tolerance_sec == 0.08
     assert config.policy_simulation.conformal.confidence_level == 0.88
     assert config.policy_simulation.conformal.min_residual_count == 9

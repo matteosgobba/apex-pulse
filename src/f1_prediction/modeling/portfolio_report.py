@@ -372,8 +372,9 @@ def build_portfolio_summary_payload(
         "main_takeaways": _main_takeaways(champion_metrics, best_overall),
         "limitations": _limitations(),
         "recommended_next_milestone": (
-            "Milestone 20: decide whether the opt-in FP3 guardrail should become the default "
-            "champion policy and continue leakage-safe interval-calibration work."
+            "Milestone 21: decide whether the opt-in guarded champion mode and "
+            "predicted-gap-bucket conformal intervals should become recommended defaults after "
+            "reviewing the coverage/width trade-off."
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -931,20 +932,33 @@ def _results_card_table(champion_summary: pd.DataFrame) -> str:
 
 
 def _interval_card_text(interval_summary: pd.DataFrame) -> str:
-    stabilized = interval_summary[
-        interval_summary["selection_mode"].eq("stabilized_nested")
-        & interval_summary["uncertainty_method"].eq("conformal")
+    preferred = interval_summary[
+        interval_summary["selection_mode"].eq("stabilized_nested_guarded")
+        & interval_summary["uncertainty_method"].eq("conformal_predicted_gap_bucket")
     ]
-    if stabilized.empty:
+    intro = (
+        "Predicted-gap-bucket conformal intervals use only prior-fold residuals and choose "
+        "calibration buckets from the predicted gap, not the actual qualifying gap. They are "
+        "leakage-safe diagnostics, but wider intervals may be needed for better coverage."
+    )
+    if preferred.empty:
+        preferred = interval_summary[
+            interval_summary["selection_mode"].eq("stabilized_nested")
+            & interval_summary["uncertainty_method"].eq("conformal")
+        ]
+        intro = (
+            "Conformal intervals use only prior-fold residuals. They are leakage-safe diagnostics, "
+            "but broad and not guaranteed production-calibrated intervals."
+        )
+    if preferred.empty:
         return (
             "Prediction intervals are generated where prior-fold residual history is available. "
             "No stabilized conformal interval summary was available for this model card."
         )
     lines = [
-        "Conformal intervals use only prior-fold residuals. They are leakage-safe diagnostics, "
-        "but broad and not guaranteed production-calibrated intervals.",
+        intro,
         "",
-        stabilized.loc[
+        preferred.loc[
             :,
             [
                 "checkpoint",

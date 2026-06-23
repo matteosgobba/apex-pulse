@@ -714,7 +714,12 @@ def champion_backtest_command(
     ] = ChampionSelectionMode.nested,
     uncertainty: Annotated[
         ChampionUncertaintyMethod,
-        typer.Option(help="Prediction interval method: residual_std or conformal."),
+        typer.Option(
+            help=(
+                "Prediction interval method: residual_std, conformal, "
+                "or conformal_predicted_gap_bucket."
+            )
+        ),
     ] = ChampionUncertaintyMethod.residual_std,
     dataset_path: Annotated[
         Path | None,

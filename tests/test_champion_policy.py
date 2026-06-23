@@ -9,6 +9,7 @@ from f1_prediction.config import (
     ChampionPolicyConfig,
     DataConfig,
     ModelConfig,
+    PredictedGapBucketUncertaintyConfig,
     RandomForestConfig,
     StabilizedNestedChampionConfig,
     StabilizedNestedGuardedChampionConfig,
@@ -18,8 +19,10 @@ from f1_prediction.modeling.backtest_tabular import BacktestStrategy, build_back
 from f1_prediction.modeling.champion_policy import (
     ChampionSelectionMode,
     ChampionUncertaintyMethod,
+    add_predicted_gap_bucket_conformal_uncertainty,
     add_prior_residual_uncertainty,
     apply_stabilized_nested_guardrail,
+    assign_predicted_gap_bucket,
     build_champion_metrics_payload,
     is_practice_baseline_method,
     resolve_static_champion_policy,
@@ -333,6 +336,137 @@ def test_uncertainty_is_null_when_history_is_insufficient() -> None:
     assert set(result["uncertainty_method"]) == {"insufficient_history"}
 
 
+def test_predicted_gap_bucket_assignment_thresholds() -> None:
+    settings = PredictedGapBucketUncertaintyConfig()
+
+    assert assign_predicted_gap_bucket(0.5, settings) == "pole_contender"
+    assert assign_predicted_gap_bucket(0.5001, settings) == "close_midfield"
+    assert assign_predicted_gap_bucket(1.5, settings) == "close_midfield"
+    assert assign_predicted_gap_bucket(1.5001, settings) == "midfield"
+    assert assign_predicted_gap_bucket(3.0, settings) == "midfield"
+    assert assign_predicted_gap_bucket(3.0001, settings) == "backmarker_or_outlier"
+
+
+def test_predicted_gap_bucket_conformal_uses_predicted_gap_not_actual_gap() -> None:
+    candidates = _bucket_candidates(
+        fold_id=1,
+        predicted=[0.2, 0.4],
+        actual=[0.0, 0.0],
+    )
+    predictions = _bucket_predictions(
+        fold_id=2,
+        predicted=[0.4],
+        actual=[10.0],
+    )
+
+    result = add_predicted_gap_bucket_conformal_uncertainty(
+        predictions,
+        candidates,
+        _bucket_uncertainty(min_residual_count=2),
+    )
+
+    assert result["predicted_gap_bucket"].iloc[0] == "pole_contender"
+    assert result["uncertainty_method"].iloc[0] == "conformal_predicted_gap_bucket"
+
+
+def test_predicted_gap_bucket_conformal_uses_prior_folds_only() -> None:
+    candidates = pd.concat(
+        [
+            _bucket_candidates(1, predicted=[0.3, 0.4], actual=[0.0, 0.0]),
+            _bucket_candidates(2, predicted=[0.3, 0.4], actual=[100.0, 100.0]),
+        ],
+        ignore_index=True,
+    )
+    predictions = _bucket_predictions(2, predicted=[0.3], actual=[0.0])
+
+    result = add_predicted_gap_bucket_conformal_uncertainty(
+        predictions,
+        candidates,
+        _bucket_uncertainty(min_residual_count=2),
+    )
+
+    assert result["residual_quantile_sec"].iloc[0] == pytest.approx(0.4)
+    assert result["uncertainty_prior_group_count"].iloc[0] == 2
+
+
+def test_predicted_gap_bucket_conformal_uses_method_bucket_when_available() -> None:
+    candidates = _bucket_candidates(1, predicted=[0.2, 0.4], actual=[0.0, 0.0])
+    predictions = _bucket_predictions(2, predicted=[0.3], actual=[0.0])
+
+    result = add_prior_residual_uncertainty(
+        predictions,
+        candidates,
+        _bucket_uncertainty(min_residual_count=2),
+        method=ChampionUncertaintyMethod.conformal_predicted_gap_bucket,
+    )
+
+    assert result["uncertainty_calibration_level"].iloc[0] == "checkpoint_method_bucket"
+    assert bool(result["uncertainty_fallback_used"].iloc[0]) is False
+
+
+def test_predicted_gap_bucket_conformal_falls_back_to_checkpoint_bucket() -> None:
+    candidates = pd.concat(
+        [
+            _bucket_candidates(1, predicted=[0.2], actual=[0.0]),
+            _bucket_candidates(
+                1,
+                predicted=[0.4, 0.45],
+                actual=[0.0, 0.0],
+                model_name="method-b",
+            ),
+        ],
+        ignore_index=True,
+    )
+    predictions = _bucket_predictions(2, predicted=[0.3], actual=[0.0])
+
+    result = add_predicted_gap_bucket_conformal_uncertainty(
+        predictions,
+        candidates,
+        _bucket_uncertainty(min_residual_count=2),
+    )
+
+    assert result["uncertainty_calibration_level"].iloc[0] == "checkpoint_bucket"
+    assert bool(result["uncertainty_fallback_used"].iloc[0]) is True
+    assert result["uncertainty_prior_group_count"].iloc[0] == 3
+
+
+def test_predicted_gap_bucket_conformal_is_null_with_insufficient_global_history() -> None:
+    result = add_predicted_gap_bucket_conformal_uncertainty(
+        _bucket_predictions(2, predicted=[0.3], actual=[0.0]),
+        _bucket_candidates(1, predicted=[0.2], actual=[0.0]),
+        _bucket_uncertainty(min_residual_count=2),
+    )
+
+    assert result["prediction_interval_low_sec"].isna().all()
+    assert result["uncertainty_method"].iloc[0] == "insufficient_history"
+    assert result["uncertainty_calibration_level"].iloc[0] == "insufficient_history"
+
+
+def test_predicted_gap_bucket_metrics_are_included() -> None:
+    champion = _champion_metric_rows([0.1, 0.2])
+    champion["predicted_gap_bucket"] = ["pole_contender", "pole_contender"]
+    champion["prediction_interval_low_sec"] = [-0.2, 0.15]
+    champion["prediction_interval_high_sec"] = [0.2, 0.25]
+    champion["interval_contains_actual"] = [True, False]
+    candidates = _metric_candidate_rows("robust_baseline", "baseline", [0.3, 0.5])
+
+    payload = build_champion_metrics_payload(
+        BacktestStrategy.walk_forward,
+        ChampionSelectionMode.nested,
+        2,
+        2,
+        0,
+        champion,
+        candidates,
+        uncertainty_method=ChampionUncertaintyMethod.conformal_predicted_gap_bucket,
+    )
+
+    bucket = payload["interval_metrics_by_predicted_gap_bucket"]["after_fp1"]["pole_contender"]
+    assert bucket["rows_with_interval"] == 2
+    assert bucket["coverage"] == pytest.approx(0.5)
+    assert bucket["miss_count"] == 1
+
+
 def test_champion_metrics_and_delta_sign() -> None:
     champion = _champion_metric_rows([0.1, 0.2])
     candidates = pd.concat(
@@ -542,6 +676,55 @@ def _champion_rows(fold_id: int, model_name: str) -> pd.DataFrame:
             "quali_gap_to_pole_sec": [0.0, 0.0],
             "predicted_quali_gap_to_pole_sec": [0.4, 0.6],
         }
+    )
+
+
+def _bucket_candidates(
+    fold_id: int,
+    *,
+    predicted: list[float],
+    actual: list[float],
+    model_name: str = "method-a",
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "fold_id": [fold_id] * len(predicted),
+            "test_event": [f"event-{fold_id}"] * len(predicted),
+            "checkpoint": ["after_fp3"] * len(predicted),
+            "candidate_family": ["baseline"] * len(predicted),
+            "model_name": [model_name] * len(predicted),
+            "feature_group": pd.Series([pd.NA] * len(predicted), dtype="string"),
+            "driver": [f"DRV{i}" for i in range(len(predicted))],
+            "quali_gap_to_pole_sec": actual,
+            "predicted_quali_gap_to_pole_sec": predicted,
+        }
+    )
+
+
+def _bucket_predictions(
+    fold_id: int,
+    *,
+    predicted: list[float],
+    actual: list[float],
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "fold_id": [fold_id] * len(predicted),
+            "checkpoint": ["after_fp3"] * len(predicted),
+            "selected_family": ["baseline"] * len(predicted),
+            "selected_model_name": ["method-a"] * len(predicted),
+            "selected_feature_group": pd.Series([pd.NA] * len(predicted), dtype="string"),
+            "quali_gap_to_pole_sec": actual,
+            "predicted_quali_gap_to_pole_sec": predicted,
+        }
+    )
+
+
+def _bucket_uncertainty(min_residual_count: int) -> UncertaintyConfig:
+    return UncertaintyConfig(
+        predicted_gap_bucket=PredictedGapBucketUncertaintyConfig(
+            min_residual_count=min_residual_count
+        )
     )
 
 

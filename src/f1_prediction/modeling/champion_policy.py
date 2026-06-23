@@ -14,6 +14,7 @@ from f1_prediction.config import (
     ChampionMethodConfig,
     DataConfig,
     ModelConfig,
+    PredictedGapBucketUncertaintyConfig,
     StabilizedNestedChampionConfig,
     StabilizedNestedGuardedChampionConfig,
     UncertaintyConfig,
@@ -57,6 +58,7 @@ class ChampionUncertaintyMethod(str, Enum):
 
     residual_std = "residual_std"
     conformal = "conformal"
+    conformal_predicted_gap_bucket = "conformal_predicted_gap_bucket"
 
 
 @dataclass(frozen=True)
@@ -368,6 +370,28 @@ def is_practice_baseline_method(method: ChampionMethodConfig) -> bool:
     )
 
 
+def assign_predicted_gap_bucket(
+    predicted_gap_sec: object,
+    settings: PredictedGapBucketUncertaintyConfig | None = None,
+) -> str | None:
+    """Assign a prediction-only qualifying-gap regime bucket."""
+    if predicted_gap_sec is None or pd.isna(predicted_gap_sec):
+        return None
+    thresholds = (
+        settings.bucket_thresholds_sec
+        if settings is not None
+        else PredictedGapBucketUncertaintyConfig().bucket_thresholds_sec
+    )
+    gap = float(predicted_gap_sec)
+    if gap <= thresholds["pole_contender"]:
+        return "pole_contender"
+    if gap <= thresholds["close_midfield"]:
+        return "close_midfield"
+    if gap <= thresholds["midfield"]:
+        return "midfield"
+    return "backmarker_or_outlier"
+
+
 def add_prior_residual_uncertainty(
     predictions: pd.DataFrame,
     candidates: pd.DataFrame,
@@ -377,6 +401,8 @@ def add_prior_residual_uncertainty(
 ) -> pd.DataFrame:
     """Attach intervals estimated only from earlier folds for the selected method."""
     method = ChampionUncertaintyMethod(method)
+    if method is ChampionUncertaintyMethod.conformal_predicted_gap_bucket:
+        return add_predicted_gap_bucket_conformal_uncertainty(predictions, candidates, config)
     result = predictions.copy()
     result["prediction_interval_low_sec"] = float("nan")
     result["prediction_interval_high_sec"] = float("nan")
@@ -431,6 +457,84 @@ def add_prior_residual_uncertainty(
         result.loc[rows.index, "uncertainty_method"] = uncertainty_label
         actual = result.loc[rows.index, "quali_gap_to_pole_sec"].astype(float)
         result.loc[rows.index, "interval_contains_actual"] = (actual >= low) & (actual <= high)
+    return result
+
+
+def add_predicted_gap_bucket_conformal_uncertainty(
+    predictions: pd.DataFrame,
+    candidates: pd.DataFrame,
+    config: UncertaintyConfig,
+) -> pd.DataFrame:
+    """Attach conformal intervals calibrated by prior predicted-gap regimes."""
+    settings = config.predicted_gap_bucket
+    result = predictions.copy()
+    result["prediction_interval_low_sec"] = float("nan")
+    result["prediction_interval_high_sec"] = float("nan")
+    result["residual_std_sec"] = float("nan")
+    result["residual_count"] = 0
+    result["residual_quantile_sec"] = float("nan")
+    result["uncertainty_confidence_level"] = settings.confidence_level
+    result["interval_contains_actual"] = pd.Series(pd.NA, index=result.index, dtype="boolean")
+    result["uncertainty_method"] = "insufficient_history"
+    result["predicted_gap_bucket"] = result["predicted_quali_gap_to_pole_sec"].map(
+        lambda value: assign_predicted_gap_bucket(value, settings)
+    )
+    result["uncertainty_calibration_level"] = "insufficient_history"
+    result["uncertainty_fallback_used"] = pd.Series(pd.NA, index=result.index, dtype="boolean")
+    result["uncertainty_fallback_reason"] = pd.NA
+    result["uncertainty_calibration_group"] = pd.NA
+    result["uncertainty_prior_group_count"] = 0
+
+    history = _candidate_residual_history(candidates, settings)
+    if history.empty:
+        return result
+
+    for index, row in result.iterrows():
+        bucket = row["predicted_gap_bucket"]
+        if bucket is None or pd.isna(bucket):
+            continue
+        prior = history[history["fold_id"].lt(int(row["fold_id"]))]
+        if prior.empty:
+            continue
+        method_config = ChampionMethodConfig(
+            family=str(row["selected_family"]),
+            model_name=str(row["selected_model_name"]),
+            feature_group=_optional_string(row["selected_feature_group"]),
+        )
+        selected = _select_predicted_bucket_quantile(
+            prior,
+            checkpoint=str(row["checkpoint"]),
+            method=method_config,
+            predicted_gap_bucket=str(bucket),
+            settings=settings,
+        )
+        if selected is None:
+            continue
+        level, group, residuals = selected
+        quantile = float(
+            residuals.abs().quantile(settings.confidence_level, interpolation="higher")
+        )
+        residual_std = float(residuals.std(ddof=1))
+        predicted = float(row["predicted_quali_gap_to_pole_sec"])
+        low = predicted - quantile
+        high = predicted + quantile
+        actual = float(row["quali_gap_to_pole_sec"])
+        result.loc[index, "prediction_interval_low_sec"] = low
+        result.loc[index, "prediction_interval_high_sec"] = high
+        result.loc[index, "residual_std_sec"] = None if pd.isna(residual_std) else residual_std
+        result.loc[index, "residual_count"] = int(len(residuals))
+        result.loc[index, "residual_quantile_sec"] = quantile
+        result.loc[index, "interval_contains_actual"] = bool(low <= actual <= high)
+        result.loc[index, "uncertainty_method"] = (
+            ChampionUncertaintyMethod.conformal_predicted_gap_bucket.value
+        )
+        result.loc[index, "uncertainty_calibration_level"] = level
+        result.loc[index, "uncertainty_fallback_used"] = level != settings.fallback_order[0]
+        result.loc[index, "uncertainty_fallback_reason"] = (
+            None if level == settings.fallback_order[0] else "fallback_to_coarser_group"
+        )
+        result.loc[index, "uncertainty_calibration_group"] = group
+        result.loc[index, "uncertainty_prior_group_count"] = int(len(residuals))
     return result
 
 
@@ -728,6 +832,9 @@ def build_champion_metrics_payload(
         "champion_vs_best_baseline_delta_mae": baseline_mae,
         "champion_vs_best_baseline_delta_position_error": baseline_position,
         "champion_vs_best_single_family_delta_mae": single_mae,
+        "interval_metrics_by_predicted_gap_bucket": _interval_metrics_by_predicted_gap_bucket(
+            champion_predictions
+        ),
         "created_at_utc": _utc_now(),
     }
 
@@ -936,6 +1043,178 @@ def _interval_metrics(rows: pd.DataFrame) -> dict[str, float | None]:
         "median_interval_width_sec": float(widths.median()),
         "interval_availability_rate": availability,
     }
+
+
+def _candidate_residual_history(
+    candidates: pd.DataFrame,
+    settings: PredictedGapBucketUncertaintyConfig,
+) -> pd.DataFrame:
+    required = {
+        "fold_id",
+        "checkpoint",
+        "candidate_family",
+        "model_name",
+        "feature_group",
+        "quali_gap_to_pole_sec",
+        "predicted_quali_gap_to_pole_sec",
+    }
+    if not required <= set(candidates.columns):
+        return pd.DataFrame()
+    history = candidates.dropna(
+        subset=["quali_gap_to_pole_sec", "predicted_quali_gap_to_pole_sec"]
+    ).copy()
+    if history.empty:
+        return history
+    history["absolute_residual"] = (
+        history["quali_gap_to_pole_sec"].astype(float)
+        - history["predicted_quali_gap_to_pole_sec"].astype(float)
+    ).abs()
+    history["predicted_gap_bucket"] = history["predicted_quali_gap_to_pole_sec"].map(
+        lambda value: assign_predicted_gap_bucket(value, settings)
+    )
+    history["_method_key"] = history.apply(
+        lambda row: _method_key(
+            ChampionMethodConfig(
+                family=str(row["candidate_family"]),
+                model_name=str(row["model_name"]),
+                feature_group=_optional_string(row["feature_group"]),
+            )
+        ),
+        axis=1,
+    )
+    return history[history["predicted_gap_bucket"].notna()].copy()
+
+
+def _select_predicted_bucket_quantile(
+    history: pd.DataFrame,
+    *,
+    checkpoint: str,
+    method: ChampionMethodConfig,
+    predicted_gap_bucket: str,
+    settings: PredictedGapBucketUncertaintyConfig,
+) -> tuple[str, str, pd.Series] | None:
+    method_key = _method_key(method)
+    for level in settings.fallback_order:
+        rows = _predicted_bucket_history_subset(
+            history,
+            level=level,
+            checkpoint=checkpoint,
+            method_key=method_key,
+            predicted_gap_bucket=predicted_gap_bucket,
+        )
+        if len(rows) >= settings.min_residual_count:
+            group = _calibration_group_label(
+                level=level,
+                checkpoint=checkpoint,
+                method_key=method_key,
+                predicted_gap_bucket=predicted_gap_bucket,
+            )
+            return level, group, rows["absolute_residual"].astype(float)
+    return None
+
+
+def _predicted_bucket_history_subset(
+    history: pd.DataFrame,
+    *,
+    level: str,
+    checkpoint: str,
+    method_key: str,
+    predicted_gap_bucket: str,
+) -> pd.DataFrame:
+    if level == "checkpoint_method_bucket":
+        return history[
+            history["checkpoint"].eq(checkpoint)
+            & history["_method_key"].eq(method_key)
+            & history["predicted_gap_bucket"].eq(predicted_gap_bucket)
+        ]
+    if level == "checkpoint_bucket":
+        return history[
+            history["checkpoint"].eq(checkpoint)
+            & history["predicted_gap_bucket"].eq(predicted_gap_bucket)
+        ]
+    if level == "checkpoint_method":
+        return history[history["checkpoint"].eq(checkpoint) & history["_method_key"].eq(method_key)]
+    if level == "checkpoint":
+        return history[history["checkpoint"].eq(checkpoint)]
+    if level == "global":
+        return history
+    return history.iloc[0:0]
+
+
+def _calibration_group_label(
+    *,
+    level: str,
+    checkpoint: str,
+    method_key: str,
+    predicted_gap_bucket: str,
+) -> str:
+    if level == "checkpoint_method_bucket":
+        return f"{checkpoint}|{method_key}|{predicted_gap_bucket}"
+    if level == "checkpoint_bucket":
+        return f"{checkpoint}|{predicted_gap_bucket}"
+    if level == "checkpoint_method":
+        return f"{checkpoint}|{method_key}"
+    if level == "checkpoint":
+        return checkpoint
+    return "global"
+
+
+def _method_key(method: ChampionMethodConfig) -> str:
+    return "|".join(
+        [
+            method.family,
+            method.model_name,
+            method.feature_group or "",
+        ]
+    )
+
+
+def _interval_metrics_by_predicted_gap_bucket(
+    rows: pd.DataFrame,
+) -> dict[str, dict[str, dict[str, float | int | None]]]:
+    required = {
+        "checkpoint",
+        "predicted_gap_bucket",
+        "prediction_interval_low_sec",
+        "prediction_interval_high_sec",
+        "interval_contains_actual",
+        "quali_gap_to_pole_sec",
+        "predicted_quali_gap_to_pole_sec",
+    }
+    if not required <= set(rows.columns):
+        return {}
+    result: dict[str, dict[str, dict[str, float | int | None]]] = {}
+    intervals = rows[
+        rows["predicted_gap_bucket"].notna()
+        & rows["prediction_interval_low_sec"].notna()
+        & rows["prediction_interval_high_sec"].notna()
+    ].copy()
+    if intervals.empty:
+        return result
+    intervals["_interval_width_sec"] = intervals["prediction_interval_high_sec"].astype(
+        float
+    ) - intervals["prediction_interval_low_sec"].astype(float)
+    intervals["_abs_error_gap_sec"] = (
+        intervals["predicted_quali_gap_to_pole_sec"].astype(float)
+        - intervals["quali_gap_to_pole_sec"].astype(float)
+    ).abs()
+    for (checkpoint, bucket), group in intervals.groupby(
+        ["checkpoint", "predicted_gap_bucket"],
+        dropna=False,
+        sort=True,
+    ):
+        contains = group["interval_contains_actual"].dropna()
+        coverage = float(contains.astype(bool).mean()) if not contains.empty else None
+        miss_count = int((~contains.astype(bool)).sum()) if not contains.empty else None
+        result.setdefault(str(checkpoint), {})[str(bucket)] = {
+            "rows_with_interval": int(len(group)),
+            "coverage": coverage,
+            "mean_interval_width_sec": float(group["_interval_width_sec"].mean()),
+            "median_interval_width_sec": float(group["_interval_width_sec"].median()),
+            "mean_abs_error_gap_sec": float(group["_abs_error_gap_sec"].mean()),
+            "miss_count": miss_count,
+        }
+    return result
 
 
 def _optional_string(value: object) -> str | None:
