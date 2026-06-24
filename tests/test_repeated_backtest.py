@@ -91,10 +91,10 @@ def test_fold_metadata_records_success_and_failure(monkeypatch, tmp_path: Path) 
 
     original = backtest_tabular.fit_and_predict
 
-    def sometimes_fail(train, test, *, model_config):
+    def sometimes_fail(train, test, *, model_config, sample_weights=None):
         if test["event_slug"].eq("event-2").all():
             raise RuntimeError("synthetic fold failure")
-        return original(train, test, model_config=model_config)
+        return original(train, test, model_config=model_config, sample_weights=sample_weights)
 
     monkeypatch.setattr(backtest_tabular, "fit_and_predict", sometimes_fail)
     summary = run_tabular_backtest(
@@ -151,6 +151,47 @@ def test_min_events_guard_writes_skipped_report(tmp_path: Path) -> None:
     assert summary.status == "skipped"
     assert metrics["status"] == "skipped"
     assert metrics["n_events"] == 3
+
+
+def test_weighted_backtest_artifacts_coexist_with_uniform_artifacts(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = tmp_path / "dataset.parquet"
+    dataset = pd.concat([_dataset(3), _dataset(3).assign(season=2025)], ignore_index=True)
+    dataset.to_parquet(dataset_path, index=False)
+
+    uniform = run_tabular_backtest(
+        config,
+        strategy=BacktestStrategy.walk_forward,
+        dataset_path=dataset_path,
+        min_events=5,
+        min_train_events=3,
+        model_config=_model_config(),
+        temporal_weighting="uniform",
+    )
+    weighted = run_tabular_backtest(
+        config,
+        strategy=BacktestStrategy.walk_forward,
+        dataset_path=dataset_path,
+        min_events=5,
+        min_train_events=3,
+        model_config=_model_config(),
+        temporal_weighting="season_priority",
+    )
+
+    assert uniform.metrics_path == weighted.metrics_path
+    assert (config.metrics_output_dir / "walk_forward_uniform_metrics.json").is_file()
+    assert (config.metrics_output_dir / "walk_forward_season_priority_metrics.json").is_file()
+    payload = json.loads(
+        (config.metrics_output_dir / "walk_forward_season_priority_metrics.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["temporal_weighting_policy"] == "season_priority"
+    assert payload["training_weight_summary_by_fold"]
+    predictions = pd.read_parquet(
+        config.metrics_output_dir / "walk_forward_season_priority_predictions.parquet"
+    )
+    assert set(predictions["temporal_weighting_policy"]) == {"season_priority"}
 
 
 def _predictions(

@@ -25,6 +25,14 @@ from f1_prediction.modeling.splits import (
     create_dataset_split,
     ordered_event_keys,
 )
+from f1_prediction.modeling.temporal_weighting import (
+    TemporalWeightingPolicy,
+    prepare_temporal_training_data,
+    supported_weighted_models,
+    temporal_artifact_stem,
+    temporal_weighting_config_payload,
+    unsupported_weighted_models,
+)
 from f1_prediction.modeling.train_tabular import (
     DEFAULT_MODEL_CONFIG,
     fit_and_predict,
@@ -131,6 +139,7 @@ def run_tabular_backtest(
     fail_fast: bool = False,
     model_config: ModelConfig | None = None,
     feature_config: FeatureConfig | None = None,
+    temporal_weighting: TemporalWeightingPolicy | str = TemporalWeightingPolicy.uniform,
 ) -> TabularBacktestSummary:
     """Train and evaluate tabular models plus baselines on repeated event folds."""
     strategy = BacktestStrategy(strategy)
@@ -141,11 +150,26 @@ def run_tabular_backtest(
     event_keys = ordered_event_keys(dataset)
     paths = _backtest_paths(config.metrics_output_dir, strategy)
     ensure_directory(config.metrics_output_dir)
+    settings = model_config or DEFAULT_MODEL_CONFIG
+    temporal_policy = TemporalWeightingPolicy(temporal_weighting)
     if len(event_keys) < min_events:
         reason = f"Dataset has {len(event_keys)} unique events; at least {min_events} are required"
         payload = _skipped_payload(strategy, len(event_keys), reason)
+        payload["temporal_weighting_policy"] = temporal_policy.value
+        payload["temporal_weighting_config"] = temporal_weighting_config_payload(
+            settings.temporal_weighting
+        )
         _write_json(paths["metrics"], payload)
-        _write_json(paths["folds"], {"status": "skipped", "strategy": strategy.value, "folds": []})
+        _write_json(
+            paths["folds"],
+            {
+                "status": "skipped",
+                "strategy": strategy.value,
+                "folds": [],
+                "temporal_weighting_policy": temporal_policy.value,
+            },
+        )
+        _write_temporal_snapshots(paths, temporal_policy, payload, predictions_path=None)
         paths["predictions"].unlink(missing_ok=True)
         return TabularBacktestSummary(
             status="skipped",
@@ -168,13 +192,13 @@ def run_tabular_backtest(
     )
     if not folds:
         raise ValueError("No evaluable folds were created for the requested strategy")
-    settings = model_config or DEFAULT_MODEL_CONFIG
     row_keys = _event_key_series(dataset)
     completed_folds: list[BacktestFold] = []
     tabular_frames: list[pd.DataFrame] = []
     baseline_frames: list[pd.DataFrame] = []
     historical_settings = _historical_settings(feature_config)
     robust_threshold = _robust_baseline_threshold(feature_config)
+    weight_summaries: list[dict[str, object]] = []
 
     for fold in folds:
         try:
@@ -189,13 +213,34 @@ def run_tabular_backtest(
             test = fold_scope[fold_keys.eq(fold.test_event)].copy()
             if train.empty or test.empty:
                 raise ValueError("Fold must contain both training and test rows")
-            tabular_predictions, _ = fit_and_predict(train, test, model_config=settings)
+            temporal_result = prepare_temporal_training_data(
+                train,
+                test_event=fold.test_event,
+                event_order=event_keys,
+                config=settings.temporal_weighting,
+                policy=temporal_policy,
+            )
+            if temporal_result.train.empty:
+                raise ValueError("Temporal weighting left no training rows")
+            fold_weight_summary = dict(temporal_result.summary)
+            fold_weight_summary["fold_id"] = fold.fold_id
+            weight_summaries.append(fold_weight_summary)
+            tabular_predictions, _ = fit_and_predict(
+                temporal_result.train,
+                test,
+                model_config=settings,
+                sample_weights=temporal_result.sample_weights,
+            )
             baseline_predictions = generate_baseline_predictions(
                 test,
                 robust_extreme_threshold_sec=robust_threshold,
             )
-            tabular_frames.append(_tag_tabular_predictions(tabular_predictions, fold))
-            baseline_frames.append(_tag_baseline_predictions(baseline_predictions, fold))
+            tabular_frames.append(
+                _tag_tabular_predictions(tabular_predictions, fold, temporal_policy)
+            )
+            baseline_frames.append(
+                _tag_baseline_predictions(baseline_predictions, fold, temporal_policy)
+            )
             completed_folds.append(_completed_fold(fold, "success", None))
         except Exception as exc:
             completed_folds.append(_completed_fold(fold, "failed", _concise_error(exc)))
@@ -217,6 +262,11 @@ def run_tabular_backtest(
             completed_folds,
             tabular_predictions,
             baseline_predictions,
+            temporal_weighting_policy=temporal_policy,
+            temporal_weighting_config=temporal_weighting_config_payload(
+                settings.temporal_weighting
+            ),
+            training_weight_summary_by_fold=weight_summaries,
         )
         status = "complete" if not failed else "partial"
         payload["status"] = status
@@ -226,19 +276,20 @@ def run_tabular_backtest(
         payload = _failed_payload(strategy, len(event_keys), completed_folds)
         paths["predictions"].unlink(missing_ok=True)
         predictions_path = None
+    folds_payload = {
+        "status": status,
+        "strategy": strategy.value,
+        "n_folds_total": len(completed_folds),
+        "n_folds_successful": len(successful),
+        "n_folds_failed": len(failed),
+        "folds": [asdict(fold) for fold in completed_folds],
+        "temporal_weighting_policy": temporal_policy.value,
+        "training_weight_summary_by_fold": weight_summaries,
+        "created_at_utc": _utc_now(),
+    }
     _write_json(paths["metrics"], payload)
-    _write_json(
-        paths["folds"],
-        {
-            "status": status,
-            "strategy": strategy.value,
-            "n_folds_total": len(completed_folds),
-            "n_folds_successful": len(successful),
-            "n_folds_failed": len(failed),
-            "folds": [asdict(fold) for fold in completed_folds],
-            "created_at_utc": _utc_now(),
-        },
-    )
+    _write_json(paths["folds"], folds_payload)
+    _write_temporal_snapshots(paths, temporal_policy, payload, predictions_path=predictions_path)
     return TabularBacktestSummary(
         status=status,
         strategy=strategy.value,
@@ -261,10 +312,14 @@ def build_backtest_metrics_payload(
     folds: list[BacktestFold],
     tabular_predictions: pd.DataFrame,
     baseline_predictions: pd.DataFrame,
+    temporal_weighting_policy: TemporalWeightingPolicy | str = TemporalWeightingPolicy.uniform,
+    temporal_weighting_config: dict[str, object] | None = None,
+    training_weight_summary_by_fold: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Aggregate global and fold-level metrics plus fold-consistent comparisons."""
     strategy = BacktestStrategy(strategy)
     tabular_global = metrics_by_model_checkpoint(tabular_predictions)
+    temporal_policy = TemporalWeightingPolicy(temporal_weighting_policy)
     tabular_fold = _fold_metrics(tabular_predictions, "model_name")
     baseline_global = compute_baseline_metrics(baseline_predictions)
     baseline_fold = _fold_metrics(baseline_predictions, "baseline_name")
@@ -298,6 +353,11 @@ def build_backtest_metrics_payload(
         "model_vs_best_baseline_delta_mae": mae_deltas,
         "model_vs_best_baseline_delta_position_error": position_deltas,
         "model_vs_best_baseline_delta_mae_by_fold": _fold_mae_deltas(tabular_fold, baseline_fold),
+        "temporal_weighting_policy": temporal_policy.value,
+        "temporal_weighting_config": temporal_weighting_config or {},
+        "weighted_models_supported": list(supported_weighted_models()),
+        "weighted_models_unsupported_if_any": list(unsupported_weighted_models()),
+        "training_weight_summary_by_fold": training_weight_summary_by_fold or [],
         "created_at_utc": _utc_now(),
     }
 
@@ -421,22 +481,34 @@ def _selected_event_keys(dataset: pd.DataFrame, requested: list[str]) -> list[st
     return selected
 
 
-def _tag_tabular_predictions(predictions: pd.DataFrame, fold: BacktestFold) -> pd.DataFrame:
+def _tag_tabular_predictions(
+    predictions: pd.DataFrame,
+    fold: BacktestFold,
+    temporal_policy: TemporalWeightingPolicy,
+) -> pd.DataFrame:
     frame = predictions.copy()
     frame["fold_id"] = fold.fold_id
     frame["strategy"] = fold.strategy
     frame["test_event"] = fold.test_event
     frame["prediction_type"] = "tabular"
+    frame["temporal_weighting_policy"] = temporal_policy.value
+    frame["model_training_weighted"] = temporal_policy is not TemporalWeightingPolicy.uniform
     return frame
 
 
-def _tag_baseline_predictions(predictions: pd.DataFrame, fold: BacktestFold) -> pd.DataFrame:
+def _tag_baseline_predictions(
+    predictions: pd.DataFrame,
+    fold: BacktestFold,
+    temporal_policy: TemporalWeightingPolicy,
+) -> pd.DataFrame:
     frame = predictions.copy()
     frame["model_name"] = frame["baseline_name"]
     frame["fold_id"] = fold.fold_id
     frame["strategy"] = fold.strategy
     frame["test_event"] = fold.test_event
     frame["prediction_type"] = "baseline"
+    frame["temporal_weighting_policy"] = temporal_policy.value
+    frame["model_training_weighted"] = False
     return frame
 
 
@@ -460,6 +532,35 @@ def _backtest_paths(metrics_dir: Path, strategy: BacktestStrategy) -> dict[str, 
         "predictions": metrics_dir / f"{prefix}_predictions.parquet",
         "folds": metrics_dir / f"{prefix}_folds.json",
     }
+
+
+def _write_temporal_snapshots(
+    paths: dict[str, Path],
+    policy: TemporalWeightingPolicy,
+    payload: dict[str, object],
+    *,
+    predictions_path: Path | None,
+) -> None:
+    metrics_stem = temporal_artifact_stem(
+        paths["metrics"].stem.removesuffix("_metrics"),
+        policy,
+    )
+    folds_stem = temporal_artifact_stem(
+        paths["folds"].stem.removesuffix("_folds"),
+        policy,
+    )
+    predictions_stem = temporal_artifact_stem(
+        paths["predictions"].stem.removesuffix("_predictions"),
+        policy,
+    )
+    metrics_snapshot = paths["metrics"].with_name(f"{metrics_stem}_metrics.json")
+    folds_snapshot = paths["folds"].with_name(f"{folds_stem}_folds.json")
+    predictions_snapshot = paths["predictions"].with_name(f"{predictions_stem}_predictions.parquet")
+    _write_json(metrics_snapshot, payload)
+    if paths["folds"].is_file():
+        folds_snapshot.write_bytes(paths["folds"].read_bytes())
+    if predictions_path is not None and predictions_path.is_file():
+        predictions_snapshot.write_bytes(predictions_path.read_bytes())
 
 
 def _event_key_series(dataset: pd.DataFrame) -> pd.Series:

@@ -176,22 +176,27 @@ def test_backtest_report_includes_champion_mode_and_interval_diagnostics() -> No
                 "stabilized_nested_guarded",
                 0.34,
             ),
+            "season_aware_nested_guarded": _champion_metrics(
+                "season_aware_nested_guarded",
+                0.33,
+            ),
         },
     )
 
     assert report["champion_selection_modes_available"] == [
         "nested",
+        "season_aware_nested_guarded",
         "stabilized_nested",
         "stabilized_nested_guarded",
         "static",
     ]
     assert (
         report["best_champion_selection_mode_by_checkpoint"]["after_fp1"]["selection_mode"]
-        == "stabilized_nested_guarded"
+        == "season_aware_nested_guarded"
     )
     assert (
         report["best_champion_selection_mode_overall"]["selection_mode"]
-        == "stabilized_nested_guarded"
+        == "season_aware_nested_guarded"
     )
     assert report["champion_interval_coverage_by_checkpoint"]["after_fp1"] == pytest.approx(0.9)
     assert report["champion_interval_width_by_checkpoint"]["after_fp1"][
@@ -200,6 +205,85 @@ def test_backtest_report_includes_champion_mode_and_interval_diagnostics() -> No
     assert report["champion_interval_metrics_by_predicted_gap_bucket"]["after_fp1"][
         "pole_contender"
     ]["coverage"] == pytest.approx(0.95)
+
+
+def test_backtest_report_includes_temporal_weighting_summary() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        temporal_weighting_summary={
+            "temporal_weighting_policies_available": {"tabular": ["uniform", "season_priority"]},
+            "best_temporal_weighting_policy_by_checkpoint": {
+                "after_fp3": {
+                    "temporal_weighting_policy": "season_priority",
+                    "mae_gap_sec": 0.9,
+                }
+            },
+            "temporal_weighting_vs_uniform_delta_by_checkpoint": {
+                "after_fp3": {"season_priority": -0.1}
+            },
+        },
+    )
+
+    assert report["temporal_weighting_policies_available"]["tabular"] == [
+        "uniform",
+        "season_priority",
+    ]
+    assert (
+        report["best_temporal_weighting_policy_by_checkpoint"]["after_fp3"][
+            "temporal_weighting_policy"
+        ]
+        == "season_priority"
+    )
+    assert report["temporal_weighting_vs_uniform_delta_by_checkpoint"]["after_fp3"][
+        "season_priority"
+    ] == pytest.approx(-0.1)
+
+
+def test_backtest_report_includes_season_aware_validation_summary() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        season_aware_validation_summary={
+            "season_aware_validation_available": True,
+            "season_aware_fp3_candidate_summary": {
+                "candidate_mae_gap_sec": 0.95,
+                "static_mae_gap_sec": 1.05,
+            },
+            "season_aware_best_fixed_candidate": {
+                "candidate_family": "ablation",
+                "candidate_model_name": "random_forest",
+            },
+            "season_aware_promotion_recommendation": "insufficient_evidence",
+        },
+    )
+
+    assert report["season_aware_validation_available"] is True
+    assert report["season_aware_fp3_candidate_summary"]["candidate_mae_gap_sec"] == 0.95
+    assert report["season_aware_promotion_recommendation"] == "insufficient_evidence"
+
+
+def test_backtest_report_includes_season_aware_champion_summary() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        season_aware_champion_summary={
+            "status": "complete",
+            "fp3_summary": {"delta_vs_static_sec": -0.05},
+            "bootstrap_ci": {"ci_low": -0.1, "ci_high": 0.02},
+            "promotion_recommendation": "season_aware_candidate_experimental",
+        },
+    )
+
+    assert report["season_aware_champion_available"] is True
+    assert report["season_aware_champion_fp3_summary"]["delta_vs_static_sec"] == -0.05
+    assert (
+        report["season_aware_champion_promotion_recommendation"]
+        == "season_aware_candidate_experimental"
+    )
 
 
 def _quality() -> dict[str, object]:

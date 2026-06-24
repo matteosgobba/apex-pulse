@@ -25,6 +25,13 @@ from f1_prediction.modeling.baselines import generate_baseline_predictions
 from f1_prediction.modeling.feature_groups import DEFAULT_ABLATION_GROUPS, get_feature_groups
 from f1_prediction.modeling.metrics import compute_baseline_metrics
 from f1_prediction.modeling.splits import ordered_event_keys
+from f1_prediction.modeling.temporal_weighting import (
+    TemporalWeightingPolicy,
+    prepare_temporal_training_data,
+    supported_weighted_models,
+    temporal_artifact_stem,
+    temporal_weighting_config_payload,
+)
 from f1_prediction.modeling.train_tabular import (
     DEFAULT_MODEL_CONFIG,
     fit_and_predict,
@@ -63,6 +70,7 @@ def run_ablation_backtest(
     fail_fast: bool = False,
     model_config: ModelConfig | None = None,
     feature_config: FeatureConfig | None = None,
+    temporal_weighting: TemporalWeightingPolicy | str = TemporalWeightingPolicy.uniform,
 ) -> AblationBacktestSummary:
     """Evaluate feature groups on one shared event-safe fold collection."""
     strategy = BacktestStrategy(strategy)
@@ -77,15 +85,29 @@ def run_ablation_backtest(
     selected_groups = {name: all_groups[name] for name in selected_names}
     paths = _output_paths(config.metrics_output_dir)
     ensure_directory(config.metrics_output_dir)
+    settings = model_config or DEFAULT_MODEL_CONFIG
+    temporal_policy = TemporalWeightingPolicy(temporal_weighting)
 
     if len(event_keys) < min_events:
         reason = f"Dataset has {len(event_keys)} unique events; at least {min_events} are required"
         payload = _skipped_payload(strategy, len(event_keys), selected_names, reason)
+        payload["temporal_weighting_policy"] = temporal_policy.value
+        payload["temporal_weighting_config"] = temporal_weighting_config_payload(
+            settings.temporal_weighting
+        )
         _write_json(paths["metrics"], payload)
         _write_json(
             paths["groups"],
-            _feature_group_payload(strategy, selected_groups, (), status="skipped"),
+            _feature_group_payload(
+                strategy,
+                selected_groups,
+                (),
+                status="skipped",
+                temporal_policy=temporal_policy,
+                weight_summaries=[],
+            ),
         )
+        _write_temporal_snapshots(paths, temporal_policy, payload, predictions_path=None)
         paths["predictions"].unlink(missing_ok=True)
         return AblationBacktestSummary(
             status="skipped",
@@ -109,13 +131,13 @@ def run_ablation_backtest(
     if not folds:
         raise ValueError("No evaluable folds were created for ablation backtesting")
 
-    settings = model_config or DEFAULT_MODEL_CONFIG
     historical_settings = _historical_settings(feature_config)
     robust_threshold = _robust_threshold(feature_config)
     row_keys = _event_key_series(dataset)
     predictions: list[pd.DataFrame] = []
     baseline_frames: list[pd.DataFrame] = []
     completed_folds: list[BacktestFold] = []
+    weight_summaries: list[dict[str, object]] = []
 
     for fold in folds:
         fold_predictions: list[pd.DataFrame] = []
@@ -129,18 +151,33 @@ def run_ablation_backtest(
             fold_keys = _event_key_series(fold_scope)
             train = fold_scope[fold_keys.isin(fold.train_events)].copy()
             test = fold_scope[fold_keys.eq(fold.test_event)].copy()
+            temporal_result = prepare_temporal_training_data(
+                train,
+                test_event=fold.test_event,
+                event_order=event_keys,
+                config=settings.temporal_weighting,
+                policy=temporal_policy,
+            )
+            if temporal_result.train.empty:
+                raise ValueError("Temporal weighting left no training rows")
+            fold_weight_summary = dict(temporal_result.summary)
+            fold_weight_summary["fold_id"] = fold.fold_id
+            weight_summaries.append(fold_weight_summary)
             for group_name, columns in selected_groups.items():
                 group_predictions, _ = fit_and_predict(
-                    train,
+                    temporal_result.train,
                     test,
                     model_config=settings,
                     candidate_features=columns,
+                    sample_weights=temporal_result.sample_weights,
                 )
                 group_predictions = group_predictions[
                     group_predictions["model_name"].isin(ABLATION_MODELS)
                 ].copy()
                 group_predictions["feature_group"] = group_name
-                fold_predictions.append(_tag_predictions(group_predictions, fold, "tabular"))
+                fold_predictions.append(
+                    _tag_predictions(group_predictions, fold, "tabular", temporal_policy)
+                )
             baseline = generate_baseline_predictions(
                 test,
                 robust_extreme_threshold_sec=robust_threshold,
@@ -148,7 +185,7 @@ def run_ablation_backtest(
             baseline["model_name"] = baseline["baseline_name"]
             baseline["feature_group"] = "baseline"
             predictions.extend(fold_predictions)
-            baseline_frames.append(_tag_predictions(baseline, fold, "baseline"))
+            baseline_frames.append(_tag_predictions(baseline, fold, "baseline", temporal_policy))
             completed_folds.append(_complete_fold(fold, "success", None))
         except Exception as exc:
             completed_folds.append(_complete_fold(fold, "failed", _concise_error(exc)))
@@ -171,6 +208,11 @@ def run_ablation_backtest(
             selected_names,
             tabular_predictions,
             baseline_predictions,
+            temporal_weighting_policy=temporal_policy,
+            temporal_weighting_config=temporal_weighting_config_payload(
+                settings.temporal_weighting
+            ),
+            training_weight_summary_by_fold=weight_summaries,
         )
         status = "complete" if not failed else "partial"
         payload["status"] = status
@@ -184,6 +226,11 @@ def run_ablation_backtest(
             "n_folds_successful": 0,
             "n_folds_failed": len(failed),
             "feature_groups": list(selected_names),
+            "temporal_weighting_policy": temporal_policy.value,
+            "temporal_weighting_config": temporal_weighting_config_payload(
+                settings.temporal_weighting
+            ),
+            "training_weight_summary_by_fold": weight_summaries,
             "created_at_utc": _utc_now(),
         }
         paths["predictions"].unlink(missing_ok=True)
@@ -191,8 +238,16 @@ def run_ablation_backtest(
     _write_json(paths["metrics"], payload)
     _write_json(
         paths["groups"],
-        _feature_group_payload(strategy, selected_groups, completed_folds, status=status),
+        _feature_group_payload(
+            strategy,
+            selected_groups,
+            completed_folds,
+            status=status,
+            temporal_policy=temporal_policy,
+            weight_summaries=weight_summaries,
+        ),
     )
+    _write_temporal_snapshots(paths, temporal_policy, payload, predictions_path=predictions_path)
     return AblationBacktestSummary(
         status=status,
         strategy=strategy.value,
@@ -217,9 +272,13 @@ def build_ablation_metrics_payload(
     feature_groups: tuple[str, ...],
     tabular_predictions: pd.DataFrame,
     baseline_predictions: pd.DataFrame,
+    temporal_weighting_policy: TemporalWeightingPolicy | str = TemporalWeightingPolicy.uniform,
+    temporal_weighting_config: dict[str, object] | None = None,
+    training_weight_summary_by_fold: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Build metrics and best-group comparisons from shared-fold predictions."""
     strategy = BacktestStrategy(strategy)
+    temporal_policy = TemporalWeightingPolicy(temporal_weighting_policy)
     grouped_metrics: dict[str, dict[str, Any]] = {}
     for group_name, rows in tabular_predictions.groupby("feature_group", sort=False):
         grouped_metrics[str(group_name)] = metrics_by_model_checkpoint(rows)
@@ -244,6 +303,11 @@ def build_ablation_metrics_payload(
         "best_overall_by_checkpoint": best_overall,
         "best_baseline_by_checkpoint": best_baselines,
         "model_vs_baseline_delta_mae": deltas,
+        "temporal_weighting_policy": temporal_policy.value,
+        "temporal_weighting_config": temporal_weighting_config or {},
+        "weighted_models_supported": list(supported_weighted_models()),
+        "weighted_models_unsupported_if_any": [],
+        "training_weight_summary_by_fold": training_weight_summary_by_fold or [],
         "created_at_utc": _utc_now(),
     }
 
@@ -334,13 +398,20 @@ def _all_deltas(
 
 
 def _tag_predictions(
-    predictions: pd.DataFrame, fold: BacktestFold, prediction_type: str
+    predictions: pd.DataFrame,
+    fold: BacktestFold,
+    prediction_type: str,
+    temporal_policy: TemporalWeightingPolicy,
 ) -> pd.DataFrame:
     frame = predictions.copy()
     frame["fold_id"] = fold.fold_id
     frame["strategy"] = fold.strategy
     frame["test_event"] = fold.test_event
     frame["prediction_type"] = prediction_type
+    frame["temporal_weighting_policy"] = temporal_policy.value
+    frame["model_training_weighted"] = (
+        prediction_type == "tabular" and temporal_policy is not TemporalWeightingPolicy.uniform
+    )
     return frame
 
 
@@ -363,15 +434,19 @@ def _feature_group_payload(
     folds: tuple[BacktestFold, ...] | list[BacktestFold],
     *,
     status: str,
+    temporal_policy: TemporalWeightingPolicy = TemporalWeightingPolicy.uniform,
+    weight_summaries: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
         "status": status,
         "strategy": strategy.value,
+        "temporal_weighting_policy": temporal_policy.value,
         "feature_groups": {
             name: {"n_features": len(columns), "columns": columns}
             for name, columns in groups.items()
         },
         "folds": [asdict(fold) for fold in folds],
+        "training_weight_summary_by_fold": weight_summaries or [],
         "created_at_utc": _utc_now(),
     }
 
@@ -427,6 +502,29 @@ def _output_paths(metrics_dir: Path) -> dict[str, Path]:
         "predictions": metrics_dir / "ablation_predictions.parquet",
         "groups": metrics_dir / "ablation_feature_groups.json",
     }
+
+
+def _write_temporal_snapshots(
+    paths: dict[str, Path],
+    policy: TemporalWeightingPolicy,
+    payload: dict[str, object],
+    *,
+    predictions_path: Path | None,
+) -> None:
+    metrics_snapshot = paths["metrics"].with_name(
+        f"{temporal_artifact_stem('ablation', policy)}_metrics.json"
+    )
+    predictions_snapshot = paths["predictions"].with_name(
+        f"{temporal_artifact_stem('ablation', policy)}_predictions.parquet"
+    )
+    groups_snapshot = paths["groups"].with_name(
+        f"{temporal_artifact_stem('ablation', policy)}_feature_groups.json"
+    )
+    _write_json(metrics_snapshot, payload)
+    if predictions_path is not None and predictions_path.is_file():
+        predictions_snapshot.write_bytes(predictions_path.read_bytes())
+    if paths["groups"].is_file():
+        groups_snapshot.write_bytes(paths["groups"].read_bytes())
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:

@@ -115,6 +115,18 @@ model:
       guarded_default_family: ablation
       guarded_default_model_name: random_forest
       guarded_default_feature_group: base_plus_relative
+    season_aware_nested_guarded:
+      base_mode: stabilized_nested_guarded
+      eligible_checkpoint: after_fp3
+      required_candidate:
+        family: ablation
+        model_name: random_forest
+        feature_group: base_plus_relative
+        temporal_weighting_policy: current_season_only_with_prior
+      min_current_season_prior_events: 5
+      min_prior_candidate_folds: 5
+      min_prior_candidate_predictions: 100
+      improvement_margin_sec: 0.05
     static:
       after_fp1:
         family: robust_baseline
@@ -144,6 +156,13 @@ model:
         - checkpoint_method_bucket
         - checkpoint
         - global
+  temporal_weighting:
+    policy: season_priority
+    current_season_weight: 1.2
+    previous_season_weight: 0.4
+    older_season_weight: 0.15
+    half_life_events: 8
+    min_current_season_events: 4
 """.strip(),
         encoding="utf-8",
     )
@@ -170,6 +189,20 @@ model:
     assert guarded.guarded_default_family == "ablation"
     assert guarded.guarded_default_model_name == "random_forest"
     assert guarded.guarded_default_feature_group == "base_plus_relative"
+    season_aware = config.champion_policy.season_aware_nested_guarded
+    assert season_aware.base_mode == "stabilized_nested_guarded"
+    assert season_aware.eligible_checkpoint == "after_fp3"
+    assert season_aware.required_candidate.family == "ablation"
+    assert season_aware.required_candidate.model_name == "random_forest"
+    assert season_aware.required_candidate.feature_group == "base_plus_relative"
+    assert (
+        season_aware.required_candidate.temporal_weighting_policy
+        == "current_season_only_with_prior"
+    )
+    assert season_aware.min_current_season_prior_events == 5
+    assert season_aware.min_prior_candidate_folds == 5
+    assert season_aware.min_prior_candidate_predictions == 100
+    assert season_aware.improvement_margin_sec == 0.05
     assert config.uncertainty.interval_z == 1.5
     assert config.uncertainty.confidence_level == 0.85
     assert config.uncertainty.min_residual_count == 12
@@ -194,3 +227,9 @@ model:
         "checkpoint",
         "global",
     )
+    assert config.temporal_weighting.policy == "season_priority"
+    assert config.temporal_weighting.current_season_weight == 1.2
+    assert config.temporal_weighting.previous_season_weight == 0.4
+    assert config.temporal_weighting.older_season_weight == 0.15
+    assert config.temporal_weighting.half_life_events == 8
+    assert config.temporal_weighting.min_current_season_events == 4

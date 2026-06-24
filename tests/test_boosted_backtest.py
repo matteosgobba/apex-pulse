@@ -15,6 +15,7 @@ from f1_prediction.config import (
 from f1_prediction.modeling.backtest_tabular import BacktestStrategy, build_backtest_folds
 from f1_prediction.modeling.boosted_backtest import (
     build_boosted_metrics_payload,
+    fit_and_predict_boosted,
     get_checkpoint_feature_columns,
     resolve_feature_groups_by_checkpoint,
     run_boosted_backtest,
@@ -151,6 +152,43 @@ def test_boosted_backtest_skips_when_dataset_is_too_small(tmp_path: Path) -> Non
     assert summary.status == "skipped"
     assert metrics["status"] == "skipped"
     assert metrics["n_events"] == 3
+
+
+def test_hist_gradient_boosting_receives_sample_weights(monkeypatch) -> None:
+    captured: list[pd.Series] = []
+
+    class FakeEstimator:
+        def fit(self, _x, _y, *, sample_weight=None):
+            captured.append(sample_weight)
+            return self
+
+        def predict(self, x):
+            return [0.0] * len(x)
+
+    monkeypatch.setattr(
+        "f1_prediction.modeling.boosted_backtest.build_hist_gradient_boosting_regressor",
+        lambda config: FakeEstimator(),
+    )
+    dataset = _dataset(2)
+    train = dataset[dataset["event_slug"].eq("event-1")]
+    test = dataset[dataset["event_slug"].eq("event-2")]
+    weights = pd.Series(0.4, index=train.index)
+
+    fit_and_predict_boosted(
+        train,
+        test,
+        model_config=_model_config(),
+        feature_groups_by_checkpoint={
+            "after_fp1": "base_lap_features",
+            "after_fp2": "base_plus_quality",
+            "after_fp3": "base_plus_relative",
+        },
+        feature_policy="checkpoint_best",
+        sample_weights=weights,
+    )
+
+    assert captured
+    assert all(series.eq(0.4).all() for series in captured)
 
 
 def _predictions(

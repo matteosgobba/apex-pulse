@@ -15,6 +15,7 @@ from f1_prediction.config import (
     DataConfig,
     ModelConfig,
     PredictedGapBucketUncertaintyConfig,
+    SeasonAwareNestedGuardedChampionConfig,
     StabilizedNestedChampionConfig,
     StabilizedNestedGuardedChampionConfig,
     UncertaintyConfig,
@@ -27,6 +28,7 @@ from f1_prediction.modeling.backtest_tabular import (
 )
 from f1_prediction.modeling.metrics import compute_prediction_metrics
 from f1_prediction.modeling.splits import ordered_event_keys
+from f1_prediction.modeling.temporal_weighting import temporal_artifact_stem
 from f1_prediction.utils.paths import ensure_directory
 
 CHECKPOINTS: tuple[str, ...] = ("after_fp1", "after_fp2", "after_fp3")
@@ -51,6 +53,7 @@ class ChampionSelectionMode(str, Enum):
     nested = "nested"
     stabilized_nested = "stabilized_nested"
     stabilized_nested_guarded = "stabilized_nested_guarded"
+    season_aware_nested_guarded = "season_aware_nested_guarded"
 
 
 class ChampionUncertaintyMethod(str, Enum):
@@ -103,6 +106,25 @@ class ChampionGuardrailDecision:
     guardrail_reason: str | None
 
 
+@dataclass(frozen=True)
+class SeasonAwareChampionDecision:
+    """Selected FP3 method after the season-aware weighted-candidate gate."""
+
+    selected: ChampionMethodConfig
+    season_aware_candidate_available: bool
+    season_aware_candidate_eligible: bool
+    current_season_prior_event_count: int
+    prior_candidate_folds: int
+    prior_candidate_predictions: int
+    candidate_metric_value: float | None
+    default_metric_value: float | None
+    selected_candidate: bool
+    selection_reason: str
+    fallback_used: bool
+    fallback_reason: str | None
+    source_events: list[str]
+
+
 def resolve_static_champion_policy(
     model_config: ModelConfig,
 ) -> dict[str, ChampionMethodConfig]:
@@ -117,22 +139,35 @@ def resolve_static_champion_policy(
 def load_champion_candidates(
     metrics_dir: Path,
     expected_folds: tuple[BacktestFold, ...],
+    *,
+    include_temporal_weighted: bool = False,
 ) -> pd.DataFrame:
     """Load and standardize available out-of-sample prediction families."""
     expected_by_event = {fold.test_event: fold.fold_id for fold in expected_folds}
-    artifacts = (
-        ("walk_forward", metrics_dir / "walk_forward_predictions.parquet"),
-        ("ablation", metrics_dir / "ablation_predictions.parquet"),
-        ("boosted", metrics_dir / "boosted_predictions.parquet"),
-    )
+    artifacts = [
+        ("walk_forward", metrics_dir / "walk_forward_predictions.parquet", "uniform"),
+        ("ablation", metrics_dir / "ablation_predictions.parquet", "uniform"),
+        ("boosted", metrics_dir / "boosted_predictions.parquet", "uniform"),
+    ]
+    if include_temporal_weighted:
+        artifacts.append(
+            (
+                "ablation",
+                metrics_dir
+                / f"{temporal_artifact_stem('ablation', 'current_season_only_with_prior')}"
+                "_predictions.parquet",
+                "current_season_only_with_prior",
+            )
+        )
     frames: list[pd.DataFrame] = []
-    for source, path in artifacts:
+    for source, path, temporal_policy in artifacts:
         if not path.is_file():
             continue
         frame = pd.read_parquet(path)
         frame = _candidate_rows_for_source(frame, source)
         if frame.empty:
             continue
+        frame["temporal_weighting_policy"] = temporal_policy
         frame = frame[frame["test_event"].isin(expected_by_event)].copy()
         frame["fold_id"] = frame["test_event"].map(expected_by_event).astype("int64")
         frames.append(frame)
@@ -153,14 +188,18 @@ def load_champion_candidates(
         "predicted_quali_position",
         "predicted_reached_q3",
         *METHOD_COLUMNS,
+        "temporal_weighting_policy",
     }
     missing = sorted(required - set(candidates.columns))
     if missing:
         raise ValueError(f"Candidate predictions are missing columns: {', '.join(missing)}")
     candidates["feature_group"] = candidates["feature_group"].astype("string")
-    return candidates.drop_duplicates([*PREDICTION_KEY_COLUMNS, *METHOD_COLUMNS]).reset_index(
-        drop=True
+    candidates["temporal_weighting_policy"] = candidates["temporal_weighting_policy"].fillna(
+        "uniform"
     )
+    return candidates.drop_duplicates(
+        [*PREDICTION_KEY_COLUMNS, *METHOD_COLUMNS, "temporal_weighting_policy"]
+    ).reset_index(drop=True)
 
 
 def select_nested_method(
@@ -355,6 +394,149 @@ def apply_stabilized_nested_guardrail(
     )
 
 
+def select_season_aware_guarded_method(
+    candidates: pd.DataFrame,
+    *,
+    fold: BacktestFold,
+    checkpoint: str,
+    default_method: ChampionMethodConfig,
+    settings: SeasonAwareNestedGuardedChampionConfig,
+) -> SeasonAwareChampionDecision:
+    """Gate the opt-in season-aware FP3 RF candidate using only prior folds."""
+    prior_same_season_events = _current_season_prior_event_count(fold)
+    if checkpoint != settings.eligible_checkpoint:
+        return _season_aware_decision(
+            selected=default_method,
+            current_season_prior_event_count=prior_same_season_events,
+            reason="not_applicable_checkpoint",
+        )
+
+    candidate = settings.required_candidate
+    current_rows = _method_rows(
+        candidates[candidates["fold_id"].eq(fold.fold_id)],
+        candidate,
+        checkpoint,
+    )
+    candidate_available = not current_rows.empty
+    if not candidate_available:
+        return _season_aware_decision(
+            selected=default_method,
+            current_season_prior_event_count=prior_same_season_events,
+            candidate_available=False,
+            reason="weighted_candidate_missing",
+            fallback_reason="weighted_candidate_missing",
+        )
+    if prior_same_season_events < settings.min_current_season_prior_events:
+        return _season_aware_decision(
+            selected=default_method,
+            current_season_prior_event_count=prior_same_season_events,
+            candidate_available=True,
+            reason="cold_start",
+            fallback_reason="season_aware_cold_start",
+        )
+
+    prior = candidates[candidates["fold_id"].lt(fold.fold_id)].copy()
+    candidate_history = _method_rows(prior, candidate, checkpoint).dropna(
+        subset=["quali_gap_to_pole_sec", "predicted_quali_gap_to_pole_sec"]
+    )
+    candidate_folds = (
+        int(candidate_history["fold_id"].nunique()) if not candidate_history.empty else 0
+    )
+    candidate_predictions = int(len(candidate_history))
+    if (
+        candidate_folds < settings.min_prior_candidate_folds
+        or candidate_predictions < settings.min_prior_candidate_predictions
+    ):
+        return _season_aware_decision(
+            selected=default_method,
+            current_season_prior_event_count=prior_same_season_events,
+            candidate_available=True,
+            prior_candidate_folds=candidate_folds,
+            prior_candidate_predictions=candidate_predictions,
+            reason="insufficient_candidate_history",
+            fallback_reason="insufficient_candidate_history",
+        )
+
+    default_history = _method_rows(prior, default_method, checkpoint).dropna(
+        subset=["quali_gap_to_pole_sec", "predicted_quali_gap_to_pole_sec"]
+    )
+    if default_history.empty:
+        return _season_aware_decision(
+            selected=default_method,
+            current_season_prior_event_count=prior_same_season_events,
+            candidate_available=True,
+            prior_candidate_folds=candidate_folds,
+            prior_candidate_predictions=candidate_predictions,
+            reason="default_retained",
+            fallback_reason="insufficient_default_history",
+        )
+
+    candidate_metric = _mean_absolute_error(candidate_history)
+    default_metric = _mean_absolute_error(default_history)
+    if candidate_metric <= default_metric - settings.improvement_margin_sec:
+        return _season_aware_decision(
+            selected=candidate,
+            current_season_prior_event_count=prior_same_season_events,
+            candidate_available=True,
+            candidate_eligible=True,
+            prior_candidate_folds=candidate_folds,
+            prior_candidate_predictions=candidate_predictions,
+            candidate_metric_value=candidate_metric,
+            default_metric_value=default_metric,
+            selected_candidate=True,
+            reason="selected_after_prior_evidence",
+            fallback_used=False,
+            source_events=sorted(
+                candidate_history["test_event"].dropna().astype(str).unique().tolist()
+            ),
+        )
+    return _season_aware_decision(
+        selected=default_method,
+        current_season_prior_event_count=prior_same_season_events,
+        candidate_available=True,
+        candidate_eligible=True,
+        prior_candidate_folds=candidate_folds,
+        prior_candidate_predictions=candidate_predictions,
+        candidate_metric_value=candidate_metric,
+        default_metric_value=default_metric,
+        reason="margin_not_met",
+        fallback_reason="margin_not_met",
+    )
+
+
+def _season_aware_decision(
+    *,
+    selected: ChampionMethodConfig,
+    current_season_prior_event_count: int,
+    reason: str,
+    candidate_available: bool = True,
+    candidate_eligible: bool = False,
+    prior_candidate_folds: int = 0,
+    prior_candidate_predictions: int = 0,
+    candidate_metric_value: float | None = None,
+    default_metric_value: float | None = None,
+    selected_candidate: bool = False,
+    fallback_used: bool = True,
+    fallback_reason: str | None = None,
+    source_events: list[str] | None = None,
+) -> SeasonAwareChampionDecision:
+    return SeasonAwareChampionDecision(
+        selected=selected,
+        season_aware_candidate_available=candidate_available,
+        season_aware_candidate_eligible=candidate_eligible,
+        current_season_prior_event_count=current_season_prior_event_count,
+        prior_candidate_folds=prior_candidate_folds,
+        prior_candidate_predictions=prior_candidate_predictions,
+        candidate_metric_value=candidate_metric_value,
+        default_metric_value=default_metric_value,
+        selected_candidate=selected_candidate,
+        selection_reason=reason,
+        fallback_used=fallback_used,
+        fallback_reason=fallback_reason,
+        source_events=source_events or [],
+    )
+
+
 def is_practice_baseline_method(method: ChampionMethodConfig) -> bool:
     """Return whether a candidate identity represents a practice-lap baseline."""
     family = method.family.lower()
@@ -419,14 +601,21 @@ def add_prior_residual_uncertainty(
         "selected_model_name",
         "selected_feature_group",
     ]
+    if "selected_temporal_weighting_policy" in result.columns:
+        group_columns.append("selected_temporal_weighting_policy")
     for keys, rows in result.groupby(group_columns, dropna=False, sort=True):
-        fold_id, checkpoint, family, model_name, feature_group = keys
+        if len(group_columns) == 6:
+            fold_id, checkpoint, family, model_name, feature_group, temporal_policy = keys
+        else:
+            fold_id, checkpoint, family, model_name, feature_group = keys
+            temporal_policy = "uniform"
         history = _method_rows(
             candidates[candidates["fold_id"].lt(int(fold_id))],
             ChampionMethodConfig(
                 family=str(family),
                 model_name=str(model_name),
                 feature_group=_optional_string(feature_group),
+                temporal_weighting_policy=_optional_string(temporal_policy),
             ),
             str(checkpoint),
         ).dropna(subset=["quali_gap_to_pole_sec", "predicted_quali_gap_to_pole_sec"])
@@ -500,6 +689,9 @@ def add_predicted_gap_bucket_conformal_uncertainty(
             family=str(row["selected_family"]),
             model_name=str(row["selected_model_name"]),
             feature_group=_optional_string(row["selected_feature_group"]),
+            temporal_weighting_policy=_optional_string(
+                row.get("selected_temporal_weighting_policy", "uniform")
+            ),
         )
         selected = _select_predicted_bucket_quantile(
             prior,
@@ -582,7 +774,15 @@ def run_champion_backtest(
         strategy,
         min_train_events=min_train_events,
     )
-    candidates = load_champion_candidates(config.metrics_output_dir, folds)
+    include_temporal_weighted = selection_mode is ChampionSelectionMode.season_aware_nested_guarded
+    candidates = load_champion_candidates(
+        config.metrics_output_dir,
+        folds,
+        include_temporal_weighted=include_temporal_weighted,
+    )
+    base_candidates = candidates[
+        candidates.get("temporal_weighting_policy", "uniform").fillna("uniform").eq("uniform")
+    ].copy()
     static_policy = resolve_static_champion_policy(model_config)
     prediction_frames: list[pd.DataFrame] = []
     selection_records: list[dict[str, object]] = []
@@ -597,6 +797,11 @@ def run_champion_backtest(
                 prior_folds_used = 0
                 prior_predictions_used = 0
                 fallback_reason = None
+                season_aware_metadata = _default_season_aware_metadata(
+                    fold=fold,
+                    checkpoint=checkpoint,
+                    settings=model_config.champion_policy.season_aware_nested_guarded,
+                )
                 if selection_mode is ChampionSelectionMode.static:
                     selected = fallback
                     selection_value = None
@@ -605,25 +810,36 @@ def run_champion_backtest(
                 elif selection_mode in {
                     ChampionSelectionMode.stabilized_nested,
                     ChampionSelectionMode.stabilized_nested_guarded,
+                    ChampionSelectionMode.season_aware_nested_guarded,
                 }:
-                    decision = select_stabilized_nested_method(
-                        candidates,
-                        fold_id=fold.fold_id,
-                        checkpoint=checkpoint,
-                        fallback=fallback,
-                        settings=model_config.champion_policy.stabilized_nested,
-                    )
-                    selected = decision.selected
-                    selection_value = decision.selected_metric_value
-                    default_metric_value = decision.default_metric_value
-                    source_events = decision.source_events
-                    prior_folds_used = decision.prior_folds_used
-                    prior_predictions_used = decision.prior_predictions_used
-                    fallback_used = decision.fallback_used
-                    fallback_reason = decision.fallback_reason
+                    season_aware_settings = model_config.champion_policy.season_aware_nested_guarded
+                    if (
+                        selection_mode is ChampionSelectionMode.season_aware_nested_guarded
+                        and checkpoint != season_aware_settings.eligible_checkpoint
+                    ):
+                        selected = fallback
+                        selection_value = None
+                        source_events = []
+                        fallback_used = False
+                    else:
+                        decision = select_stabilized_nested_method(
+                            base_candidates,
+                            fold_id=fold.fold_id,
+                            checkpoint=checkpoint,
+                            fallback=fallback,
+                            settings=model_config.champion_policy.stabilized_nested,
+                        )
+                        selected = decision.selected
+                        selection_value = decision.selected_metric_value
+                        default_metric_value = decision.default_metric_value
+                        source_events = decision.source_events
+                        prior_folds_used = decision.prior_folds_used
+                        prior_predictions_used = decision.prior_predictions_used
+                        fallback_used = decision.fallback_used
+                        fallback_reason = decision.fallback_reason
                 else:
                     selected, selection_value, source_events, fallback_used = select_nested_method(
-                        candidates,
+                        base_candidates,
                         fold_id=fold.fold_id,
                         checkpoint=checkpoint,
                         fallback=fallback,
@@ -636,7 +852,10 @@ def run_champion_backtest(
                     guardrail_name=None,
                     guardrail_reason=None,
                 )
-                if selection_mode is ChampionSelectionMode.stabilized_nested_guarded:
+                if selection_mode in {
+                    ChampionSelectionMode.stabilized_nested_guarded,
+                    ChampionSelectionMode.season_aware_nested_guarded,
+                }:
                     guardrail_decision = apply_stabilized_nested_guardrail(
                         selected=selected,
                         fallback=fallback,
@@ -644,6 +863,28 @@ def run_champion_backtest(
                         settings=model_config.champion_policy.stabilized_nested_guarded,
                     )
                     selected = guardrail_decision.selected
+                post_guardrail_selected = selected
+                if selection_mode is ChampionSelectionMode.season_aware_nested_guarded:
+                    season_decision = select_season_aware_guarded_method(
+                        candidates,
+                        fold=fold,
+                        checkpoint=checkpoint,
+                        default_method=selected,
+                        settings=model_config.champion_policy.season_aware_nested_guarded,
+                    )
+                    selected = season_decision.selected
+                    season_aware_metadata = _season_aware_metadata(
+                        season_decision,
+                        model_config.champion_policy.season_aware_nested_guarded,
+                    )
+                    if checkpoint == (
+                        model_config.champion_policy.season_aware_nested_guarded.eligible_checkpoint
+                    ):
+                        selection_value = season_decision.candidate_metric_value
+                        default_metric_value = season_decision.default_metric_value
+                        source_events = season_decision.source_events
+                        fallback_used = season_decision.fallback_used
+                        fallback_reason = season_decision.fallback_reason
                 rows = _method_rows(
                     candidates[candidates["fold_id"].eq(fold.fold_id)],
                     selected,
@@ -664,6 +905,9 @@ def run_champion_backtest(
                         "selected_family": selected.family,
                         "selected_model_name": selected.model_name,
                         "selected_feature_group": selected.feature_group,
+                        "selected_temporal_weighting_policy": (
+                            selected.temporal_weighting_policy or "uniform"
+                        ),
                         "default_family": fallback.family,
                         "default_model_name": fallback.model_name,
                         "default_feature_group": fallback.feature_group,
@@ -697,9 +941,12 @@ def run_champion_backtest(
                         "pre_guardrail_selected_feature_group": (
                             guardrail_decision.pre_guardrail_selected.feature_group
                         ),
-                        "post_guardrail_selected_family": selected.family,
-                        "post_guardrail_selected_model_name": selected.model_name,
-                        "post_guardrail_selected_feature_group": selected.feature_group,
+                        "post_guardrail_selected_family": post_guardrail_selected.family,
+                        "post_guardrail_selected_model_name": post_guardrail_selected.model_name,
+                        "post_guardrail_selected_feature_group": (
+                            post_guardrail_selected.feature_group
+                        ),
+                        **season_aware_metadata,
                     }
                 )
             prediction_frames.extend(fold_frames)
@@ -871,12 +1118,16 @@ def _method_rows(
 ) -> pd.DataFrame:
     feature_group = candidates["feature_group"].fillna("")
     expected_group = method.feature_group or ""
-    return candidates[
+    rows = candidates[
         candidates["checkpoint"].eq(checkpoint)
         & candidates["candidate_family"].eq(method.family)
         & candidates["model_name"].eq(method.model_name)
         & feature_group.eq(expected_group)
     ].copy()
+    if "temporal_weighting_policy" in rows.columns:
+        expected_policy = method.temporal_weighting_policy or "uniform"
+        rows = rows[rows["temporal_weighting_policy"].fillna("uniform").eq(expected_policy)]
+    return rows
 
 
 def _matches_guarded_default(
@@ -895,6 +1146,8 @@ def _same_method(first: ChampionMethodConfig, second: ChampionMethodConfig) -> b
         first.family == second.family
         and first.model_name == second.model_name
         and (first.feature_group or "") == (second.feature_group or "")
+        and (first.temporal_weighting_policy or "uniform")
+        == (second.temporal_weighting_policy or "uniform")
     )
 
 
@@ -924,6 +1177,8 @@ def _champion_prediction_rows(
     result["selected_family"] = method.family
     result["selected_model_name"] = method.model_name
     result["selected_feature_group"] = method.feature_group
+    result["selected_temporal_weighting_policy"] = method.temporal_weighting_policy or "uniform"
+    result["temporal_weighting_policy"] = method.temporal_weighting_policy or "uniform"
     return result
 
 
@@ -947,7 +1202,10 @@ def _best_candidate_by_checkpoint(
             )
         )
         choices: list[tuple[ChampionMethodConfig, dict[str, float | None]]] = []
-        for keys, rows in checkpoint_rows.groupby(list(METHOD_COLUMNS), dropna=False, sort=False):
+        group_columns = list(METHOD_COLUMNS)
+        if "temporal_weighting_policy" in checkpoint_rows.columns:
+            group_columns.append("temporal_weighting_policy")
+        for keys, rows in checkpoint_rows.groupby(group_columns, dropna=False, sort=False):
             method_keys = set(
                 map(
                     tuple,
@@ -963,13 +1221,18 @@ def _best_candidate_by_checkpoint(
                 on=list(PREDICTION_KEY_COLUMNS),
                 how="inner",
             )
-            family, model_name, feature_group = keys
+            if len(group_columns) == 4:
+                family, model_name, feature_group, temporal_policy = keys
+            else:
+                family, model_name, feature_group = keys
+                temporal_policy = "uniform"
             choices.append(
                 (
                     ChampionMethodConfig(
                         family=str(family),
                         model_name=str(model_name),
                         feature_group=_optional_string(feature_group),
+                        temporal_weighting_policy=_optional_string(temporal_policy),
                     ),
                     compute_prediction_metrics(rows),
                 )
@@ -984,6 +1247,7 @@ def _best_candidate_by_checkpoint(
                 "family": method.family,
                 "model_name": method.model_name,
                 "feature_group": method.feature_group,
+                "temporal_weighting_policy": method.temporal_weighting_policy or "uniform",
                 "mae_gap_sec": metrics.get("mae_gap_sec"),
                 "mean_abs_position_error": metrics.get("mean_abs_position_error"),
             }
@@ -1005,6 +1269,61 @@ def _fallback_decision(
         prior_predictions_used=prior_predictions_used,
         fallback_used=True,
         fallback_reason=reason,
+    )
+
+
+def _default_season_aware_metadata(
+    *,
+    fold: BacktestFold,
+    checkpoint: str,
+    settings: SeasonAwareNestedGuardedChampionConfig,
+) -> dict[str, object]:
+    reason = (
+        "default_retained"
+        if checkpoint == settings.eligible_checkpoint
+        else "not_applicable_checkpoint"
+    )
+    return _season_aware_metadata(
+        _season_aware_decision(
+            selected=settings.required_candidate,
+            current_season_prior_event_count=_current_season_prior_event_count(fold),
+            candidate_available=False,
+            reason=reason,
+        ),
+        settings,
+    )
+
+
+def _season_aware_metadata(
+    decision: SeasonAwareChampionDecision,
+    settings: SeasonAwareNestedGuardedChampionConfig,
+) -> dict[str, object]:
+    return {
+        "current_season_prior_event_count": decision.current_season_prior_event_count,
+        "season_aware_candidate_available": decision.season_aware_candidate_available,
+        "season_aware_candidate_eligible": decision.season_aware_candidate_eligible,
+        "season_aware_candidate_prior_folds": decision.prior_candidate_folds,
+        "season_aware_candidate_prior_predictions": decision.prior_candidate_predictions,
+        "season_aware_candidate_metric_value": decision.candidate_metric_value,
+        "season_aware_default_metric_value": decision.default_metric_value,
+        "season_aware_improvement_margin_sec": settings.improvement_margin_sec,
+        "season_aware_selected": decision.selected_candidate,
+        "season_aware_selection_reason": decision.selection_reason,
+        "temporal_weighting_policy": decision.selected.temporal_weighting_policy or "uniform",
+        "temporal_weighting_config_summary": _temporal_weighting_config_summary(settings),
+    }
+
+
+def _temporal_weighting_config_summary(
+    settings: SeasonAwareNestedGuardedChampionConfig,
+) -> str:
+    candidate = settings.required_candidate
+    return (
+        f"{candidate.temporal_weighting_policy or 'uniform'};"
+        f"min_current_season_prior_events={settings.min_current_season_prior_events};"
+        f"min_prior_candidate_folds={settings.min_prior_candidate_folds};"
+        f"min_prior_candidate_predictions={settings.min_prior_candidate_predictions};"
+        f"improvement_margin_sec={settings.improvement_margin_sec}"
     )
 
 
@@ -1078,6 +1397,9 @@ def _candidate_residual_history(
                 family=str(row["candidate_family"]),
                 model_name=str(row["model_name"]),
                 feature_group=_optional_string(row["feature_group"]),
+                temporal_weighting_policy=_optional_string(
+                    row.get("temporal_weighting_policy", "uniform")
+                ),
             )
         ),
         axis=1,
@@ -1165,6 +1487,7 @@ def _method_key(method: ChampionMethodConfig) -> str:
             method.family,
             method.model_name,
             method.feature_group or "",
+            method.temporal_weighting_policy or "uniform",
         ]
     )
 
@@ -1290,6 +1613,22 @@ def _delta(first: object, second: object) -> float | None:
     if first is None or second is None:
         return None
     return float(first) - float(second)
+
+
+def _mean_absolute_error(rows: pd.DataFrame) -> float:
+    return float(
+        (
+            rows["predicted_quali_gap_to_pole_sec"].astype(float)
+            - rows["quali_gap_to_pole_sec"].astype(float)
+        )
+        .abs()
+        .mean()
+    )
+
+
+def _current_season_prior_event_count(fold: BacktestFold) -> int:
+    test_season = str(fold.test_event).split("/", maxsplit=1)[0]
+    return sum(1 for event_key in fold.train_events if str(event_key).startswith(f"{test_season}/"))
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:

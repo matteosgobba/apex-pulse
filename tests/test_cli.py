@@ -8,11 +8,16 @@ from f1_prediction.data.ingest import EventIngestionSummary
 from f1_prediction.data.season_builder import SeasonDatasetBuildSummary
 from f1_prediction.features.build import SessionFeatureBuildSummary
 from f1_prediction.features.modeling_dataset import ModelingDatasetBuildSummary
+from f1_prediction.modeling.ablation import AblationBacktestSummary
+from f1_prediction.modeling.backtest_tabular import TabularBacktestSummary
+from f1_prediction.modeling.boosted_backtest import BoostedBacktestSummary
 from f1_prediction.modeling.champion_diagnostics import ChampionDiagnosticsSummary
 from f1_prediction.modeling.champion_policy import ChampionBacktestSummary
 from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
 from f1_prediction.modeling.policy_simulation import PolicySimulationSummary
 from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
+from f1_prediction.modeling.season_aware_validation import SeasonAwareValidationSummary
+from f1_prediction.modeling.temporal_weighting_report import TemporalWeightingReportSummary
 
 
 def test_ingest_event_accepts_sessions_after_single_option(monkeypatch, tmp_path: Path) -> None:
@@ -427,6 +432,49 @@ def test_champion_backtest_accepts_stabilized_nested_guarded(
     assert "Selection mode: stabilized_nested_guarded" in result.output
 
 
+def test_champion_backtest_accepts_season_aware_nested_guarded(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: object())
+
+    def fake_champion_backtest(*args, **kwargs):
+        captured.update(kwargs)
+        return ChampionBacktestSummary(
+            status="complete",
+            strategy="walk_forward",
+            selection_mode=str(kwargs["selection_mode"].value),
+            n_events=10,
+            n_folds_total=5,
+            n_folds_successful=5,
+            n_folds_failed=0,
+            prediction_rows=300,
+            metrics_path=tmp_path / "metrics/champion_metrics.json",
+            predictions_path=tmp_path / "metrics/champion_predictions.parquet",
+            selection_path=tmp_path / "metrics/champion_selection.parquet",
+        )
+
+    monkeypatch.setattr("f1_prediction.cli.run_champion_backtest", fake_champion_backtest)
+    result = CliRunner().invoke(
+        app,
+        [
+            "champion-backtest",
+            "--selection-mode",
+            "season_aware_nested_guarded",
+            "--uncertainty",
+            "conformal_predicted_gap_bucket",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["selection_mode"].value == "season_aware_nested_guarded"
+    assert captured["uncertainty_method"].value == "conformal_predicted_gap_bucket"
+    assert "Selection mode: season_aware_nested_guarded" in result.output
+
+
 def test_champion_backtest_accepts_predicted_gap_bucket_uncertainty(
     monkeypatch,
     tmp_path: Path,
@@ -549,6 +597,267 @@ def test_policy_simulation_command_is_registered(monkeypatch, tmp_path: Path) ->
     assert result.exit_code == 0
     assert "Policy simulation complete" in result.output
     assert "policy_simulation_summary.json" in result.output
+
+
+def test_backtest_tabular_models_accepts_temporal_weighting(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_model_config",
+        lambda config_path=None, project_root=None: type("ModelConfigStub", (), {})(),
+    )
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_feature_config",
+        lambda config_path=None, project_root=None: FeatureConfig(
+            push_lap=PushLapConfig(1.03, 1.07, ("SOFT",))
+        ),
+    )
+
+    def fake_backtest(*args, **kwargs):
+        captured.update(kwargs)
+        return TabularBacktestSummary(
+            status="complete",
+            strategy="walk_forward",
+            n_events=3,
+            n_folds_total=1,
+            n_folds_successful=1,
+            n_folds_failed=0,
+            prediction_rows=9,
+            metrics_path=tmp_path / "metrics/walk_forward_metrics.json",
+            predictions_path=tmp_path / "metrics/walk_forward_predictions.parquet",
+            folds_path=tmp_path / "metrics/walk_forward_folds.json",
+        )
+
+    monkeypatch.setattr("f1_prediction.cli.run_tabular_backtest", fake_backtest)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest-tabular-models",
+            "--strategy",
+            "walk_forward",
+            "--temporal-weighting",
+            "season_priority",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["temporal_weighting"].value == "season_priority"
+
+
+def test_backtest_tabular_models_accepts_all_temporal_weighting_policies(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    seen: list[str] = []
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_model_config",
+        lambda config_path=None, project_root=None: type("ModelConfigStub", (), {})(),
+    )
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_feature_config",
+        lambda config_path=None, project_root=None: FeatureConfig(
+            push_lap=PushLapConfig(1.03, 1.07, ("SOFT",))
+        ),
+    )
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_tabular_backtest",
+        lambda *args, **kwargs: (
+            seen.append(kwargs["temporal_weighting"].value)
+            or TabularBacktestSummary(
+                status="complete",
+                strategy="walk_forward",
+                n_events=3,
+                n_folds_total=1,
+                n_folds_successful=1,
+                n_folds_failed=0,
+                prediction_rows=9,
+                metrics_path=tmp_path / "metrics/walk_forward_metrics.json",
+                predictions_path=tmp_path / "metrics/walk_forward_predictions.parquet",
+                folds_path=tmp_path / "metrics/walk_forward_folds.json",
+            )
+        ),
+    )
+
+    for policy in (
+        "uniform",
+        "season_priority",
+        "exponential_recency",
+        "current_season_only_with_prior",
+    ):
+        result = CliRunner().invoke(
+            app,
+            [
+                "backtest-tabular-models",
+                "--strategy",
+                "walk_forward",
+                "--temporal-weighting",
+                policy,
+            ],
+        )
+        assert result.exit_code == 0
+
+    assert seen == [
+        "uniform",
+        "season_priority",
+        "exponential_recency",
+        "current_season_only_with_prior",
+    ]
+
+
+def test_backtest_boosted_models_accepts_temporal_weighting(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_model_config",
+        lambda config_path=None, project_root=None: type("ModelConfigStub", (), {})(),
+    )
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_feature_config",
+        lambda config_path=None, project_root=None: FeatureConfig(
+            push_lap=PushLapConfig(1.03, 1.07, ("SOFT",))
+        ),
+    )
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_boosted_backtest",
+        lambda *args, **kwargs: (
+            captured.update(kwargs)
+            or BoostedBacktestSummary(
+                status="complete",
+                strategy="walk_forward",
+                feature_policy="checkpoint_best",
+                n_events=3,
+                n_folds_total=1,
+                n_folds_successful=1,
+                n_folds_failed=0,
+                prediction_rows=9,
+                metrics_path=tmp_path / "metrics/boosted_metrics.json",
+                predictions_path=tmp_path / "metrics/boosted_predictions.parquet",
+                folds_path=tmp_path / "metrics/boosted_folds.json",
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest-boosted-models",
+            "--strategy",
+            "walk_forward",
+            "--temporal-weighting",
+            "exponential_recency",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["temporal_weighting"].value == "exponential_recency"
+
+
+def test_ablation_backtest_accepts_temporal_weighting(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_model_config",
+        lambda config_path=None, project_root=None: type("ModelConfigStub", (), {})(),
+    )
+    monkeypatch.setattr(
+        "f1_prediction.cli.load_feature_config",
+        lambda config_path=None, project_root=None: FeatureConfig(
+            push_lap=PushLapConfig(1.03, 1.07, ("SOFT",))
+        ),
+    )
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_ablation_backtest",
+        lambda *args, **kwargs: (
+            captured.update(kwargs)
+            or AblationBacktestSummary(
+                status="complete",
+                strategy="walk_forward",
+                n_events=3,
+                n_folds_total=1,
+                n_folds_successful=1,
+                n_folds_failed=0,
+                feature_groups=("base_lap_features",),
+                prediction_rows=9,
+                metrics_path=tmp_path / "metrics/ablation_metrics.json",
+                predictions_path=tmp_path / "metrics/ablation_predictions.parquet",
+                feature_groups_path=tmp_path / "metrics/ablation_feature_groups.json",
+            )
+        ),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "ablation-backtest",
+            "--strategy",
+            "walk_forward",
+            "--temporal-weighting",
+            "current_season_only_with_prior",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["temporal_weighting"].value == "current_season_only_with_prior"
+
+
+def test_temporal_weighting_report_command_is_registered(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_temporal_weighting_report",
+        lambda data_config: TemporalWeightingReportSummary(
+            status="partial",
+            summary_path=tmp_path / "metrics/temporal_weighting_summary.json",
+            table_paths=(tmp_path / "metrics/temporal_weighting_checkpoint_comparison.csv",),
+            figure_paths=(tmp_path / "figures/temporal_weighting_mae_by_checkpoint.png",),
+            missing_artifacts=("walk_forward_uniform_metrics.json",),
+            generation_issues=(),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["temporal-weighting-report"])
+
+    assert result.exit_code == 0
+    assert "Temporal weighting report complete" in result.output
+
+
+def test_season_aware_validation_report_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_season_aware_validation_report",
+        lambda data_config: SeasonAwareValidationSummary(
+            status="partial",
+            summary_path=tmp_path / "metrics/season_aware_validation_summary.json",
+            table_paths=(tmp_path / "metrics/season_aware_fp3_candidate_comparison.csv",),
+            figure_paths=(tmp_path / "figures/season_aware_fp3_candidate_vs_static_mae.png",),
+            missing_inputs=("ablation_uniform_predictions.parquet",),
+            generation_issues=(),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["season-aware-validation-report"])
+
+    assert result.exit_code == 0
+    assert "Season-aware validation report complete" in result.output
 
 
 def _config(project_root: Path) -> DataConfig:

@@ -12,6 +12,8 @@ from f1_prediction.modeling.champion_diagnostics import (
     build_fp3_policy_failure_analysis,
     build_harmful_switch_rows,
     build_harmful_switch_summaries,
+    build_season_aware_champion_diagnostics,
+    build_season_aware_champion_summary_payload,
     create_champion_diagnostics_report,
     generate_champion_diagnostics_figures,
 )
@@ -254,6 +256,105 @@ def test_champion_diagnostics_compares_guarded_mode_when_artifacts_exist(
     assert "stabilized_nested_guarded" in set(switches["selection_mode"])
 
 
+def test_season_aware_champion_diagnostics_split_regimes_and_bootstrap() -> None:
+    static = _predictions(
+        "static",
+        actual=[1.0, 1.0, 1.0, 1.0],
+        predicted=[1.1, 1.1, 1.1, 1.1],
+        checkpoints=["after_fp3"] * 4,
+        drivers=["NOR", "VER", "PIA", "LEC"],
+    )
+    season_aware = _predictions(
+        "season_aware_nested_guarded",
+        actual=[1.0, 1.0, 1.0, 1.0],
+        predicted=[1.0, 1.0, 1.3, 1.3],
+        checkpoints=["after_fp3"] * 4,
+        drivers=["NOR", "VER", "PIA", "LEC"],
+    )
+    selection = pd.DataFrame(
+        {
+            "fold_id": [1],
+            "checkpoint": ["after_fp3"],
+            "current_season_prior_event_count": [5],
+            "season_aware_selected": [True],
+            "season_aware_selection_reason": ["selected_after_prior_evidence"],
+            "guardrail_applied": [False],
+        }
+    )
+
+    tables = build_season_aware_champion_diagnostics(
+        static_predictions=static,
+        guarded_predictions=static,
+        season_aware_predictions=season_aware,
+        season_aware_selection=selection,
+        tolerance_sec=0.05,
+    )
+    first = build_season_aware_champion_summary_payload(
+        event_comparison=tables["event"],
+        regime_comparison=tables["regime"],
+        selection=selection,
+        missing_inputs=[],
+    )
+    second = build_season_aware_champion_summary_payload(
+        event_comparison=tables["event"],
+        regime_comparison=tables["regime"],
+        selection=selection,
+        missing_inputs=[],
+    )
+
+    assert tables["event"]["current_season_evidence_regime"].iloc[0] == "early_season"
+    assert tables["regime"]["weighted_candidate_selection_rate"].iloc[0] == pytest.approx(1.0)
+    assert first["bootstrap_ci"] == second["bootstrap_ci"]
+    assert first["weighted_candidate_selection_rate"] == pytest.approx(1.0)
+
+
+def test_champion_diagnostics_compares_season_aware_mode_when_artifacts_exist(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.metrics_output_dir.mkdir(parents=True, exist_ok=True)
+    static = _predictions("static", actual=[1.0], predicted=[1.0], drivers=["NOR"])
+    nested = _predictions("nested", actual=[1.0], predicted=[1.1], drivers=["NOR"])
+    stabilized = _predictions(
+        "stabilized_nested",
+        actual=[1.0],
+        predicted=[1.2],
+        drivers=["NOR"],
+    )
+    season_aware = _predictions(
+        "season_aware_nested_guarded",
+        actual=[1.0],
+        predicted=[0.9],
+        drivers=["NOR"],
+    )
+    for mode, frame in (
+        ("static", static),
+        ("nested", nested),
+        ("stabilized_nested", stabilized),
+        ("season_aware_nested_guarded", season_aware),
+    ):
+        frame.to_parquet(config.metrics_output_dir / f"champion_{mode}_predictions.parquet")
+        pd.DataFrame(
+            {
+                "fold_id": [1],
+                "checkpoint": ["after_fp3"],
+                "selected_family": ["ablation"],
+                "selected_model_name": ["random_forest"],
+                "selected_feature_group": ["base_plus_relative"],
+                "current_season_prior_event_count": [5],
+                "season_aware_selected": [mode == "season_aware_nested_guarded"],
+                "season_aware_selection_reason": ["selected_after_prior_evidence"],
+            }
+        ).to_parquet(config.metrics_output_dir / f"champion_{mode}_selection.parquet")
+
+    summary = create_champion_diagnostics_report(config, ChampionDiagnosticsConfig())
+    switches = pd.read_csv(config.metrics_output_dir / "champion_harmful_switches.csv")
+
+    assert summary.status == "complete"
+    assert "season_aware_nested_guarded" in set(switches["selection_mode"])
+    assert (config.metrics_output_dir / "season_aware_champion_summary.json").is_file()
+
+
 def test_figure_generation_does_not_crash_on_minimal_inputs(tmp_path: Path) -> None:
     rows = build_harmful_switch_rows(
         _predictions("static", actual=[1.0], predicted=[1.0]),
@@ -321,6 +422,8 @@ def _predictions(
     selected_feature_group: str | object = "base_plus_relative",
 ) -> pd.DataFrame:
     count = len(actual)
+    default_drivers = ["NOR", "LEC", "HAM", "PIA", "VER", "SAI"]
+    default_teams = ["McLaren", "Ferrari", "Mercedes", "McLaren", "Red Bull", "Williams"]
     return pd.DataFrame(
         {
             "selection_mode": [mode] * count,
@@ -329,8 +432,8 @@ def _predictions(
             "event": ["Monza"] * count,
             "event_slug": ["2024_monza"] * count,
             "checkpoint": checkpoints or ["after_fp1"] * count,
-            "driver": drivers or ["NOR", "LEC", "HAM"][:count],
-            "team": ["McLaren", "Ferrari", "Mercedes"][:count],
+            "driver": drivers or default_drivers[:count],
+            "team": default_teams[:count],
             "quali_gap_to_pole_sec": actual,
             "predicted_quali_gap_to_pole_sec": predicted,
             "selected_family": [selected_family] * count,

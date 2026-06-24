@@ -32,6 +32,18 @@ model:
       guarded_default_family: ablation
       guarded_default_model_name: random_forest
       guarded_default_feature_group: base_plus_relative
+    season_aware_nested_guarded:
+      base_mode: stabilized_nested_guarded
+      eligible_checkpoint: after_fp3
+      required_candidate:
+        family: ablation
+        model_name: random_forest
+        feature_group: base_plus_relative
+        temporal_weighting_policy: current_season_only_with_prior
+      min_current_season_prior_events: 5
+      min_prior_candidate_folds: 5
+      min_prior_candidate_predictions: 100
+      improvement_margin_sec: 0.05
     static:
       after_fp1:
         family: robust_baseline
@@ -72,3 +84,10 @@ model:
         - checkpoint_method
         - checkpoint
         - global
+  temporal_weighting:
+    policy: uniform
+    current_season_weight: 1.0
+    previous_season_weight: 0.35
+    older_season_weight: 0.10
+    half_life_events: 10
+    min_current_season_events: 5

@@ -22,6 +22,7 @@ CHAMPION_MODES: tuple[str, ...] = (
     "nested",
     "stabilized_nested",
     "stabilized_nested_guarded",
+    "season_aware_nested_guarded",
 )
 CORE_CHAMPION_MODES: tuple[str, ...] = ("static", "nested", "stabilized_nested")
 REQUIRED_PORTFOLIO_ARTIFACTS: tuple[str, ...] = (
@@ -352,6 +353,10 @@ def build_portfolio_summary_payload(
     """Build the high-level JSON summary used by the model card and README workflow."""
     champion_metrics = artifacts["champion_metrics"]
     backtest_report = artifacts["backtest_report"] or {}
+    temporal_weighting_summary = artifacts["temporal_weighting_summary"] or {}
+    season_aware_summary = artifacts["season_aware_validation_summary"] or {}
+    season_aware_champion_summary = artifacts["season_aware_champion_summary"] or {}
+    season_aware_candidate_audit = artifacts["season_aware_candidate_audit_summary"] or {}
     missing_artifacts = artifacts["missing_artifacts"]
     modes_available = [mode for mode in CHAMPION_MODES if mode in champion_metrics]
     best_by_checkpoint = _best_champion_mode_by_checkpoint(champion_metrics, backtest_report)
@@ -369,12 +374,29 @@ def build_portfolio_summary_payload(
         "best_champion_mode_by_checkpoint": best_by_checkpoint,
         "best_champion_mode_overall": best_overall,
         "key_results": key_results,
-        "main_takeaways": _main_takeaways(champion_metrics, best_overall),
+        "main_takeaways": _main_takeaways(
+            champion_metrics,
+            best_overall,
+            temporal_weighting_summary,
+            season_aware_summary,
+            season_aware_candidate_audit,
+        ),
         "limitations": _limitations(),
         "recommended_next_milestone": (
-            "Milestone 21: decide whether the opt-in guarded champion mode and "
-            "predicted-gap-bucket conformal intervals should become recommended defaults after "
-            "reviewing the coverage/width trade-off."
+            "Milestone 23: decide whether the season-aware weighted FP3 candidate should enter "
+            "future nested champion evaluation while keeping current champion defaults unchanged."
+        ),
+        "temporal_weighting_if_available": _temporal_weighting_portfolio_summary(
+            temporal_weighting_summary
+        ),
+        "season_aware_validation_if_available": _season_aware_portfolio_summary(
+            season_aware_summary
+        ),
+        "season_aware_champion_if_available": _season_aware_champion_portfolio_summary(
+            season_aware_champion_summary
+        ),
+        "season_aware_candidate_audit_if_available": (
+            _season_aware_candidate_audit_portfolio_summary(season_aware_candidate_audit)
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -516,6 +538,17 @@ def build_model_card(
         "The preferred evaluation is walk-forward backtesting: each test event is predicted using "
         "only earlier events for training or champion selection.",
         "",
+        "## Temporal weighting",
+        _temporal_weighting_card_text(summary.get("temporal_weighting_if_available")),
+        "",
+        "## Season-aware validation",
+        _season_aware_card_text(summary.get("season_aware_validation_if_available")),
+        "",
+        "## Season-aware candidate audit",
+        _season_aware_candidate_audit_card_text(
+            summary.get("season_aware_candidate_audit_if_available")
+        ),
+        "",
         "## Baselines",
         "The report compares champion policies against practice-lap baselines, including robust "
         "baselines that fall back from weak or extreme latest-session signals.",
@@ -572,6 +605,18 @@ def _load_artifacts(metrics_dir: Path) -> dict[str, Any]:
         "diagnostics_report": _read_json_if_exists(metrics_dir / "diagnostics_report.json"),
         "dataset_build_report": _read_json_if_exists(metrics_dir / "dataset_build_report.json"),
         "dataset_quality_report": _read_json_if_exists(metrics_dir / "dataset_quality_report.json"),
+        "temporal_weighting_summary": _read_json_if_exists(
+            metrics_dir / "temporal_weighting_summary.json"
+        ),
+        "season_aware_validation_summary": _read_json_if_exists(
+            metrics_dir / "season_aware_validation_summary.json"
+        ),
+        "season_aware_champion_summary": _read_json_if_exists(
+            metrics_dir / "season_aware_champion_summary.json"
+        ),
+        "season_aware_candidate_audit_summary": _read_json_if_exists(
+            metrics_dir / "season_aware_candidate_audit_summary.json"
+        ),
         "event_error_summary": _read_parquet_if_exists(metrics_dir / "event_error_summary.parquet"),
         "driver_error_summary": _read_parquet_if_exists(
             metrics_dir / "driver_error_summary.parquet"
@@ -747,6 +792,9 @@ def _project_status(modes_available: list[str]) -> str:
 def _main_takeaways(
     champion_metrics: dict[str, dict[str, Any]],
     best_overall: dict[str, object] | None,
+    temporal_weighting_summary: dict[str, Any] | None = None,
+    season_aware_summary: dict[str, Any] | None = None,
+    season_aware_candidate_audit: dict[str, Any] | None = None,
 ) -> list[str]:
     takeaways: list[str] = []
     static = champion_metrics.get("static", {})
@@ -768,11 +816,111 @@ def _main_takeaways(
     )
     if fp3_coverage is not None and float(fp3_coverage) < 0.9:
         takeaways.append("Conformal intervals are leakage-safe but broad, with FP3 undercoverage.")
+    if temporal_weighting_summary:
+        takeaways.append(
+            "Season-aware weighting is evaluated as an opt-in training policy; current champion "
+            "defaults remain unchanged pending broader validation."
+        )
+    if season_aware_summary:
+        recommendation = season_aware_summary.get(
+            "season_aware_promotion_recommendation",
+            "insufficient_evidence",
+        )
+        takeaways.append(
+            "Season-aware candidate validation is retrospective; champion defaults remain "
+            f"unchanged with recommendation `{recommendation}`."
+        )
+    if season_aware_candidate_audit:
+        recommendation = season_aware_candidate_audit.get("recommendation", "retain_static_policy")
+        takeaways.append(
+            "Season-aware candidate audit is diagnostic; static champion remains the current "
+            f"policy with recommendation `{recommendation}`."
+        )
     if not takeaways:
         takeaways.append(
             "Portfolio outputs are partial because key champion artifacts are missing."
         )
     return takeaways
+
+
+def _temporal_weighting_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "temporal_weighting_policies_available": summary.get(
+            "temporal_weighting_policies_available", {}
+        ),
+        "best_temporal_weighting_policy_by_checkpoint": summary.get(
+            "best_temporal_weighting_policy_by_checkpoint", {}
+        ),
+        "temporal_weighting_vs_uniform_delta_by_checkpoint": summary.get(
+            "temporal_weighting_vs_uniform_delta_by_checkpoint", {}
+        ),
+        "main_findings": summary.get("main_findings", []),
+    }
+
+
+def _season_aware_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "season_aware_validation_available": summary.get(
+            "season_aware_validation_available",
+            False,
+        ),
+        "season_aware_fp3_candidate_summary": summary.get(
+            "season_aware_fp3_candidate_summary",
+            {},
+        ),
+        "season_aware_best_fixed_candidate": summary.get(
+            "season_aware_best_fixed_candidate",
+            {},
+        ),
+        "season_aware_promotion_recommendation": summary.get(
+            "season_aware_promotion_recommendation",
+            "insufficient_evidence",
+        ),
+        "bootstrap_robustness": summary.get("bootstrap_robustness", {}),
+        "main_findings": summary.get("main_findings", []),
+    }
+
+
+def _season_aware_champion_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "season_aware_champion_available": True,
+        "fp3_summary": summary.get("fp3_summary", {}),
+        "regime_summary": summary.get("regime_summary", []),
+        "bootstrap_ci": summary.get("bootstrap_ci", {}),
+        "promotion_recommendation": summary.get(
+            "promotion_recommendation",
+            "retain_static_policy",
+        ),
+        "main_findings": summary.get("main_findings", []),
+    }
+
+
+def _season_aware_candidate_audit_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "season_aware_candidate_audit_available": summary.get("status") != "missing_inputs",
+        "candidate_availability": summary.get("candidate_availability", {}),
+        "artifact_alignment_summary": summary.get("artifact_alignment_summary", {}),
+        "live_gate_summary": summary.get("live_gate_summary", {}),
+        "sensitivity_analysis_summary": summary.get("sensitivity_analysis_summary", {}),
+        "recommendation": summary.get("recommendation", "retain_static_policy"),
+        "main_findings": summary.get("main_findings", []),
+    }
 
 
 def _limitations() -> list[str]:
@@ -915,10 +1063,74 @@ def _champion_card_text(summary: dict[str, object]) -> str:
     if isinstance(best, dict) and best.get("selection_mode"):
         return (
             "Champion policies are evaluated in static, nested, stabilized nested, "
-            "and opt-in guarded stabilized modes when the corresponding artifacts exist. "
+            "opt-in guarded stabilized, and opt-in season-aware guarded modes when the "
+            "corresponding artifacts exist. The season-aware mode is gated by cold-start and "
+            "prior-history checks and does not replace the current default. "
             f"The current best overall mode is `{best['selection_mode']}`."
         )
     return "Champion policies are evaluated when their saved artifacts are available."
+
+
+def _temporal_weighting_card_text(value: object) -> str:
+    intro = (
+        "Temporal weighting is evaluated as an opt-in training policy for future live/current-"
+        "season use. It emphasizes same-season evidence while preserving leakage-safe "
+        "walk-forward splits, and it does not change current champion defaults."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No temporal weighting comparison report was available."
+    policies = value.get("temporal_weighting_policies_available", {})
+    if not policies:
+        return intro + " No temporal weighting policies had saved comparison artifacts."
+    return (
+        intro
+        + " Available saved policy comparisons: "
+        + ", ".join(f"{source}: {', '.join(names)}" for source, names in policies.items())
+        + "."
+    )
+
+
+def _season_aware_card_text(value: object) -> str:
+    intro = (
+        "Season-aware validation directly compares the fixed FP3 static Random Forest "
+        "candidate with temporally weighted candidates on aligned walk-forward rows. These "
+        "are retrospective candidate checks and do not promote a new champion default."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No season-aware validation report was available."
+    recommendation = value.get("season_aware_promotion_recommendation", "insufficient_evidence")
+    summary = value.get("season_aware_fp3_candidate_summary", {})
+    if isinstance(summary, dict) and summary:
+        candidate_mae = summary.get("candidate_mae_gap_sec")
+        static_mae = summary.get("static_mae_gap_sec")
+        return (
+            intro
+            + f" Fixed FP3 candidate MAE: {_format_metric(candidate_mae)}; "
+            + f"static MAE: {_format_metric(static_mae)}; "
+            + f"recommendation: `{recommendation}`."
+        )
+    return intro + f" Recommendation: `{recommendation}`."
+
+
+def _season_aware_candidate_audit_card_text(value: object) -> str:
+    intro = (
+        "The candidate audit checks whether the season-aware weighted FP3 Random Forest path "
+        "has valid artifacts, aligned prediction rows, prior-only history, and live gate "
+        "evidence. Sensitivity results are retrospective diagnostics, not deployed policy."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No season-aware candidate audit was available."
+    recommendation = value.get("recommendation", "retain_static_policy")
+    live = value.get("live_gate_summary", {})
+    if isinstance(live, dict) and live:
+        selection_rate = live.get("weighted_candidate_selection_rate")
+        folds = live.get("folds_evaluated")
+        return (
+            intro
+            + f" Audited FP3 folds: {folds}; live candidate selection rate: "
+            + f"{_format_metric(selection_rate)}; recommendation: `{recommendation}`."
+        )
+    return intro + f" Recommendation: `{recommendation}`."
 
 
 def _results_card_table(champion_summary: pd.DataFrame) -> str:

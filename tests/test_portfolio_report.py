@@ -117,6 +117,8 @@ def test_model_card_generation_includes_required_sections() -> None:
         "Data sources",
         "Current dataset",
         "Evaluation protocol",
+        "Temporal weighting",
+        "Season-aware validation",
         "Baselines",
         "Model families",
         "Champion policy",
@@ -164,7 +166,11 @@ def test_create_portfolio_report_writes_requested_outputs(tmp_path: Path) -> Non
 
 def test_portfolio_report_includes_guarded_mode_when_artifacts_exist(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    _write_minimal_artifacts(config.metrics_output_dir, include_guarded=True)
+    _write_minimal_artifacts(
+        config.metrics_output_dir,
+        include_guarded=True,
+        include_season_aware=True,
+    )
 
     summary = create_portfolio_report(config)
     payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
@@ -172,11 +178,113 @@ def test_portfolio_report_includes_guarded_mode_when_artifacts_exist(tmp_path: P
 
     assert summary.summary_path.is_file()
     assert "stabilized_nested_guarded" in payload["champion_modes_available"]
+    assert "season_aware_nested_guarded" in payload["champion_modes_available"]
     assert (
         payload["key_results"]["stabilized_nested_guarded_champion_mae_by_checkpoint"]["after_fp1"]
         == 0.85
     )
     assert "stabilized_nested_guarded" in set(champion_summary["selection_mode"])
+    assert "season_aware_nested_guarded" in set(champion_summary["selection_mode"])
+
+
+def test_portfolio_report_includes_season_aware_champion_summary_when_available(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_minimal_artifacts(config.metrics_output_dir)
+    (config.metrics_output_dir / "season_aware_champion_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "fp3_summary": {"delta_vs_static_sec": -0.03},
+                "bootstrap_ci": {"ci_low": -0.08, "ci_high": 0.01},
+                "promotion_recommendation": "season_aware_candidate_experimental",
+                "main_findings": ["Season-aware champion remains experimental."],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = create_portfolio_report(config)
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+
+    assert payload["season_aware_champion_if_available"]["season_aware_champion_available"] is True
+    assert (
+        payload["season_aware_champion_if_available"]["promotion_recommendation"]
+        == "season_aware_candidate_experimental"
+    )
+
+
+def test_portfolio_report_includes_temporal_weighting_when_available(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_minimal_artifacts(config.metrics_output_dir)
+    (config.metrics_output_dir / "temporal_weighting_summary.json").write_text(
+        json.dumps(
+            {
+                "temporal_weighting_policies_available": {
+                    "tabular": ["uniform", "season_priority"]
+                },
+                "best_temporal_weighting_policy_by_checkpoint": {
+                    "after_fp3": {"temporal_weighting_policy": "season_priority"}
+                },
+                "temporal_weighting_vs_uniform_delta_by_checkpoint": {
+                    "after_fp3": {"season_priority": -0.05}
+                },
+                "main_findings": ["Season-aware weighting is opt-in."],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = create_portfolio_report(config)
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+    model_card = summary.model_card_path.read_text(encoding="utf-8")
+
+    assert payload["temporal_weighting_if_available"]["temporal_weighting_policies_available"][
+        "tabular"
+    ] == ["uniform", "season_priority"]
+    assert any("Season-aware weighting" in item for item in payload["main_takeaways"])
+    assert "Temporal weighting" in model_card
+
+
+def test_portfolio_report_includes_season_aware_validation_when_available(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_minimal_artifacts(config.metrics_output_dir)
+    (config.metrics_output_dir / "season_aware_validation_summary.json").write_text(
+        json.dumps(
+            {
+                "season_aware_validation_available": True,
+                "season_aware_fp3_candidate_summary": {
+                    "candidate_mae_gap_sec": 0.95,
+                    "static_mae_gap_sec": 1.05,
+                },
+                "season_aware_best_fixed_candidate": {
+                    "candidate_family": "ablation",
+                    "candidate_model_name": "random_forest",
+                },
+                "season_aware_promotion_recommendation": "insufficient_evidence",
+                "bootstrap_robustness": {
+                    "mean_delta": -0.1,
+                    "ci_low": -0.2,
+                    "ci_high": 0.05,
+                },
+                "main_findings": ["Season-aware validation is retrospective."],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = create_portfolio_report(config)
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+    model_card = summary.model_card_path.read_text(encoding="utf-8")
+
+    assert (
+        payload["season_aware_validation_if_available"]["season_aware_validation_available"] is True
+    )
+    assert any("Season-aware candidate validation" in item for item in payload["main_takeaways"])
+    assert "Season-aware validation" in model_card
 
 
 def _metrics_payload(mode: str, mae: float, delta: float) -> dict[str, object]:
@@ -241,11 +349,18 @@ def _selection(mode: str) -> pd.DataFrame:
     )
 
 
-def _write_minimal_artifacts(metrics_dir: Path, *, include_guarded: bool = False) -> None:
+def _write_minimal_artifacts(
+    metrics_dir: Path,
+    *,
+    include_guarded: bool = False,
+    include_season_aware: bool = False,
+) -> None:
     metrics_dir.mkdir(parents=True, exist_ok=True)
     modes = [("static", 0.8), ("stabilized_nested", 0.9)]
     if include_guarded:
         modes.append(("stabilized_nested_guarded", 0.85))
+    if include_season_aware:
+        modes.append(("season_aware_nested_guarded", 0.82))
     for mode, mae in modes:
         (metrics_dir / f"champion_{mode}_metrics.json").write_text(
             json.dumps(_metrics_payload(mode, mae, 0.1)),

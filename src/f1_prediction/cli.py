@@ -60,8 +60,23 @@ from f1_prediction.modeling.policy_simulation import (
 )
 from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
 from f1_prediction.modeling.portfolio_report import create_portfolio_report as run_portfolio_report
+from f1_prediction.modeling.season_aware_candidate_audit import (
+    SeasonAwareCandidateAuditSummary,
+)
+from f1_prediction.modeling.season_aware_candidate_audit import (
+    create_season_aware_candidate_audit_report as run_season_aware_candidate_audit_report,
+)
+from f1_prediction.modeling.season_aware_validation import SeasonAwareValidationSummary
+from f1_prediction.modeling.season_aware_validation import (
+    create_season_aware_validation_report as run_season_aware_validation_report,
+)
 from f1_prediction.modeling.splits import DatasetSplitSummary, SplitStrategy
 from f1_prediction.modeling.splits import write_dataset_split_report as run_dataset_split
+from f1_prediction.modeling.temporal_weighting import TemporalWeightingPolicy
+from f1_prediction.modeling.temporal_weighting_report import TemporalWeightingReportSummary
+from f1_prediction.modeling.temporal_weighting_report import (
+    create_temporal_weighting_report as run_temporal_weighting_report,
+)
 from f1_prediction.modeling.train_tabular import TabularTrainingSummary
 from f1_prediction.modeling.train_tabular import train_tabular_models as run_tabular_training
 from f1_prediction.utils.logging import configure_logging
@@ -513,6 +528,20 @@ def backtest_report_command(
         Path | None,
         typer.Option("--champion-metrics", help="Optional champion metrics JSON path."),
     ] = None,
+    temporal_weighting_summary_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--temporal-weighting-summary",
+            help="Optional temporal weighting summary JSON path.",
+        ),
+    ] = None,
+    season_aware_validation_summary_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--season-aware-validation-summary",
+            help="Optional season-aware validation summary JSON path.",
+        ),
+    ] = None,
     config_path: Annotated[
         Path | None,
         typer.Option("--config", help="Optional path to the data YAML configuration."),
@@ -532,6 +561,8 @@ def backtest_report_command(
             ablation_metrics_path=ablation_metrics_path,
             boosted_metrics_path=boosted_metrics_path,
             champion_metrics_path=champion_metrics_path,
+            temporal_weighting_summary_path=temporal_weighting_summary_path,
+            season_aware_validation_summary_path=season_aware_validation_summary_path,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -542,6 +573,16 @@ def backtest_report_command(
 @app.command("backtest-tabular-models")
 def backtest_tabular_models_command(
     strategy: Annotated[BacktestStrategy, typer.Option(help="Repeated backtesting strategy.")],
+    temporal_weighting: Annotated[
+        TemporalWeightingPolicy,
+        typer.Option(
+            "--temporal-weighting",
+            help=(
+                "Temporal sample-weight policy: uniform, season_priority, "
+                "exponential_recency, or current_season_only_with_prior."
+            ),
+        ),
+    ] = TemporalWeightingPolicy.uniform,
     dataset_path: Annotated[
         Path | None,
         typer.Option("--dataset", help="Optional combined modeling dataset path."),
@@ -603,6 +644,7 @@ def backtest_tabular_models_command(
             fail_fast=fail_fast,
             model_config=model_config,
             feature_config=feature_config,
+            temporal_weighting=temporal_weighting,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -616,6 +658,16 @@ def backtest_boosted_models_command(
         BacktestStrategy,
         typer.Option(help="Event-safe backtesting strategy."),
     ] = BacktestStrategy.walk_forward,
+    temporal_weighting: Annotated[
+        TemporalWeightingPolicy,
+        typer.Option(
+            "--temporal-weighting",
+            help=(
+                "Temporal sample-weight policy: uniform, season_priority, "
+                "exponential_recency, or current_season_only_with_prior."
+            ),
+        ),
+    ] = TemporalWeightingPolicy.uniform,
     feature_policy: Annotated[
         str,
         typer.Option(help="Feature policy: checkpoint_best or all_features."),
@@ -690,6 +742,7 @@ def backtest_boosted_models_command(
             fail_fast=fail_fast,
             model_config=model_config,
             feature_config=feature_config,
+            temporal_weighting=temporal_weighting,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -708,7 +761,7 @@ def champion_backtest_command(
         typer.Option(
             help=(
                 "Champion selection mode: static, nested, stabilized_nested, "
-                "or stabilized_nested_guarded."
+                "stabilized_nested_guarded, or season_aware_nested_guarded."
             )
         ),
     ] = ChampionSelectionMode.nested,
@@ -903,12 +956,90 @@ def policy_simulation_command(
     _print_policy_simulation_summary(summary, data_config.project_root)
 
 
+@app.command("temporal-weighting-report")
+def temporal_weighting_report_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Compare saved temporal-weighted backtest artifacts."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_temporal_weighting_report(data_config)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_temporal_weighting_report_summary(summary, data_config.project_root)
+
+
+@app.command("season-aware-validation-report")
+def season_aware_validation_report_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Compare season-aware candidates against the fixed FP3 static champion."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_season_aware_validation_report(data_config)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_season_aware_validation_summary(summary, data_config.project_root)
+
+
+@app.command("season-aware-candidate-audit")
+def season_aware_candidate_audit_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Audit saved artifacts for the season-aware weighted FP3 candidate gates."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_season_aware_candidate_audit_report(
+            data_config,
+            model_config.champion_policy.season_aware_nested_guarded,
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_season_aware_candidate_audit_summary(summary, data_config.project_root)
+
+
 @app.command("ablation-backtest")
 def ablation_backtest_command(
     strategy: Annotated[
         BacktestStrategy,
         typer.Option(help="Event-safe backtesting strategy."),
     ] = BacktestStrategy.walk_forward,
+    temporal_weighting: Annotated[
+        TemporalWeightingPolicy,
+        typer.Option(
+            "--temporal-weighting",
+            help=(
+                "Temporal sample-weight policy: uniform, season_priority, "
+                "exponential_recency, or current_season_only_with_prior."
+            ),
+        ),
+    ] = TemporalWeightingPolicy.uniform,
     feature_groups: Annotated[
         list[str] | None,
         typer.Option("--feature-groups", help="Feature groups to compare."),
@@ -970,6 +1101,7 @@ def ablation_backtest_command(
             fail_fast=fail_fast,
             model_config=model_config,
             feature_config=feature_config,
+            temporal_weighting=temporal_weighting,
         )
     except (FileNotFoundError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
@@ -1222,6 +1354,51 @@ def _print_policy_simulation_summary(
     project_root: Path,
 ) -> None:
     typer.echo("Policy simulation complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_temporal_weighting_report_summary(
+    summary: TemporalWeightingReportSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Temporal weighting report complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_artifacts:
+        typer.echo(f"Missing artifacts: {', '.join(summary.missing_artifacts)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_season_aware_validation_summary(
+    summary: SeasonAwareValidationSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Season-aware validation report complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_season_aware_candidate_audit_summary(
+    summary: SeasonAwareCandidateAuditSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Season-aware candidate audit complete")
     typer.echo(f"Status: {summary.status}")
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Tables: {len(summary.table_paths)}")

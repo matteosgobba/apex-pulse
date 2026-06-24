@@ -109,6 +109,13 @@ def create_policy_simulation_report(
             selections.get("stabilized_nested_guarded"),
             guardrail_summary,
         ),
+        season_aware_guarded_mode_summary=build_guarded_mode_artifact_summary(
+            predictions.get("static"),
+            predictions.get("stabilized_nested_guarded"),
+            predictions.get("season_aware_nested_guarded"),
+            selections.get("season_aware_nested_guarded"),
+            guardrail_summary,
+        ),
         generated_tables=table_paths,
         generated_figures=figure_paths,
         generation_issues=figure_issues,
@@ -439,6 +446,7 @@ def build_policy_simulation_summary_payload(
     guardrail_events: pd.DataFrame,
     conformal_summary: pd.DataFrame,
     guarded_mode_summary: dict[str, object] | None,
+    season_aware_guarded_mode_summary: dict[str, object] | None,
     generated_tables: list[Path],
     generated_figures: list[Path],
     generation_issues: list[str],
@@ -468,6 +476,9 @@ def build_policy_simulation_summary_payload(
         "best_non_oracle_guardrail_by_overall_mae": best_guardrail_overall,
         "oracle_guardrail_upper_bound": oracle_guardrail,
         "guarded_mode_artifact_summary": guarded_mode_summary or {"available": False},
+        "season_aware_guarded_mode_artifact_summary": (
+            season_aware_guarded_mode_summary or {"available": False}
+        ),
         "conformal_strategies_tested": list(CONFORMAL_STRATEGIES),
         "best_non_oracle_conformal_by_fp3_coverage": best_conformal_fp3,
         "best_non_oracle_conformal_by_fp3_width_adjusted_coverage": best_conformal_adjusted,
@@ -605,6 +616,8 @@ def _load_policy_simulation_artifacts(metrics_dir: Path) -> dict[str, object]:
     optional_inputs = (
         "champion_stabilized_nested_guarded_predictions.parquet",
         "champion_stabilized_nested_guarded_selection.parquet",
+        "champion_season_aware_nested_guarded_predictions.parquet",
+        "champion_season_aware_nested_guarded_selection.parquet",
         "fp3_policy_failure_analysis.csv",
         "champion_harmful_switches.csv",
     )
@@ -633,6 +646,15 @@ def _load_policy_simulation_artifacts(metrics_dir: Path) -> dict[str, object]:
             predictions["stabilized_nested_guarded"] = pd.read_parquet(path)
         elif filename == "champion_stabilized_nested_guarded_selection.parquet" and path.is_file():
             selection["stabilized_nested_guarded"] = pd.read_parquet(path)
+        elif (
+            filename == "champion_season_aware_nested_guarded_predictions.parquet"
+            and path.is_file()
+        ):
+            predictions["season_aware_nested_guarded"] = pd.read_parquet(path)
+        elif (
+            filename == "champion_season_aware_nested_guarded_selection.parquet" and path.is_file()
+        ):
+            selection["season_aware_nested_guarded"] = pd.read_parquet(path)
     return {
         "predictions": predictions,
         "selection": selection,

@@ -32,6 +32,13 @@ from f1_prediction.modeling.gradient_boosting import (
 from f1_prediction.modeling.metrics import compute_baseline_metrics
 from f1_prediction.modeling.splits import ordered_event_keys
 from f1_prediction.modeling.tabular import TARGET_COLUMN, rank_gap_predictions
+from f1_prediction.modeling.temporal_weighting import (
+    TemporalWeightingPolicy,
+    prepare_temporal_training_data,
+    supported_weighted_models,
+    temporal_artifact_stem,
+    temporal_weighting_config_payload,
+)
 from f1_prediction.modeling.train_tabular import PREDICTION_COLUMNS, metrics_by_model_checkpoint
 from f1_prediction.utils.paths import ensure_directory
 
@@ -95,6 +102,7 @@ def fit_and_predict_boosted(
     model_config: ModelConfig,
     feature_groups_by_checkpoint: dict[str, str],
     feature_policy: str,
+    sample_weights: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Fit one boosted regressor per checkpoint and return ranked predictions."""
     if not model_config.hist_gradient_boosting.enabled:
@@ -112,7 +120,11 @@ def fit_and_predict_boosted(
         estimator = build_hist_gradient_boosting_regressor(model_config.hist_gradient_boosting)
         train_features = _numeric_matrix(train_rows, features)
         test_features = _numeric_matrix(test_rows, features)
-        estimator.fit(train_features, train_rows[TARGET_COLUMN])
+        if sample_weights is None:
+            estimator.fit(train_features, train_rows[TARGET_COLUMN])
+        else:
+            weights = sample_weights.reindex(train_rows.index).astype(float)
+            estimator.fit(train_features, train_rows[TARGET_COLUMN], sample_weight=weights)
         columns = [column for column in PREDICTION_COLUMNS if column in test_rows]
         frame = test_rows.loc[:, columns].copy()
         frame["model_name"] = MODEL_NAME
@@ -157,6 +169,7 @@ def run_boosted_backtest(
     fail_fast: bool = False,
     model_config: ModelConfig,
     feature_config: FeatureConfig | None = None,
+    temporal_weighting: TemporalWeightingPolicy | str = TemporalWeightingPolicy.uniform,
 ) -> BoostedBacktestSummary:
     """Backtest boosted models and robust baselines on identical event folds."""
     strategy = BacktestStrategy(strategy)
@@ -172,11 +185,25 @@ def run_boosted_backtest(
     )
     paths = _output_paths(config.metrics_output_dir)
     ensure_directory(config.metrics_output_dir)
+    temporal_policy = TemporalWeightingPolicy(temporal_weighting)
     if len(event_keys) < min_events:
         reason = f"Dataset has {len(event_keys)} unique events; at least {min_events} are required"
         payload = _skipped_payload(strategy, policy_label, len(event_keys), selected_groups, reason)
+        payload["temporal_weighting_policy"] = temporal_policy.value
+        payload["temporal_weighting_config"] = temporal_weighting_config_payload(
+            model_config.temporal_weighting
+        )
         _write_json(paths["metrics"], payload)
-        _write_json(paths["folds"], {"status": "skipped", "strategy": strategy.value, "folds": []})
+        _write_json(
+            paths["folds"],
+            {
+                "status": "skipped",
+                "strategy": strategy.value,
+                "folds": [],
+                "temporal_weighting_policy": temporal_policy.value,
+            },
+        )
+        _write_temporal_snapshots(paths, temporal_policy, payload, predictions_path=None)
         paths["predictions"].unlink(missing_ok=True)
         return BoostedBacktestSummary(
             status="skipped",
@@ -204,6 +231,7 @@ def run_boosted_backtest(
     boosted_frames: list[pd.DataFrame] = []
     baseline_frames: list[pd.DataFrame] = []
     completed_folds: list[BacktestFold] = []
+    weight_summaries: list[dict[str, object]] = []
     for fold in folds:
         try:
             fold_scope = dataset[row_keys.isin([*fold.train_events, fold.test_event])].copy()
@@ -215,19 +243,34 @@ def run_boosted_backtest(
             fold_keys = _event_key_series(fold_scope)
             train = fold_scope[fold_keys.isin(fold.train_events)].copy()
             test = fold_scope[fold_keys.eq(fold.test_event)].copy()
-            predictions = fit_and_predict_boosted(
+            temporal_result = prepare_temporal_training_data(
                 train,
+                test_event=fold.test_event,
+                event_order=event_keys,
+                config=model_config.temporal_weighting,
+                policy=temporal_policy,
+            )
+            if temporal_result.train.empty:
+                raise ValueError("Temporal weighting left no training rows")
+            fold_weight_summary = dict(temporal_result.summary)
+            fold_weight_summary["fold_id"] = fold.fold_id
+            weight_summaries.append(fold_weight_summary)
+            predictions = fit_and_predict_boosted(
+                temporal_result.train,
                 test,
                 model_config=model_config,
                 feature_groups_by_checkpoint=selected_groups,
                 feature_policy=policy_label,
+                sample_weights=temporal_result.sample_weights,
             )
             baseline = generate_baseline_predictions(
                 test,
                 robust_extreme_threshold_sec=_robust_baseline_threshold(feature_config),
             )
-            boosted_frames.append(_tag_predictions(predictions, fold, "boosted", policy_label))
-            baseline_frames.append(_tag_baselines(baseline, fold))
+            boosted_frames.append(
+                _tag_predictions(predictions, fold, "boosted", policy_label, temporal_policy)
+            )
+            baseline_frames.append(_tag_baselines(baseline, fold, temporal_policy))
             completed_folds.append(_complete_fold(fold, "success", None))
         except Exception as exc:
             completed_folds.append(_complete_fold(fold, "failed", _concise_error(exc)))
@@ -251,6 +294,11 @@ def run_boosted_backtest(
             selected_groups,
             boosted_predictions,
             baseline_predictions,
+            temporal_weighting_policy=temporal_policy,
+            temporal_weighting_config=temporal_weighting_config_payload(
+                model_config.temporal_weighting
+            ),
+            training_weight_summary_by_fold=weight_summaries,
         )
         status = "complete" if not failed else "partial"
         payload["status"] = status
@@ -267,6 +315,11 @@ def run_boosted_backtest(
             "n_folds_failed": len(failed),
             "models": [],
             "feature_groups_by_checkpoint": selected_groups,
+            "temporal_weighting_policy": temporal_policy.value,
+            "temporal_weighting_config": temporal_weighting_config_payload(
+                model_config.temporal_weighting
+            ),
+            "training_weight_summary_by_fold": weight_summaries,
             "created_at_utc": _utc_now(),
         }
         paths["predictions"].unlink(missing_ok=True)
@@ -282,9 +335,12 @@ def run_boosted_backtest(
             "n_folds_successful": len(successful),
             "n_folds_failed": len(failed),
             "folds": [asdict(fold) for fold in completed_folds],
+            "temporal_weighting_policy": temporal_policy.value,
+            "training_weight_summary_by_fold": weight_summaries,
             "created_at_utc": _utc_now(),
         },
     )
+    _write_temporal_snapshots(paths, temporal_policy, payload, predictions_path=predictions_path)
     return BoostedBacktestSummary(
         status=status,
         strategy=strategy.value,
@@ -310,9 +366,13 @@ def build_boosted_metrics_payload(
     feature_groups_by_checkpoint: dict[str, str],
     boosted_predictions: pd.DataFrame,
     baseline_predictions: pd.DataFrame,
+    temporal_weighting_policy: TemporalWeightingPolicy | str = TemporalWeightingPolicy.uniform,
+    temporal_weighting_config: dict[str, object] | None = None,
+    training_weight_summary_by_fold: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Build fold-consistent boosted and baseline metrics."""
     strategy = BacktestStrategy(strategy)
+    temporal_policy = TemporalWeightingPolicy(temporal_weighting_policy)
     model_metrics = metrics_by_model_checkpoint(boosted_predictions)
     baseline_metrics = compute_baseline_metrics(baseline_predictions)
     model_fold = _fold_metrics(boosted_predictions, "model_name")
@@ -351,6 +411,11 @@ def build_boosted_metrics_payload(
         "best_baseline_by_checkpoint": best_baselines,
         "model_vs_best_baseline_delta_mae": mae_delta,
         "model_vs_best_baseline_delta_position_error": position_delta,
+        "temporal_weighting_policy": temporal_policy.value,
+        "temporal_weighting_config": temporal_weighting_config or {},
+        "weighted_models_supported": list(supported_weighted_models(boosted=True)),
+        "weighted_models_unsupported_if_any": [],
+        "training_weight_summary_by_fold": training_weight_summary_by_fold or [],
         "created_at_utc": _utc_now(),
     }
 
@@ -370,6 +435,7 @@ def _tag_predictions(
     fold: BacktestFold,
     prediction_type: str,
     feature_policy: str,
+    temporal_policy: TemporalWeightingPolicy,
 ) -> pd.DataFrame:
     frame = predictions.copy()
     frame["strategy"] = fold.strategy
@@ -377,10 +443,16 @@ def _tag_predictions(
     frame["test_event"] = fold.test_event
     frame["prediction_type"] = prediction_type
     frame["feature_policy"] = feature_policy
+    frame["temporal_weighting_policy"] = temporal_policy.value
+    frame["model_training_weighted"] = temporal_policy is not TemporalWeightingPolicy.uniform
     return frame
 
 
-def _tag_baselines(predictions: pd.DataFrame, fold: BacktestFold) -> pd.DataFrame:
+def _tag_baselines(
+    predictions: pd.DataFrame,
+    fold: BacktestFold,
+    temporal_policy: TemporalWeightingPolicy,
+) -> pd.DataFrame:
     frame = predictions.copy()
     frame["model_name"] = frame["baseline_name"]
     frame["feature_policy"] = "baseline"
@@ -389,6 +461,8 @@ def _tag_baselines(predictions: pd.DataFrame, fold: BacktestFold) -> pd.DataFram
     frame["fold_id"] = fold.fold_id
     frame["test_event"] = fold.test_event
     frame["prediction_type"] = "baseline"
+    frame["temporal_weighting_policy"] = temporal_policy.value
+    frame["model_training_weighted"] = False
     return frame
 
 
@@ -411,6 +485,29 @@ def _output_paths(metrics_dir: Path) -> dict[str, Path]:
         "predictions": metrics_dir / "boosted_predictions.parquet",
         "folds": metrics_dir / "boosted_folds.json",
     }
+
+
+def _write_temporal_snapshots(
+    paths: dict[str, Path],
+    policy: TemporalWeightingPolicy,
+    payload: dict[str, object],
+    *,
+    predictions_path: Path | None,
+) -> None:
+    metrics_snapshot = paths["metrics"].with_name(
+        f"{temporal_artifact_stem('boosted', policy)}_metrics.json"
+    )
+    predictions_snapshot = paths["predictions"].with_name(
+        f"{temporal_artifact_stem('boosted', policy)}_predictions.parquet"
+    )
+    folds_snapshot = paths["folds"].with_name(
+        f"{temporal_artifact_stem('boosted', policy)}_folds.json"
+    )
+    _write_json(metrics_snapshot, payload)
+    if predictions_path is not None and predictions_path.is_file():
+        predictions_snapshot.write_bytes(predictions_path.read_bytes())
+    if paths["folds"].is_file():
+        folds_snapshot.write_bytes(paths["folds"].read_bytes())
 
 
 def _resolve_dataset_path(config: DataConfig, dataset_path: Path | None) -> Path:

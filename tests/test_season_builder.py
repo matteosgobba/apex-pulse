@@ -6,6 +6,8 @@ import pytest
 from f1_prediction.data.season_builder import (
     CONVENTIONAL_2023_EVENTS,
     CONVENTIONAL_2024_EVENTS,
+    CONVENTIONAL_2025_EVENTS,
+    SPRINT_OR_NONSTANDARD_2025_EXCLUSIONS,
     FailedEventBuild,
     SeasonDatasetBuildSummary,
     SuccessfulEventBuild,
@@ -82,12 +84,23 @@ def test_conventional_2023_preset_resolves_to_non_empty_list() -> None:
     assert "Bahrain" in events
 
 
+def test_conventional_2025_preset_resolves_to_documented_non_sprint_events() -> None:
+    events = resolve_event_selection([2025], preset="conventional_2025")
+
+    assert events == CONVENTIONAL_2025_EVENTS
+    assert "Australia" in events
+    assert "Monza" in events
+    assert "Abu Dhabi" in events
+    assert not set(events) & set(SPRINT_OR_NONSTANDARD_2025_EXCLUSIONS)
+
+
 def test_multi_season_conventional_preset_resolves_each_season() -> None:
-    events = resolve_event_selection([2023, 2024], preset="conventional")
+    events = resolve_event_selection([2023, 2024, 2025], preset="conventional")
 
     assert isinstance(events, dict)
     assert events[2023] == CONVENTIONAL_2023_EVENTS
     assert events[2024] == CONVENTIONAL_2024_EVENTS
+    assert events[2025] == CONVENTIONAL_2025_EVENTS
 
 
 def test_explicit_events_resolve_without_preset() -> None:

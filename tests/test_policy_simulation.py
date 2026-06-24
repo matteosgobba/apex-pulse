@@ -164,6 +164,9 @@ def test_policy_simulation_summarizes_guarded_artifacts_when_present(tmp_path: P
     _static_predictions().assign(selection_mode="stabilized_nested_guarded").to_parquet(
         config.metrics_output_dir / "champion_stabilized_nested_guarded_predictions.parquet"
     )
+    _static_predictions().assign(selection_mode="season_aware_nested_guarded").to_parquet(
+        config.metrics_output_dir / "champion_season_aware_nested_guarded_predictions.parquet"
+    )
     _selection().to_parquet(config.metrics_output_dir / "champion_static_selection.parquet")
     _selection().to_parquet(
         config.metrics_output_dir / "champion_stabilized_nested_selection.parquet"
@@ -173,16 +176,24 @@ def test_policy_simulation_summarizes_guarded_artifacts_when_present(tmp_path: P
     guarded_selection.to_parquet(
         config.metrics_output_dir / "champion_stabilized_nested_guarded_selection.parquet"
     )
+    season_aware_selection = _selection().copy()
+    season_aware_selection["season_aware_selected"] = [True]
+    season_aware_selection.to_parquet(
+        config.metrics_output_dir / "champion_season_aware_nested_guarded_selection.parquet"
+    )
 
     summary = create_policy_simulation_report(config, PolicySimulationConfig())
     payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
     guarded = payload["guarded_mode_artifact_summary"]
+    season_aware = payload["season_aware_guarded_mode_artifact_summary"]
 
     assert summary.status == "complete"
     assert guarded["available"] is True
     assert guarded["fp3_mae_gap_sec"] == pytest.approx(0.0)
     assert guarded["guardrail_applied_count"] == 1
     assert guarded["matches_simulated_fp3_no_baseline_switch_mae"] is True
+    assert season_aware["available"] is True
+    assert season_aware["fp3_mae_gap_sec"] == pytest.approx(0.0)
 
 
 def test_figure_generation_does_not_crash_on_minimal_valid_inputs(tmp_path: Path) -> None:

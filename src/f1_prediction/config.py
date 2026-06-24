@@ -121,6 +121,7 @@ class ChampionMethodConfig:
     family: str
     model_name: str
     feature_group: str | None = None
+    temporal_weighting_policy: str | None = None
 
 
 @dataclass(frozen=True)
@@ -143,6 +144,26 @@ class StabilizedNestedGuardedChampionConfig:
     guarded_default_family: str = "ablation"
     guarded_default_model_name: str = "random_forest"
     guarded_default_feature_group: str | None = "base_plus_relative"
+
+
+@dataclass(frozen=True)
+class SeasonAwareNestedGuardedChampionConfig:
+    """Opt-in season-aware FP3 weighted-candidate gate settings."""
+
+    base_mode: str = "stabilized_nested_guarded"
+    eligible_checkpoint: str = "after_fp3"
+    required_candidate: ChampionMethodConfig = field(
+        default_factory=lambda: ChampionMethodConfig(
+            family="ablation",
+            model_name="random_forest",
+            feature_group="base_plus_relative",
+            temporal_weighting_policy="current_season_only_with_prior",
+        )
+    )
+    min_current_season_prior_events: int = 5
+    min_prior_candidate_folds: int = 5
+    min_prior_candidate_predictions: int = 100
+    improvement_margin_sec: float = 0.05
 
 
 @dataclass(frozen=True)
@@ -197,6 +218,9 @@ class ChampionPolicyConfig:
     stabilized_nested_guarded: StabilizedNestedGuardedChampionConfig = field(
         default_factory=StabilizedNestedGuardedChampionConfig
     )
+    season_aware_nested_guarded: SeasonAwareNestedGuardedChampionConfig = field(
+        default_factory=SeasonAwareNestedGuardedChampionConfig
+    )
 
 
 @dataclass(frozen=True)
@@ -243,6 +267,18 @@ class PolicySimulationConfig:
 
 
 @dataclass(frozen=True)
+class TemporalWeightingConfig:
+    """Season-aware sample-weight settings for opt-in backtests."""
+
+    policy: str = "uniform"
+    current_season_weight: float = 1.0
+    previous_season_weight: float = 0.35
+    older_season_weight: float = 0.10
+    half_life_events: float = 10.0
+    min_current_season_events: int = 5
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     """Simple tabular model and dataset-size settings."""
 
@@ -260,6 +296,7 @@ class ModelConfig:
         default_factory=ChampionDiagnosticsConfig
     )
     policy_simulation: PolicySimulationConfig = field(default_factory=PolicySimulationConfig)
+    temporal_weighting: TemporalWeightingConfig = field(default_factory=TemporalWeightingConfig)
 
 
 def load_yaml_config(path: Path) -> dict[str, Any]:
@@ -439,6 +476,17 @@ def load_model_config(
         raise ConfigError(
             f"'champion_policy.stabilized_nested_guarded' must be a mapping in {path}"
         )
+    season_aware_nested_guarded = champion_policy.get("season_aware_nested_guarded", {})
+    if not isinstance(season_aware_nested_guarded, dict):
+        raise ConfigError(
+            f"'champion_policy.season_aware_nested_guarded' must be a mapping in {path}"
+        )
+    season_aware_required_candidate = season_aware_nested_guarded.get("required_candidate", {})
+    if not isinstance(season_aware_required_candidate, dict):
+        raise ConfigError(
+            f"'champion_policy.season_aware_nested_guarded.required_candidate' "
+            f"must be a mapping in {path}"
+        )
     uncertainty = model.get("uncertainty", {})
     if not isinstance(uncertainty, dict):
         raise ConfigError(f"'uncertainty' must be a mapping in {path}")
@@ -454,16 +502,21 @@ def load_model_config(
     policy_simulation_conformal = policy_simulation.get("conformal", {})
     if not isinstance(policy_simulation_conformal, dict):
         raise ConfigError(f"'policy_simulation.conformal' must be a mapping in {path}")
+    temporal_weighting = model.get("temporal_weighting", {})
+    if not isinstance(temporal_weighting, dict):
+        raise ConfigError(f"'temporal_weighting' must be a mapping in {path}")
     default_boosting = HistGradientBoostingConfig(
         random_state=_required_integer(model, "random_state", path)
     )
     default_policy = FeatureGroupPolicyConfig()
     default_champion = ChampionPolicyConfig()
     default_guarded = default_champion.stabilized_nested_guarded
+    default_season_aware = default_champion.season_aware_nested_guarded
     default_uncertainty = UncertaintyConfig()
     default_bucket_uncertainty = default_uncertainty.predicted_gap_bucket
     default_champion_diagnostics = ChampionDiagnosticsConfig()
     default_policy_simulation = PolicySimulationConfig()
+    default_temporal_weighting = TemporalWeightingConfig()
     bucket_thresholds_raw = predicted_gap_bucket.get(
         "bucket_thresholds_sec",
         default_bucket_uncertainty.bucket_thresholds_sec,
@@ -616,6 +669,67 @@ def load_model_config(
                     )
                 ),
             ),
+            season_aware_nested_guarded=SeasonAwareNestedGuardedChampionConfig(
+                base_mode=str(
+                    season_aware_nested_guarded.get("base_mode", default_season_aware.base_mode)
+                ),
+                eligible_checkpoint=str(
+                    season_aware_nested_guarded.get(
+                        "eligible_checkpoint",
+                        default_season_aware.eligible_checkpoint,
+                    )
+                ),
+                required_candidate=ChampionMethodConfig(
+                    family=str(
+                        season_aware_required_candidate.get(
+                            "family",
+                            default_season_aware.required_candidate.family,
+                        )
+                    ),
+                    model_name=str(
+                        season_aware_required_candidate.get(
+                            "model_name",
+                            default_season_aware.required_candidate.model_name,
+                        )
+                    ),
+                    feature_group=_optional_config_string(
+                        season_aware_required_candidate.get(
+                            "feature_group",
+                            default_season_aware.required_candidate.feature_group,
+                        )
+                    ),
+                    temporal_weighting_policy=_optional_config_string(
+                        season_aware_required_candidate.get(
+                            "temporal_weighting_policy",
+                            default_season_aware.required_candidate.temporal_weighting_policy,
+                        )
+                    ),
+                ),
+                min_current_season_prior_events=int(
+                    season_aware_nested_guarded.get(
+                        "min_current_season_prior_events",
+                        default_season_aware.min_current_season_prior_events,
+                    )
+                ),
+                min_prior_candidate_folds=int(
+                    season_aware_nested_guarded.get(
+                        "min_prior_candidate_folds",
+                        default_season_aware.min_prior_candidate_folds,
+                    )
+                ),
+                min_prior_candidate_predictions=int(
+                    season_aware_nested_guarded.get(
+                        "min_prior_candidate_predictions",
+                        default_season_aware.min_prior_candidate_predictions,
+                    )
+                ),
+                improvement_margin_sec=float(
+                    season_aware_nested_guarded.get(
+                        "improvement_margin_sec",
+                        default_season_aware.improvement_margin_sec,
+                    )
+                ),
+            ),
         ),
         uncertainty=UncertaintyConfig(
             interval_z=float(uncertainty.get("interval_z", default_uncertainty.interval_z)),
@@ -667,6 +781,39 @@ def load_model_config(
                 fallback_order=tuple(fallback_order_raw),
             )
         ),
+        temporal_weighting=TemporalWeightingConfig(
+            policy=str(temporal_weighting.get("policy", default_temporal_weighting.policy)),
+            current_season_weight=float(
+                temporal_weighting.get(
+                    "current_season_weight",
+                    default_temporal_weighting.current_season_weight,
+                )
+            ),
+            previous_season_weight=float(
+                temporal_weighting.get(
+                    "previous_season_weight",
+                    default_temporal_weighting.previous_season_weight,
+                )
+            ),
+            older_season_weight=float(
+                temporal_weighting.get(
+                    "older_season_weight",
+                    default_temporal_weighting.older_season_weight,
+                )
+            ),
+            half_life_events=float(
+                temporal_weighting.get(
+                    "half_life_events",
+                    default_temporal_weighting.half_life_events,
+                )
+            ),
+            min_current_season_events=int(
+                temporal_weighting.get(
+                    "min_current_season_events",
+                    default_temporal_weighting.min_current_season_events,
+                )
+            ),
+        ),
     )
     if config.min_events < 2 or config.ridge_alpha <= 0:
         raise ConfigError(f"Model min_events and ridge_alpha must be positive in {path}")
@@ -702,6 +849,20 @@ def load_model_config(
         or not guarded.guarded_default_model_name
     ):
         raise ConfigError(f"Guarded stabilized nested champion settings are invalid in {path}")
+    season_aware = config.champion_policy.season_aware_nested_guarded
+    season_aware_candidate = season_aware.required_candidate
+    if (
+        season_aware.base_mode != "stabilized_nested_guarded"
+        or season_aware.eligible_checkpoint not in {"after_fp1", "after_fp2", "after_fp3"}
+        or not season_aware_candidate.family
+        or not season_aware_candidate.model_name
+        or season_aware_candidate.temporal_weighting_policy != "current_season_only_with_prior"
+        or season_aware.min_current_season_prior_events < 1
+        or season_aware.min_prior_candidate_folds < 1
+        or season_aware.min_prior_candidate_predictions < 1
+        or season_aware.improvement_margin_sec < 0
+    ):
+        raise ConfigError(f"Season-aware guarded champion settings are invalid in {path}")
     if (
         config.uncertainty.interval_z <= 0
         or not 0 < config.uncertainty.confidence_level < 1
@@ -733,6 +894,22 @@ def load_model_config(
         or config.policy_simulation.conformal.min_residual_count < 2
     ):
         raise ConfigError(f"Policy simulation conformal settings are invalid in {path}")
+    temporal = config.temporal_weighting
+    valid_temporal_policies = {
+        "uniform",
+        "season_priority",
+        "exponential_recency",
+        "current_season_only_with_prior",
+    }
+    if (
+        temporal.policy not in valid_temporal_policies
+        or temporal.current_season_weight <= 0
+        or temporal.previous_season_weight < 0
+        or temporal.older_season_weight < 0
+        or temporal.half_life_events <= 0
+        or temporal.min_current_season_events < 1
+    ):
+        raise ConfigError(f"Temporal weighting settings are invalid in {path}")
     return config
 
 
@@ -749,16 +926,25 @@ def _load_champion_method(
     family = raw.get("family", default.family)
     model_name = raw.get("model_name", default.model_name)
     feature_group = raw.get("feature_group", default.feature_group)
+    temporal_weighting_policy = raw.get(
+        "temporal_weighting_policy",
+        default.temporal_weighting_policy,
+    )
     if not isinstance(family, str) or not family.strip():
         raise ConfigError(f"Champion family for {checkpoint} must be non-empty in {path}")
     if not isinstance(model_name, str) or not model_name.strip():
         raise ConfigError(f"Champion model_name for {checkpoint} must be non-empty in {path}")
     if feature_group is not None and not isinstance(feature_group, str):
         raise ConfigError(f"Champion feature_group for {checkpoint} must be a string in {path}")
+    if temporal_weighting_policy is not None and not isinstance(temporal_weighting_policy, str):
+        raise ConfigError(
+            f"Champion temporal_weighting_policy for {checkpoint} must be a string in {path}"
+        )
     return ChampionMethodConfig(
         family=family,
         model_name=model_name,
         feature_group=feature_group,
+        temporal_weighting_policy=temporal_weighting_policy,
     )
 
 

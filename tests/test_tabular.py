@@ -4,10 +4,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from f1_prediction.config import DataConfig
+from f1_prediction.config import DataConfig, ModelConfig, RandomForestConfig
 from f1_prediction.modeling.metrics import compute_prediction_metrics
 from f1_prediction.modeling.tabular import rank_gap_predictions
-from f1_prediction.modeling.train_tabular import train_tabular_models
+from f1_prediction.modeling.train_tabular import fit_and_predict, train_tabular_models
 
 
 def test_training_skips_when_event_count_is_below_minimum(tmp_path: Path) -> None:
@@ -90,6 +90,50 @@ def test_tabular_prediction_metrics() -> None:
     assert metrics["mae_gap_sec"] == pytest.approx(0.15)
     assert metrics["mean_abs_position_error"] == 0.0
     assert metrics["spearman_corr"] == pytest.approx(1.0)
+
+
+def test_ridge_and_random_forest_receive_sample_weights(monkeypatch) -> None:
+    captured: dict[str, list[pd.Series]] = {"ridge": [], "random_forest": []}
+
+    class FakeEstimator:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def fit(self, _x, _y, **kwargs):
+            captured[self.name].append(kwargs["regressor__sample_weight"])
+            return self
+
+        def predict(self, x):
+            return [0.0] * len(x)
+
+    monkeypatch.setattr(
+        "f1_prediction.modeling.train_tabular.build_regressors",
+        lambda model_config: {
+            "ridge": FakeEstimator("ridge"),
+            "random_forest": FakeEstimator("random_forest"),
+        },
+    )
+    dataset = _training_dataset(2)
+    train = dataset[dataset["event_slug"].eq("event-1")]
+    test = dataset[dataset["event_slug"].eq("event-2")]
+    weights = pd.Series(0.25, index=train.index)
+
+    fit_and_predict(
+        train,
+        test,
+        model_config=ModelConfig(
+            min_events=2,
+            random_state=42,
+            ridge_alpha=1.0,
+            random_forest=RandomForestConfig(5, 3, 1),
+        ),
+        sample_weights=weights,
+    )
+
+    assert captured["ridge"]
+    assert captured["random_forest"]
+    assert all(series.eq(0.25).all() for series in captured["ridge"])
+    assert all(series.eq(0.25).all() for series in captured["random_forest"])
 
 
 def _training_dataset(n_events: int) -> pd.DataFrame:

@@ -41,6 +41,9 @@ def create_backtest_report(
     ablation_metrics_path: Path | None = None,
     boosted_metrics_path: Path | None = None,
     champion_metrics_path: Path | None = None,
+    temporal_weighting_summary_path: Path | None = None,
+    season_aware_validation_summary_path: Path | None = None,
+    season_aware_candidate_audit_summary_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -80,6 +83,25 @@ def create_backtest_report(
         champion_metrics_path or config.metrics_output_dir / "champion_metrics.json",
         config.project_root,
     )
+    temporal_weighting_path = _resolve_path(
+        temporal_weighting_summary_path
+        or config.metrics_output_dir / "temporal_weighting_summary.json",
+        config.project_root,
+    )
+    season_aware_validation_path = _resolve_path(
+        season_aware_validation_summary_path
+        or config.metrics_output_dir / "season_aware_validation_summary.json",
+        config.project_root,
+    )
+    season_aware_champion_path = _resolve_path(
+        config.metrics_output_dir / "season_aware_champion_summary.json",
+        config.project_root,
+    )
+    season_aware_candidate_audit_path = _resolve_path(
+        season_aware_candidate_audit_summary_path
+        or config.metrics_output_dir / "season_aware_candidate_audit_summary.json",
+        config.project_root,
+    )
     champion_mode_metrics = _read_champion_mode_metrics(config.metrics_output_dir)
     dataset = pd.read_parquet(source_path)
     quality = (
@@ -94,6 +116,20 @@ def create_backtest_report(
     ablation_metrics = _read_json(ablation_path) if ablation_path.is_file() else None
     boosted_metrics = _read_json(boosted_path) if boosted_path.is_file() else None
     champion_metrics = _read_json(champion_path) if champion_path.is_file() else None
+    temporal_weighting_summary = (
+        _read_json(temporal_weighting_path) if temporal_weighting_path.is_file() else None
+    )
+    season_aware_validation_summary = (
+        _read_json(season_aware_validation_path) if season_aware_validation_path.is_file() else None
+    )
+    season_aware_champion_summary = (
+        _read_json(season_aware_champion_path) if season_aware_champion_path.is_file() else None
+    )
+    season_aware_candidate_audit_summary = (
+        _read_json(season_aware_candidate_audit_path)
+        if season_aware_candidate_audit_path.is_file()
+        else None
+    )
     if champion_metrics is not None:
         mode = str(champion_metrics.get("selection_mode", ""))
         if mode:
@@ -108,6 +144,10 @@ def create_backtest_report(
         boosted_metrics=boosted_metrics,
         champion_metrics=champion_metrics,
         champion_mode_metrics=champion_mode_metrics,
+        temporal_weighting_summary=temporal_weighting_summary,
+        season_aware_validation_summary=season_aware_validation_summary,
+        season_aware_champion_summary=season_aware_champion_summary,
+        season_aware_candidate_audit_summary=season_aware_candidate_audit_summary,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -135,6 +175,10 @@ def build_backtest_report_payload(
     boosted_metrics: dict[str, Any] | None = None,
     champion_metrics: dict[str, Any] | None = None,
     champion_mode_metrics: dict[str, dict[str, Any]] | None = None,
+    temporal_weighting_summary: dict[str, Any] | None = None,
+    season_aware_validation_summary: dict[str, Any] | None = None,
+    season_aware_champion_summary: dict[str, Any] | None = None,
+    season_aware_candidate_audit_summary: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -156,6 +200,10 @@ def build_backtest_report_payload(
         payload.update(_ablation_summary(ablation_metrics))
         payload.update(_boosted_summary(payload, ablation_metrics, boosted_metrics))
         payload.update(_champion_summary(champion_metrics, champion_mode_metrics))
+        payload.update(_temporal_weighting_summary(temporal_weighting_summary))
+        payload.update(_season_aware_validation_summary(season_aware_validation_summary))
+        payload.update(_season_aware_champion_summary(season_aware_champion_summary))
+        payload.update(_season_aware_candidate_audit_summary(season_aware_candidate_audit_summary))
         return payload
 
     training_status = (
@@ -203,6 +251,10 @@ def build_backtest_report_payload(
     payload.update(_ablation_summary(ablation_metrics))
     payload.update(_boosted_summary(payload, ablation_metrics, boosted_metrics))
     payload.update(_champion_summary(champion_metrics, champion_mode_metrics))
+    payload.update(_temporal_weighting_summary(temporal_weighting_summary))
+    payload.update(_season_aware_validation_summary(season_aware_validation_summary))
+    payload.update(_season_aware_champion_summary(season_aware_champion_summary))
+    payload.update(_season_aware_candidate_audit_summary(season_aware_candidate_audit_summary))
     return payload
 
 
@@ -530,6 +582,91 @@ def _champion_summary(
     }
 
 
+def _temporal_weighting_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "temporal_weighting_policies_available": {},
+            "best_temporal_weighting_policy_by_checkpoint": {},
+            "temporal_weighting_vs_uniform_delta_by_checkpoint": {},
+        }
+    return {
+        "temporal_weighting_policies_available": summary.get(
+            "temporal_weighting_policies_available", {}
+        ),
+        "best_temporal_weighting_policy_by_checkpoint": summary.get(
+            "best_temporal_weighting_policy_by_checkpoint", {}
+        ),
+        "temporal_weighting_vs_uniform_delta_by_checkpoint": summary.get(
+            "temporal_weighting_vs_uniform_delta_by_checkpoint", {}
+        ),
+    }
+
+
+def _season_aware_validation_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "season_aware_validation_available": False,
+            "season_aware_fp3_candidate_summary": {},
+            "season_aware_best_fixed_candidate": {},
+            "season_aware_promotion_recommendation": "insufficient_evidence",
+        }
+    return {
+        "season_aware_validation_available": bool(
+            summary.get("season_aware_validation_available", False)
+        ),
+        "season_aware_fp3_candidate_summary": summary.get("season_aware_fp3_candidate_summary", {}),
+        "season_aware_best_fixed_candidate": summary.get("season_aware_best_fixed_candidate", {}),
+        "season_aware_promotion_recommendation": summary.get(
+            "season_aware_promotion_recommendation",
+            "insufficient_evidence",
+        ),
+    }
+
+
+def _season_aware_champion_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "season_aware_champion_available": False,
+            "season_aware_champion_fp3_summary": {},
+            "season_aware_champion_bootstrap_ci": {},
+            "season_aware_champion_promotion_recommendation": "retain_static_policy",
+        }
+    return {
+        "season_aware_champion_available": bool(summary.get("status") != "missing_inputs"),
+        "season_aware_champion_fp3_summary": summary.get("fp3_summary", {}),
+        "season_aware_champion_bootstrap_ci": summary.get("bootstrap_ci", {}),
+        "season_aware_champion_promotion_recommendation": summary.get(
+            "promotion_recommendation",
+            "season_aware_candidate_experimental",
+        ),
+    }
+
+
+def _season_aware_candidate_audit_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "season_aware_candidate_audit_available": False,
+            "season_aware_candidate_audit_recommendation": "retain_static_policy",
+            "season_aware_candidate_gate_failure_summary": {},
+            "season_aware_candidate_artifact_alignment_summary": {},
+        }
+    return {
+        "season_aware_candidate_audit_available": bool(summary.get("status") != "missing_inputs"),
+        "season_aware_candidate_audit_recommendation": summary.get(
+            "recommendation",
+            "retain_static_policy",
+        ),
+        "season_aware_candidate_gate_failure_summary": summary.get(
+            "live_gate_summary",
+            {},
+        ),
+        "season_aware_candidate_artifact_alignment_summary": summary.get(
+            "artifact_alignment_summary",
+            {},
+        ),
+    }
+
+
 def _best_champion_modes_by_checkpoint(
     mode_metrics: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, object]]:
@@ -606,7 +743,13 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _read_champion_mode_metrics(metrics_dir: Path) -> dict[str, dict[str, Any]]:
     payloads: dict[str, dict[str, Any]] = {}
-    for mode in ("static", "nested", "stabilized_nested", "stabilized_nested_guarded"):
+    for mode in (
+        "static",
+        "nested",
+        "stabilized_nested",
+        "stabilized_nested_guarded",
+        "season_aware_nested_guarded",
+    ):
         path = metrics_dir / f"champion_{mode}_metrics.json"
         if not path.is_file():
             continue

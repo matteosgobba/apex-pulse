@@ -213,6 +213,7 @@ def fit_and_predict(
     *,
     model_config: ModelConfig,
     candidate_features: list[str] | None = None,
+    sample_weights: pd.Series | None = None,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, dict[str, object]]]]:
     prediction_frames: list[pd.DataFrame] = []
     fitted: dict[str, dict[str, dict[str, object]]] = {"ridge": {}, "random_forest": {}}
@@ -234,7 +235,8 @@ def fit_and_predict(
         prediction_frames.append(_constant_predictions(test_rows, "median_target", target_median))
 
         for model_name, estimator in build_regressors(model_config).items():
-            estimator.fit(train_rows[features], train_rows[TARGET_COLUMN])
+            fit_kwargs = _sample_weight_fit_kwargs(sample_weights, train_rows.index)
+            estimator.fit(train_rows[features], train_rows[TARGET_COLUMN], **fit_kwargs)
             frame = _prediction_frame(test_rows, model_name)
             frame["predicted_quali_gap_to_pole_sec"] = estimator.predict(test_rows[features])
             prediction_frames.append(_finish_predictions(frame))
@@ -245,6 +247,16 @@ def fit_and_predict(
     if not prediction_frames:
         raise ValueError("No checkpoint had enough target data for training and evaluation")
     return pd.concat(prediction_frames, ignore_index=True), fitted
+
+
+def _sample_weight_fit_kwargs(
+    sample_weights: pd.Series | None,
+    train_index: pd.Index,
+) -> dict[str, pd.Series]:
+    if sample_weights is None:
+        return {}
+    weights = sample_weights.reindex(train_index).astype(float)
+    return {"regressor__sample_weight": weights}
 
 
 def _constant_predictions(test_rows: pd.DataFrame, model_name: str, value: float) -> pd.DataFrame:

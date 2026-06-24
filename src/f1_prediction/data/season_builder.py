@@ -41,6 +41,34 @@ CONVENTIONAL_2024_EVENTS: tuple[str, ...] = (
     "Monza",
     "Abu Dhabi",
 )
+CONVENTIONAL_2025_EVENTS: tuple[str, ...] = (
+    "Australia",
+    "Japan",
+    "Bahrain",
+    "Saudi Arabia",
+    "Imola",
+    "Monaco",
+    "Spain",
+    "Canada",
+    "Austria",
+    "Silverstone",
+    "Hungary",
+    "Netherlands",
+    "Monza",
+    "Baku",
+    "Singapore",
+    "Mexico City",
+    "Las Vegas",
+    "Abu Dhabi",
+)
+SPRINT_OR_NONSTANDARD_2025_EXCLUSIONS: tuple[str, ...] = (
+    "China",
+    "Miami",
+    "Belgium",
+    "Austin",
+    "Sao Paulo",
+    "Qatar",
+)
 CONVENTIONAL_2023_EVENTS: tuple[str, ...] = (
     "Bahrain",
     "Saudi Arabia",
@@ -60,10 +88,12 @@ CONVENTIONAL_2023_EVENTS: tuple[str, ...] = (
 EVENT_PRESETS: dict[str, tuple[str, ...]] = {
     "conventional_2023": CONVENTIONAL_2023_EVENTS,
     "conventional_2024": CONVENTIONAL_2024_EVENTS,
+    "conventional_2025": CONVENTIONAL_2025_EVENTS,
 }
 CONVENTIONAL_EVENTS_BY_SEASON: dict[int, tuple[str, ...]] = {
     2023: CONVENTIONAL_2023_EVENTS,
     2024: CONVENTIONAL_2024_EVENTS,
+    2025: CONVENTIONAL_2025_EVENTS,
 }
 EventSelection = tuple[str, ...] | dict[int, tuple[str, ...]] | None
 COMMON_EVENT_ALIASES: dict[str, tuple[str, ...]] = {

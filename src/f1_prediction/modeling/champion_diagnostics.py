@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from f1_prediction.config import ChampionDiagnosticsConfig, DataConfig
@@ -24,21 +25,28 @@ COMPARISON_MODES: tuple[str, ...] = (
     "nested",
     "stabilized_nested",
     "stabilized_nested_guarded",
+    "season_aware_nested_guarded",
 )
 PREDICTION_FILES: dict[str, str] = {
     "static": "champion_static_predictions.parquet",
     "nested": "champion_nested_predictions.parquet",
     "stabilized_nested": "champion_stabilized_nested_predictions.parquet",
     "stabilized_nested_guarded": "champion_stabilized_nested_guarded_predictions.parquet",
+    "season_aware_nested_guarded": ("champion_season_aware_nested_guarded_predictions.parquet"),
 }
 SELECTION_FILES: dict[str, str] = {
     "static": "champion_static_selection.parquet",
     "nested": "champion_nested_selection.parquet",
     "stabilized_nested": "champion_stabilized_nested_selection.parquet",
     "stabilized_nested_guarded": "champion_stabilized_nested_guarded_selection.parquet",
+    "season_aware_nested_guarded": ("champion_season_aware_nested_guarded_selection.parquet"),
 }
-OPTIONAL_MODES: frozenset[str] = frozenset({"stabilized_nested_guarded"})
+OPTIONAL_MODES: frozenset[str] = frozenset(
+    {"stabilized_nested_guarded", "season_aware_nested_guarded"}
+)
 JOIN_COLUMNS: tuple[str, ...] = ("fold_id", "season", "event_slug", "checkpoint", "driver")
+BOOTSTRAP_SEED = 20260422
+BOOTSTRAP_ITERATIONS = 2000
 
 
 @dataclass(frozen=True)
@@ -83,6 +91,13 @@ def create_champion_diagnostics_report(
     conformal_cases = build_conformal_miss_cases(_interval_diagnostic_predictions(predictions))
     conformal_summaries = build_conformal_miss_summaries(conformal_cases)
     coverage_by_regime = build_conformal_coverage_by_error_regime(conformal_cases)
+    season_aware_tables = build_season_aware_champion_diagnostics(
+        static_predictions=predictions.get("static"),
+        guarded_predictions=predictions.get("stabilized_nested_guarded"),
+        season_aware_predictions=predictions.get("season_aware_nested_guarded"),
+        season_aware_selection=selections.get("season_aware_nested_guarded"),
+        tolerance_sec=diagnostics_config.harmful_switch_tolerance_sec,
+    )
 
     table_frames = {
         "champion_harmful_switches.csv": harmful_switches,
@@ -96,6 +111,8 @@ def create_champion_diagnostics_report(
         "conformal_miss_summary_by_driver.csv": conformal_summaries["driver"],
         "conformal_miss_cases.csv": conformal_cases,
         "conformal_coverage_by_error_regime.csv": coverage_by_regime,
+        "season_aware_champion_event_comparison.csv": season_aware_tables["event"],
+        "season_aware_champion_regime_comparison.csv": season_aware_tables["regime"],
     }
     table_paths: list[Path] = []
     for filename, frame in table_frames.items():
@@ -110,7 +127,18 @@ def create_champion_diagnostics_report(
         conformal_checkpoint_summary=conformal_summaries["checkpoint"],
         conformal_event_summary=conformal_summaries["event"],
         coverage_by_regime=coverage_by_regime,
+        season_aware_event=season_aware_tables["event"],
+        season_aware_regime=season_aware_tables["regime"],
     )
+    season_aware_summary = build_season_aware_champion_summary_payload(
+        event_comparison=season_aware_tables["event"],
+        regime_comparison=season_aware_tables["regime"],
+        selection=selections.get("season_aware_nested_guarded"),
+        missing_inputs=missing_inputs,
+    )
+    season_aware_summary_path = metrics_dir / "season_aware_champion_summary.json"
+    _write_json(season_aware_summary_path, season_aware_summary)
+    table_paths.append(season_aware_summary_path)
     summary_payload = build_champion_diagnostics_summary_payload(
         inputs_available=artifacts["inputs_available"],
         missing_inputs=missing_inputs,
@@ -513,6 +541,121 @@ def build_conformal_coverage_by_error_regime(cases: pd.DataFrame) -> pd.DataFram
     return pd.DataFrame(rows, columns=columns)
 
 
+def build_season_aware_champion_diagnostics(
+    *,
+    static_predictions: pd.DataFrame | None,
+    guarded_predictions: pd.DataFrame | None,
+    season_aware_predictions: pd.DataFrame | None,
+    season_aware_selection: pd.DataFrame | None,
+    tolerance_sec: float,
+) -> dict[str, pd.DataFrame]:
+    """Build FP3 event/regime comparisons for the opt-in season-aware champion."""
+    event_columns = _season_aware_event_columns()
+    regime_columns = _season_aware_regime_columns()
+    if static_predictions is None or season_aware_predictions is None:
+        return {
+            "event": pd.DataFrame(columns=event_columns),
+            "regime": pd.DataFrame(columns=regime_columns),
+        }
+    rows = build_harmful_switch_rows(
+        static_predictions,
+        season_aware_predictions,
+        selection_mode="season_aware_nested_guarded",
+        tolerance_sec=tolerance_sec,
+    )
+    rows = rows[rows["checkpoint"].eq("after_fp3")].copy()
+    if rows.empty:
+        return {
+            "event": pd.DataFrame(columns=event_columns),
+            "regime": pd.DataFrame(columns=regime_columns),
+        }
+    guarded_rows = (
+        build_harmful_switch_rows(
+            static_predictions,
+            guarded_predictions,
+            selection_mode="stabilized_nested_guarded",
+            tolerance_sec=tolerance_sec,
+        )
+        if guarded_predictions is not None
+        else pd.DataFrame()
+    )
+    guarded_lookup = _event_delta_lookup(guarded_rows)
+    selection_lookup = _season_aware_selection_lookup(season_aware_selection)
+    event_rows: list[dict[str, object]] = []
+    for keys, group in rows.groupby(["season", "event", "fold_id"], dropna=False, sort=False):
+        season, event, fold_id = keys
+        selection_values = selection_lookup.get((fold_id, "after_fp3"), {})
+        prior_count = int(selection_values.get("current_season_prior_event_count") or 0)
+        event_rows.append(
+            {
+                "selection_mode": "season_aware_nested_guarded",
+                "season": season,
+                "event": event,
+                "fold_id": fold_id,
+                "checkpoint": "after_fp3",
+                "current_season_prior_event_count": prior_count,
+                "current_season_evidence_regime": _current_season_evidence_regime(prior_count),
+                "rows": int(len(group)),
+                "static_mae_gap_sec": float(group["static_abs_error_gap_sec"].mean()),
+                "season_aware_mae_gap_sec": float(group["comparison_abs_error_gap_sec"].mean()),
+                "delta_vs_static_sec": float(group["error_delta_vs_static_sec"].mean()),
+                "delta_vs_guarded_sec": _delta(
+                    float(group["comparison_abs_error_gap_sec"].mean()),
+                    guarded_lookup.get((fold_id, "after_fp3")),
+                ),
+                "weighted_candidate_selected": bool(
+                    selection_values.get("season_aware_selected", False)
+                ),
+                "season_aware_selection_reason": selection_values.get(
+                    "season_aware_selection_reason"
+                ),
+                "guardrail_applied": bool(selection_values.get("guardrail_applied", False)),
+                "harmful_switches_vs_static": int(group["harmful_switch"].sum()),
+                "beneficial_switches_vs_static": int(group["beneficial_switch"].sum()),
+            }
+        )
+    event = pd.DataFrame(event_rows, columns=event_columns)
+    regime = _build_season_aware_regime_summary(event, regime_columns)
+    return {"event": event, "regime": regime}
+
+
+def build_season_aware_champion_summary_payload(
+    *,
+    event_comparison: pd.DataFrame,
+    regime_comparison: pd.DataFrame,
+    selection: pd.DataFrame | None,
+    missing_inputs: list[str],
+) -> dict[str, Any]:
+    """Build the optional JSON summary for season-aware champion diagnostics."""
+    required = {
+        "champion_static_predictions.parquet",
+        "champion_season_aware_nested_guarded_predictions.parquet",
+    }
+    missing_required = sorted(required.intersection(missing_inputs))
+    bootstrap = _paired_bootstrap_ci(
+        event_comparison["delta_vs_static_sec"] if not event_comparison.empty else []
+    )
+    fp3_summary = _season_aware_fp3_summary(event_comparison)
+    selection_rate = _season_aware_selection_rate(selection)
+    recommendation = _season_aware_champion_recommendation(fp3_summary, bootstrap)
+    return {
+        "status": "missing_inputs" if missing_required else "complete",
+        "missing_inputs": missing_required,
+        "fp3_summary": fp3_summary,
+        "regime_summary": _records(regime_comparison),
+        "weighted_candidate_selection_rate": selection_rate,
+        "guardrail_application_rate": _guardrail_application_rate(selection),
+        "bootstrap_ci": bootstrap,
+        "promotion_recommendation": recommendation,
+        "main_findings": _season_aware_champion_findings(
+            fp3_summary,
+            bootstrap,
+            selection_rate,
+        ),
+        "generated_at": _utc_now(),
+    }
+
+
 def build_champion_diagnostics_summary_payload(
     *,
     inputs_available: dict[str, bool],
@@ -565,6 +708,8 @@ def generate_champion_diagnostics_figures(
     conformal_checkpoint_summary: pd.DataFrame,
     conformal_event_summary: pd.DataFrame,
     coverage_by_regime: pd.DataFrame,
+    season_aware_event: pd.DataFrame | None = None,
+    season_aware_regime: pd.DataFrame | None = None,
 ) -> tuple[list[Path], list[str]]:
     """Create non-interactive matplotlib diagnostic figures."""
     ensure_directory(figures_dir)
@@ -593,6 +738,22 @@ def generate_champion_diagnostics_figures(
         (
             "conformal_coverage_by_actual_gap_bucket.png",
             lambda plt: _plot_conformal_coverage_by_actual_gap_bucket(plt, coverage_by_regime),
+        ),
+        (
+            "season_aware_champion_fp3_mae_by_event.png",
+            lambda plt: _plot_season_aware_fp3_mae_by_event(plt, season_aware_event),
+        ),
+        (
+            "season_aware_champion_fp3_delta_vs_static.png",
+            lambda plt: _plot_season_aware_delta_vs_static(plt, season_aware_event),
+        ),
+        (
+            "season_aware_champion_selection_by_regime.png",
+            lambda plt: _plot_season_aware_selection_by_regime(plt, season_aware_regime),
+        ),
+        (
+            "season_aware_champion_current_season_history.png",
+            lambda plt: _plot_season_aware_current_history(plt, season_aware_event),
         ),
     )
     try:
@@ -1077,6 +1238,96 @@ def _plot_conformal_coverage_by_actual_gap_bucket(plt: Any, regime: pd.DataFrame
     return True
 
 
+def _plot_season_aware_fp3_mae_by_event(
+    plt: Any,
+    event: pd.DataFrame | None,
+) -> bool:
+    if event is None or event.empty:
+        return False
+    frame = event.sort_values(["season", "fold_id"]).copy()
+    labels = [f"{row.season} {row.event}" for row in frame.itertuples()]
+    x_values = list(range(len(frame)))
+    width = 0.38
+    plt.figure(figsize=(max(8, len(frame) * 0.45), 4.5))
+    plt.bar(
+        [value - width / 2 for value in x_values],
+        frame["static_mae_gap_sec"],
+        width=width,
+        label="static",
+        color="#4c78a8",
+    )
+    plt.bar(
+        [value + width / 2 for value in x_values],
+        frame["season_aware_mae_gap_sec"],
+        width=width,
+        label="season_aware_nested_guarded",
+        color="#54a24b",
+    )
+    plt.xticks(x_values, labels, rotation=60, ha="right")
+    plt.ylabel("FP3 MAE gap (sec)")
+    plt.title("Season-Aware Champion FP3 MAE by Event")
+    plt.legend()
+    _finish_plot(plt)
+    return True
+
+
+def _plot_season_aware_delta_vs_static(plt: Any, event: pd.DataFrame | None) -> bool:
+    if event is None or event.empty:
+        return False
+    frame = event.sort_values("delta_vs_static_sec").copy()
+    labels = [f"{row.season} {row.event}" for row in frame.itertuples()]
+    colors = ["#54a24b" if value <= 0 else "#e45756" for value in frame["delta_vs_static_sec"]]
+    plt.figure(figsize=(max(8, len(frame) * 0.45), 4.5))
+    plt.bar(labels, frame["delta_vs_static_sec"], color=colors)
+    plt.axhline(0, color="#333333", linewidth=0.8)
+    plt.xticks(rotation=60, ha="right")
+    plt.ylabel("Candidate minus static MAE (sec)")
+    plt.title("Season-Aware Champion FP3 Delta vs Static")
+    _finish_plot(plt)
+    return True
+
+
+def _plot_season_aware_selection_by_regime(
+    plt: Any,
+    regime: pd.DataFrame | None,
+) -> bool:
+    if regime is None or regime.empty:
+        return False
+    frame = regime.copy()
+    order = ["cold_start", "early_season", "established_season"]
+    frame["_order"] = frame["current_season_evidence_regime"].map(
+        {value: index for index, value in enumerate(order)}
+    )
+    frame = frame.sort_values(["_order", "current_season_evidence_regime"])
+    plt.figure(figsize=(7, 4))
+    plt.bar(
+        frame["current_season_evidence_regime"],
+        frame["weighted_candidate_selection_rate"],
+        color="#72b7b2",
+    )
+    plt.ylim(0, 1.05)
+    plt.ylabel("Selection rate")
+    plt.title("Season-Aware Candidate Selection by Regime")
+    _finish_plot(plt)
+    return True
+
+
+def _plot_season_aware_current_history(plt: Any, event: pd.DataFrame | None) -> bool:
+    if event is None or event.empty:
+        return False
+    frame = event.sort_values(["season", "fold_id"]).copy()
+    labels = [f"{row.season} {row.event}" for row in frame.itertuples()]
+    plt.figure(figsize=(max(8, len(frame) * 0.45), 4.5))
+    plt.bar(labels, frame["current_season_prior_event_count"], color="#b279a2")
+    plt.axhline(5, color="#333333", linestyle="--", linewidth=1, label="cold-start gate")
+    plt.xticks(rotation=60, ha="right")
+    plt.ylabel("Prior same-season events")
+    plt.title("Current-Season History Available by FP3 Event")
+    plt.legend()
+    _finish_plot(plt)
+    return True
+
+
 def _bar_by_checkpoint(
     plt: Any,
     frame: pd.DataFrame,
@@ -1259,9 +1510,231 @@ def _conformal_summary_columns(summary_type: str) -> list[str]:
     ]
 
 
+def _season_aware_event_columns() -> list[str]:
+    return [
+        "selection_mode",
+        "season",
+        "event",
+        "fold_id",
+        "checkpoint",
+        "current_season_prior_event_count",
+        "current_season_evidence_regime",
+        "rows",
+        "static_mae_gap_sec",
+        "season_aware_mae_gap_sec",
+        "delta_vs_static_sec",
+        "delta_vs_guarded_sec",
+        "weighted_candidate_selected",
+        "season_aware_selection_reason",
+        "guardrail_applied",
+        "harmful_switches_vs_static",
+        "beneficial_switches_vs_static",
+    ]
+
+
+def _season_aware_regime_columns() -> list[str]:
+    return [
+        "current_season_evidence_regime",
+        "events",
+        "rows",
+        "static_mae_gap_sec",
+        "season_aware_mae_gap_sec",
+        "mean_delta_vs_static_sec",
+        "median_delta_vs_static_sec",
+        "share_events_improved",
+        "weighted_candidate_selection_rate",
+        "guardrail_application_rate",
+        "mean_current_season_prior_event_count",
+    ]
+
+
 def _safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     result = numerator / denominator.where(denominator > 0)
     return result.replace([math.inf, -math.inf], pd.NA)
+
+
+def _season_aware_selection_lookup(
+    selection: pd.DataFrame | None,
+) -> dict[tuple[object, object], dict[str, object]]:
+    if selection is None or selection.empty:
+        return {}
+    frame = selection.copy()
+    for column in (
+        "current_season_prior_event_count",
+        "season_aware_selected",
+        "season_aware_selection_reason",
+        "guardrail_applied",
+    ):
+        if column not in frame:
+            frame[column] = pd.NA
+    lookup: dict[tuple[object, object], dict[str, object]] = {}
+    for keys, group in frame.groupby(["fold_id", "checkpoint"], dropna=False, sort=False):
+        row = group.iloc[0]
+        lookup[keys] = {
+            "current_season_prior_event_count": row.get("current_season_prior_event_count"),
+            "season_aware_selected": _bool_or_none(row.get("season_aware_selected")),
+            "season_aware_selection_reason": row.get("season_aware_selection_reason"),
+            "guardrail_applied": _bool_or_none(row.get("guardrail_applied")),
+        }
+    return lookup
+
+
+def _event_delta_lookup(rows: pd.DataFrame) -> dict[tuple[object, object], float]:
+    if rows.empty:
+        return {}
+    fp3 = rows[rows["checkpoint"].eq("after_fp3")].copy()
+    lookup: dict[tuple[object, object], float] = {}
+    for keys, group in fp3.groupby(["fold_id", "checkpoint"], dropna=False, sort=False):
+        lookup[keys] = float(group["comparison_abs_error_gap_sec"].mean())
+    return lookup
+
+
+def _build_season_aware_regime_summary(
+    event: pd.DataFrame,
+    columns: list[str],
+) -> pd.DataFrame:
+    if event.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    for regime, group in event.groupby(
+        "current_season_evidence_regime",
+        dropna=False,
+        sort=False,
+    ):
+        rows.append(
+            {
+                "current_season_evidence_regime": regime,
+                "events": int(len(group)),
+                "rows": int(group["rows"].sum()),
+                "static_mae_gap_sec": _mean_or_none(group["static_mae_gap_sec"]),
+                "season_aware_mae_gap_sec": _mean_or_none(group["season_aware_mae_gap_sec"]),
+                "mean_delta_vs_static_sec": _mean_or_none(group["delta_vs_static_sec"]),
+                "median_delta_vs_static_sec": _median_or_none(group["delta_vs_static_sec"]),
+                "share_events_improved": float(group["delta_vs_static_sec"].lt(0).mean()),
+                "weighted_candidate_selection_rate": float(
+                    group["weighted_candidate_selected"].fillna(False).astype(bool).mean()
+                ),
+                "guardrail_application_rate": float(
+                    group["guardrail_applied"].fillna(False).astype(bool).mean()
+                ),
+                "mean_current_season_prior_event_count": _mean_or_none(
+                    group["current_season_prior_event_count"]
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _current_season_evidence_regime(prior_event_count: int | float | object) -> str:
+    count = int(prior_event_count) if pd.notna(prior_event_count) else 0
+    if count < 5:
+        return "cold_start"
+    if count <= 8:
+        return "early_season"
+    return "established_season"
+
+
+def _paired_bootstrap_ci(
+    values: pd.Series | list[float],
+    *,
+    seed: int = BOOTSTRAP_SEED,
+    iterations: int = BOOTSTRAP_ITERATIONS,
+) -> dict[str, float | int | None]:
+    numeric = pd.to_numeric(pd.Series(values), errors="coerce").dropna().astype(float)
+    if numeric.empty:
+        return {"mean_delta": None, "ci_low": None, "ci_high": None, "events": 0, "seed": seed}
+    data = numeric.to_numpy()
+    rng = np.random.default_rng(seed)
+    samples = rng.choice(data, size=(iterations, len(data)), replace=True).mean(axis=1)
+    return {
+        "mean_delta": float(data.mean()),
+        "ci_low": float(np.quantile(samples, 0.025)),
+        "ci_high": float(np.quantile(samples, 0.975)),
+        "events": int(len(data)),
+        "seed": seed,
+    }
+
+
+def _season_aware_fp3_summary(event: pd.DataFrame) -> dict[str, object]:
+    if event.empty:
+        return {
+            "events": 0,
+            "rows": 0,
+            "static_mae_gap_sec": None,
+            "season_aware_mae_gap_sec": None,
+            "delta_vs_static_sec": None,
+            "delta_vs_guarded_sec": None,
+            "share_events_improved": None,
+        }
+    return {
+        "events": int(len(event)),
+        "rows": int(event["rows"].sum()),
+        "static_mae_gap_sec": _mean_or_none(event["static_mae_gap_sec"]),
+        "season_aware_mae_gap_sec": _mean_or_none(event["season_aware_mae_gap_sec"]),
+        "delta_vs_static_sec": _mean_or_none(event["delta_vs_static_sec"]),
+        "delta_vs_guarded_sec": _mean_or_none(event["delta_vs_guarded_sec"]),
+        "share_events_improved": float(event["delta_vs_static_sec"].lt(0).mean()),
+    }
+
+
+def _season_aware_selection_rate(selection: pd.DataFrame | None) -> float | None:
+    if selection is None or selection.empty or "season_aware_selected" not in selection:
+        return None
+    fp3 = selection[selection["checkpoint"].eq("after_fp3")]
+    if fp3.empty:
+        return None
+    return float(fp3["season_aware_selected"].fillna(False).astype(bool).mean())
+
+
+def _guardrail_application_rate(selection: pd.DataFrame | None) -> float | None:
+    if selection is None or selection.empty or "guardrail_applied" not in selection:
+        return None
+    fp3 = selection[selection["checkpoint"].eq("after_fp3")]
+    if fp3.empty:
+        return None
+    return float(fp3["guardrail_applied"].fillna(False).astype(bool).mean())
+
+
+def _season_aware_champion_recommendation(
+    fp3_summary: dict[str, object],
+    bootstrap: dict[str, float | int | None],
+) -> str:
+    delta = _number_or_none(fp3_summary.get("delta_vs_static_sec"))
+    ci_high = _number_or_none(bootstrap.get("ci_high"))
+    if delta is None:
+        return "retain_static_policy"
+    if delta < 0 and ci_high is not None and ci_high < 0:
+        return "eligible_for_broader_validation"
+    if delta < 0:
+        return "season_aware_candidate_experimental"
+    return "retain_static_policy"
+
+
+def _season_aware_champion_findings(
+    fp3_summary: dict[str, object],
+    bootstrap: dict[str, float | int | None],
+    selection_rate: float | None,
+) -> list[str]:
+    findings: list[str] = []
+    delta = _number_or_none(fp3_summary.get("delta_vs_static_sec"))
+    if delta is not None:
+        findings.append(
+            f"Season-aware nested guarded FP3 mean event delta vs static is {delta:.3f} sec."
+        )
+    if selection_rate is not None:
+        findings.append(
+            "Weighted FP3 candidate selection rate is "
+            f"{selection_rate:.1%} across evaluated FP3 folds."
+        )
+    ci_low = _number_or_none(bootstrap.get("ci_low"))
+    ci_high = _number_or_none(bootstrap.get("ci_high"))
+    if ci_low is not None and ci_high is not None:
+        findings.append(
+            f"Paired event-level bootstrap CI for FP3 delta is [{ci_low:.3f}, {ci_high:.3f}] sec."
+        )
+    if not findings:
+        findings.append("Season-aware champion artifacts are not available for comparison.")
+    return findings
 
 
 def _coverage(group: pd.DataFrame) -> float | None:
@@ -1273,6 +1746,12 @@ def _coverage(group: pd.DataFrame) -> float | None:
 def _mean_or_none(values: pd.Series) -> float | None:
     numeric = pd.to_numeric(values, errors="coerce").dropna()
     return float(numeric.mean()) if not numeric.empty else None
+
+
+def _delta(first: object, second: object) -> float | None:
+    if first is None or second is None:
+        return None
+    return float(first) - float(second)
 
 
 def _median_or_none(values: pd.Series) -> float | None:
@@ -1295,7 +1774,7 @@ def _number_or_none(value: object) -> float | None:
 def _bool_or_none(value: object) -> bool | None:
     if value is None or value is pd.NA:
         return None
-    if isinstance(value, bool):
+    if isinstance(value, bool | np.bool_):
         return value
     if isinstance(value, int | float) and not isinstance(value, bool):
         if math.isnan(float(value)):

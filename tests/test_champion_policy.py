@@ -11,11 +11,16 @@ from f1_prediction.config import (
     ModelConfig,
     PredictedGapBucketUncertaintyConfig,
     RandomForestConfig,
+    SeasonAwareNestedGuardedChampionConfig,
     StabilizedNestedChampionConfig,
     StabilizedNestedGuardedChampionConfig,
     UncertaintyConfig,
 )
-from f1_prediction.modeling.backtest_tabular import BacktestStrategy, build_backtest_folds
+from f1_prediction.modeling.backtest_tabular import (
+    BacktestFold,
+    BacktestStrategy,
+    build_backtest_folds,
+)
 from f1_prediction.modeling.champion_policy import (
     ChampionSelectionMode,
     ChampionUncertaintyMethod,
@@ -28,6 +33,7 @@ from f1_prediction.modeling.champion_policy import (
     resolve_static_champion_policy,
     run_champion_backtest,
     select_nested_method,
+    select_season_aware_guarded_method,
     select_stabilized_nested_method,
 )
 
@@ -264,6 +270,152 @@ def test_stabilized_nested_never_uses_current_test_event() -> None:
 
     assert decision.selected == fallback
     assert decision.source_events == ["event-1"]
+
+
+def test_season_aware_candidate_not_eligible_for_fp1_or_fp2() -> None:
+    default = _static_fp3_method()
+    candidates = _season_aware_candidates(prior_folds=5, candidate_error=0.0, default_error=0.2)
+    fold = _season_aware_fold(fold_id=6, prior_same_season_events=5)
+
+    for checkpoint in ("after_fp1", "after_fp2"):
+        decision = select_season_aware_guarded_method(
+            candidates,
+            fold=fold,
+            checkpoint=checkpoint,
+            default_method=default,
+            settings=_season_aware_settings(min_folds=5, min_predictions=10),
+        )
+
+        assert decision.selected == default
+        assert decision.selection_reason == "not_applicable_checkpoint"
+        assert decision.selected_candidate is False
+
+
+def test_season_aware_candidate_blocked_by_cold_start() -> None:
+    default = _static_fp3_method()
+    candidates = _season_aware_candidates(prior_folds=5, candidate_error=0.0, default_error=0.2)
+    fold = _season_aware_fold(fold_id=6, prior_same_season_events=4)
+
+    decision = select_season_aware_guarded_method(
+        candidates,
+        fold=fold,
+        checkpoint="after_fp3",
+        default_method=default,
+        settings=_season_aware_settings(min_folds=5, min_predictions=10),
+    )
+
+    assert decision.selected == default
+    assert decision.selection_reason == "cold_start"
+    assert decision.fallback_reason == "season_aware_cold_start"
+
+
+def test_season_aware_candidate_blocked_by_insufficient_history() -> None:
+    default = _static_fp3_method()
+    candidates = _season_aware_candidates(prior_folds=3, candidate_error=0.0, default_error=0.2)
+    fold = _season_aware_fold(fold_id=6, prior_same_season_events=5)
+
+    decision = select_season_aware_guarded_method(
+        candidates,
+        fold=fold,
+        checkpoint="after_fp3",
+        default_method=default,
+        settings=_season_aware_settings(min_folds=5, min_predictions=10),
+    )
+
+    assert decision.selected == default
+    assert decision.selection_reason == "insufficient_candidate_history"
+    assert decision.prior_candidate_folds == 3
+
+
+def test_season_aware_candidate_blocked_when_margin_not_met() -> None:
+    default = _static_fp3_method()
+    candidates = _season_aware_candidates(prior_folds=5, candidate_error=0.17, default_error=0.2)
+    fold = _season_aware_fold(fold_id=6, prior_same_season_events=5)
+
+    decision = select_season_aware_guarded_method(
+        candidates,
+        fold=fold,
+        checkpoint="after_fp3",
+        default_method=default,
+        settings=_season_aware_settings(min_folds=5, min_predictions=10, margin=0.05),
+    )
+
+    assert decision.selected == default
+    assert decision.selection_reason == "margin_not_met"
+    assert decision.candidate_metric_value == pytest.approx(0.17)
+
+
+def test_season_aware_candidate_selected_after_prior_evidence() -> None:
+    default = _static_fp3_method()
+    candidates = _season_aware_candidates(prior_folds=5, candidate_error=0.05, default_error=0.2)
+    fold = _season_aware_fold(fold_id=6, prior_same_season_events=5)
+
+    decision = select_season_aware_guarded_method(
+        candidates,
+        fold=fold,
+        checkpoint="after_fp3",
+        default_method=default,
+        settings=_season_aware_settings(min_folds=5, min_predictions=10, margin=0.05),
+    )
+
+    assert decision.selected.temporal_weighting_policy == "current_season_only_with_prior"
+    assert decision.selected_candidate is True
+    assert decision.selection_reason == "selected_after_prior_evidence"
+    assert decision.candidate_metric_value == pytest.approx(0.05)
+    assert decision.default_metric_value == pytest.approx(0.2)
+
+
+def test_season_aware_candidate_uses_prior_folds_only() -> None:
+    default = _static_fp3_method()
+    candidates = pd.concat(
+        [
+            _season_aware_candidates(prior_folds=5, candidate_error=0.2, default_error=0.2),
+            _season_aware_candidates(
+                prior_folds=1,
+                candidate_error=0.0,
+                default_error=10.0,
+                start_fold=6,
+                event_prefix="current",
+            ),
+        ],
+        ignore_index=True,
+    )
+    fold = _season_aware_fold(fold_id=6, prior_same_season_events=5)
+
+    decision = select_season_aware_guarded_method(
+        candidates,
+        fold=fold,
+        checkpoint="after_fp3",
+        default_method=default,
+        settings=_season_aware_settings(min_folds=5, min_predictions=10, margin=0.05),
+    )
+
+    assert decision.selected == default
+    assert decision.selection_reason == "margin_not_met"
+    assert decision.source_events == []
+
+
+def test_season_aware_candidate_records_missing_weighted_artifact() -> None:
+    default = _static_fp3_method()
+    candidates = _season_aware_candidates(
+        prior_folds=5,
+        candidate_error=0.05,
+        default_error=0.2,
+        include_weighted=False,
+    )
+    fold = _season_aware_fold(fold_id=6, prior_same_season_events=5)
+
+    decision = select_season_aware_guarded_method(
+        candidates,
+        fold=fold,
+        checkpoint="after_fp3",
+        default_method=default,
+        settings=_season_aware_settings(min_folds=5, min_predictions=10, margin=0.05),
+    )
+
+    assert decision.selected == default
+    assert decision.season_aware_candidate_available is False
+    assert decision.selection_reason == "weighted_candidate_missing"
 
 
 def test_uncertainty_uses_only_prior_residuals() -> None:
@@ -574,6 +726,7 @@ def test_champion_mode_specific_outputs_coexist(tmp_path: Path) -> None:
         ChampionSelectionMode.nested,
         ChampionSelectionMode.stabilized_nested,
         ChampionSelectionMode.stabilized_nested_guarded,
+        ChampionSelectionMode.season_aware_nested_guarded,
     ):
         run_champion_backtest(
             config,
@@ -588,6 +741,9 @@ def test_champion_mode_specific_outputs_coexist(tmp_path: Path) -> None:
     assert (config.metrics_output_dir / "champion_nested_metrics.json").is_file()
     assert (config.metrics_output_dir / "champion_stabilized_nested_metrics.json").is_file()
     assert (config.metrics_output_dir / "champion_stabilized_nested_guarded_metrics.json").is_file()
+    assert (
+        config.metrics_output_dir / "champion_season_aware_nested_guarded_metrics.json"
+    ).is_file()
 
 
 def test_guarded_champion_backtest_records_guardrail_metadata(tmp_path: Path) -> None:
@@ -625,6 +781,45 @@ def test_guarded_champion_backtest_records_guardrail_metadata(tmp_path: Path) ->
     assert set(guarded["post_guardrail_selected_model_name"]) == {"random_forest"}
     fp3_predictions = predictions[predictions["checkpoint"].eq("after_fp3")]
     assert set(fp3_predictions["selected_model_name"]) == {"random_forest"}
+
+
+def test_season_aware_champion_backtest_records_metadata_and_keeps_guardrail(
+    tmp_path: Path,
+) -> None:
+    dataset = _dataset(8)
+    dataset_path = tmp_path / "dataset.parquet"
+    dataset.to_parquet(dataset_path, index=False)
+    config = _config(tmp_path)
+    folds = build_backtest_folds(dataset, BacktestStrategy.walk_forward, min_train_events=3)
+    _write_prediction_artifacts(
+        config.metrics_output_dir,
+        dataset,
+        folds,
+        include_best_valid_switch=True,
+    )
+
+    summary = run_champion_backtest(
+        config,
+        selection_mode=ChampionSelectionMode.season_aware_nested_guarded,
+        dataset_path=dataset_path,
+        min_events=5,
+        min_train_events=3,
+        model_config=_guarded_model_config(),
+    )
+
+    predictions = pd.read_parquet(summary.predictions_path)
+    selection = pd.read_parquet(summary.selection_path)
+    fp3_selection = selection[selection["checkpoint"].eq("after_fp3")]
+
+    assert (
+        config.metrics_output_dir / "champion_season_aware_nested_guarded_metrics.json"
+    ).is_file()
+    assert set(predictions[predictions["checkpoint"].eq("after_fp3")]["selected_model_name"]) == {
+        "random_forest"
+    }
+    assert "season_aware_selection_reason" in selection.columns
+    assert "weighted_candidate_missing" in set(fp3_selection["season_aware_selection_reason"])
+    assert fp3_selection["guardrail_applied"].astype(bool).any()
 
 
 def test_champion_backtest_skips_when_dataset_is_too_small(tmp_path: Path) -> None:
@@ -725,6 +920,80 @@ def _bucket_uncertainty(min_residual_count: int) -> UncertaintyConfig:
         predicted_gap_bucket=PredictedGapBucketUncertaintyConfig(
             min_residual_count=min_residual_count
         )
+    )
+
+
+def _season_aware_candidates(
+    *,
+    prior_folds: int,
+    candidate_error: float,
+    default_error: float,
+    start_fold: int = 1,
+    event_prefix: str = "event",
+    include_weighted: bool = True,
+) -> pd.DataFrame:
+    frames = []
+    fold_ids = [start_fold + offset for offset in range(prior_folds)]
+    if 6 not in fold_ids:
+        fold_ids.append(6)
+    for fold_id in fold_ids:
+        event = f"2024/{event_prefix}-{fold_id}"
+        for temporal_policy, error in (
+            ("uniform", default_error),
+            ("current_season_only_with_prior", candidate_error),
+        ):
+            if temporal_policy != "uniform" and not include_weighted:
+                continue
+            frame = pd.DataFrame(
+                {
+                    "fold_id": [fold_id, fold_id],
+                    "test_event": [event, event],
+                    "season": [2024, 2024],
+                    "event": [event, event],
+                    "event_slug": [f"{event_prefix}-{fold_id}", f"{event_prefix}-{fold_id}"],
+                    "checkpoint": ["after_fp3", "after_fp3"],
+                    "driver": ["NOR", "VER"],
+                    "team": ["McLaren", "Red Bull"],
+                    "quali_position": [1, 2],
+                    "quali_gap_to_pole_sec": [0.0, 1.0],
+                    "reached_q3": [1, 1],
+                    "predicted_quali_gap_to_pole_sec": [error, 1.0 + error],
+                    "predicted_quali_position": [1, 2],
+                    "predicted_reached_q3": [1, 1],
+                    "candidate_family": ["ablation", "ablation"],
+                    "model_name": ["random_forest", "random_forest"],
+                    "feature_group": ["base_plus_relative", "base_plus_relative"],
+                    "temporal_weighting_policy": [temporal_policy, temporal_policy],
+                }
+            )
+            frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _season_aware_fold(fold_id: int, prior_same_season_events: int) -> BacktestFold:
+    return BacktestFold(
+        fold_id=fold_id,
+        strategy="walk_forward",
+        test_event=f"2024/event-{fold_id}",
+        train_events=tuple(
+            f"2024/event-{index}" for index in range(1, prior_same_season_events + 1)
+        ),
+        train_rows=prior_same_season_events * 6,
+        test_rows=6,
+    )
+
+
+def _season_aware_settings(
+    *,
+    min_folds: int,
+    min_predictions: int,
+    margin: float = 0.05,
+) -> SeasonAwareNestedGuardedChampionConfig:
+    return SeasonAwareNestedGuardedChampionConfig(
+        min_current_season_prior_events=5,
+        min_prior_candidate_folds=min_folds,
+        min_prior_candidate_predictions=min_predictions,
+        improvement_margin_sec=margin,
     )
 
 
