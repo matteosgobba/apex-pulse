@@ -3,7 +3,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from f1_prediction.cli import app
-from f1_prediction.config import DataConfig, FeatureConfig, PushLapConfig
+from f1_prediction.config import ChampionPolicyConfig, DataConfig, FeatureConfig, PushLapConfig
 from f1_prediction.data.ingest import EventIngestionSummary
 from f1_prediction.data.season_builder import SeasonDatasetBuildSummary
 from f1_prediction.features.build import SessionFeatureBuildSummary
@@ -16,6 +16,9 @@ from f1_prediction.modeling.champion_policy import ChampionBacktestSummary
 from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
 from f1_prediction.modeling.policy_simulation import PolicySimulationSummary
 from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
+from f1_prediction.modeling.season_aware_candidate_audit import (
+    SeasonAwareCandidateAuditSummary,
+)
 from f1_prediction.modeling.season_aware_validation import SeasonAwareValidationSummary
 from f1_prediction.modeling.temporal_weighting_report import TemporalWeightingReportSummary
 
@@ -858,6 +861,32 @@ def test_season_aware_validation_report_command_is_registered(
 
     assert result.exit_code == 0
     assert "Season-aware validation report complete" in result.output
+
+
+def test_season_aware_candidate_audit_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    model_config = type("ModelConfigStub", (), {"champion_policy": ChampionPolicyConfig()})()
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: model_config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_season_aware_candidate_audit_report",
+        lambda data_config, settings: SeasonAwareCandidateAuditSummary(
+            status="partial",
+            summary_path=tmp_path / "metrics/season_aware_candidate_audit_summary.json",
+            table_paths=(tmp_path / "metrics/season_aware_candidate_eligibility_by_fold.csv",),
+            figure_paths=(tmp_path / "figures/season_aware_candidate_gate_failure_reasons.png",),
+            missing_inputs=("ablation_current_season_only_with_prior_predictions.parquet",),
+            generation_issues=(),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["season-aware-candidate-audit"])
+
+    assert result.exit_code == 0
+    assert "Season-aware candidate audit complete" in result.output
 
 
 def _config(project_root: Path) -> DataConfig:

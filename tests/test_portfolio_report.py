@@ -287,6 +287,46 @@ def test_portfolio_report_includes_season_aware_validation_when_available(
     assert "Season-aware validation" in model_card
 
 
+def test_portfolio_report_includes_season_aware_candidate_audit_when_available(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_minimal_artifacts(config.metrics_output_dir)
+    (config.metrics_output_dir / "season_aware_candidate_audit_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "candidate_availability": {"weighted_candidate_rows": 20},
+                "artifact_alignment_summary": {"unmatched_rows": 0},
+                "live_gate_summary": {
+                    "folds_evaluated": 4,
+                    "weighted_candidate_selection_rate": 0.0,
+                    "gate_failure_reasons": {"insufficient_candidate_history": 4},
+                },
+                "live_audit_metric_consistency_rate": 1.0,
+                "live_audit_selection_consistency_rate": 1.0,
+                "comparator_scope_description": "aligned_prior_rows_v1",
+                "sensitivity_analysis_summary": {"all_results_retrospective_simulation": True},
+                "recommendation": "retain_gates_and_collect_more_history",
+                "main_findings": ["Current live gates selected zero weighted candidates."],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = create_portfolio_report(config)
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+    model_card = summary.model_card_path.read_text(encoding="utf-8")
+
+    audit = payload["season_aware_candidate_audit_if_available"]
+    assert audit["live_gate_summary"]["weighted_candidate_selection_rate"] == 0.0
+    assert audit["live_audit_metric_consistency_rate"] == 1.0
+    assert audit["comparator_scope_description"] == "aligned_prior_rows_v1"
+    assert audit["recommendation"] == "retain_gates_and_collect_more_history"
+    assert any("Season-aware candidate audit" in item for item in payload["main_takeaways"])
+    assert "Season-aware candidate audit" in model_card
+
+
 def _metrics_payload(mode: str, mae: float, delta: float) -> dict[str, object]:
     return {
         "status": "complete",

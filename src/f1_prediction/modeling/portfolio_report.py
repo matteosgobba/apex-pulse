@@ -917,6 +917,11 @@ def _season_aware_candidate_audit_portfolio_summary(
         "candidate_availability": summary.get("candidate_availability", {}),
         "artifact_alignment_summary": summary.get("artifact_alignment_summary", {}),
         "live_gate_summary": summary.get("live_gate_summary", {}),
+        "live_audit_metric_consistency_rate": summary.get("live_audit_metric_consistency_rate"),
+        "live_audit_selection_consistency_rate": summary.get(
+            "live_audit_selection_consistency_rate"
+        ),
+        "comparator_scope_description": summary.get("comparator_scope_description"),
         "sensitivity_analysis_summary": summary.get("sensitivity_analysis_summary", {}),
         "recommendation": summary.get("recommendation", "retain_static_policy"),
         "main_findings": summary.get("main_findings", []),
@@ -1125,10 +1130,12 @@ def _season_aware_candidate_audit_card_text(value: object) -> str:
     if isinstance(live, dict) and live:
         selection_rate = live.get("weighted_candidate_selection_rate")
         folds = live.get("folds_evaluated")
+        consistency = value.get("live_audit_metric_consistency_rate")
         return (
             intro
             + f" Audited FP3 folds: {folds}; live candidate selection rate: "
-            + f"{_format_metric(selection_rate)}; recommendation: `{recommendation}`."
+            + f"{_format_metric(selection_rate)}; comparator consistency: "
+            + f"{_format_metric(consistency)}; recommendation: `{recommendation}`."
         )
     return intro + f" Recommendation: `{recommendation}`."
 

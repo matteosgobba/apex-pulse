@@ -123,6 +123,31 @@ class SeasonAwareChampionDecision:
     fallback_used: bool
     fallback_reason: str | None
     source_events: list[str]
+    metric_scope: PriorEvidenceComparison | None = None
+
+
+@dataclass(frozen=True)
+class PriorEvidenceComparison:
+    """Aligned prior-fold comparison between a candidate and default method."""
+
+    metric_scope_version: str
+    target_fold_id: int
+    checkpoint: str
+    candidate: ChampionMethodConfig
+    default: ChampionMethodConfig
+    prior_fold_ids: list[int]
+    prior_folds_used: int
+    prior_events_used: list[str]
+    prior_rows_used: int
+    candidate_rows_before_alignment: int
+    default_rows_before_alignment: int
+    dropped_candidate_rows: int
+    dropped_default_rows: int
+    candidate_mae: float | None
+    default_mae: float | None
+    improvement_sec: float | None
+    candidate_artifact_policy: str
+    default_artifact_policy: str
 
 
 def resolve_static_champion_policy(
@@ -146,9 +171,17 @@ def load_champion_candidates(
     expected_by_event = {fold.test_event: fold.fold_id for fold in expected_folds}
     artifacts = [
         ("walk_forward", metrics_dir / "walk_forward_predictions.parquet", "uniform"),
-        ("ablation", metrics_dir / "ablation_predictions.parquet", "uniform"),
         ("boosted", metrics_dir / "boosted_predictions.parquet", "uniform"),
     ]
+    if include_temporal_weighted:
+        artifacts.append(
+            (
+                "ablation",
+                metrics_dir / "ablation_uniform_predictions.parquet",
+                "uniform",
+            )
+        )
+    artifacts.append(("ablation", metrics_dir / "ablation_predictions.parquet", "uniform"))
     if include_temporal_weighted:
         artifacts.append(
             (
@@ -412,6 +445,7 @@ def select_season_aware_guarded_method(
         )
 
     candidate = settings.required_candidate
+    comparison_default = _season_aware_default_method(settings)
     current_rows = _method_rows(
         candidates[candidates["fold_id"].eq(fold.fold_id)],
         candidate,
@@ -426,15 +460,13 @@ def select_season_aware_guarded_method(
             reason="weighted_candidate_missing",
             fallback_reason="weighted_candidate_missing",
         )
-    if prior_same_season_events < settings.min_current_season_prior_events:
-        return _season_aware_decision(
-            selected=default_method,
-            current_season_prior_event_count=prior_same_season_events,
-            candidate_available=True,
-            reason="cold_start",
-            fallback_reason="season_aware_cold_start",
-        )
-
+    comparison = compare_prior_evidence(
+        candidates,
+        target_fold_id=fold.fold_id,
+        checkpoint=checkpoint,
+        candidate=candidate,
+        default=comparison_default,
+    )
     prior = candidates[candidates["fold_id"].lt(fold.fold_id)].copy()
     candidate_history = _method_rows(prior, candidate, checkpoint).dropna(
         subset=["quali_gap_to_pole_sec", "predicted_quali_gap_to_pole_sec"]
@@ -443,6 +475,19 @@ def select_season_aware_guarded_method(
         int(candidate_history["fold_id"].nunique()) if not candidate_history.empty else 0
     )
     candidate_predictions = int(len(candidate_history))
+    if prior_same_season_events < settings.min_current_season_prior_events:
+        return _season_aware_decision(
+            selected=default_method,
+            current_season_prior_event_count=prior_same_season_events,
+            candidate_available=True,
+            prior_candidate_folds=candidate_folds,
+            prior_candidate_predictions=candidate_predictions,
+            reason="cold_start",
+            fallback_reason="season_aware_cold_start",
+            source_events=comparison.prior_events_used,
+            metric_scope=comparison,
+        )
+
     if (
         candidate_folds < settings.min_prior_candidate_folds
         or candidate_predictions < settings.min_prior_candidate_predictions
@@ -455,25 +500,32 @@ def select_season_aware_guarded_method(
             prior_candidate_predictions=candidate_predictions,
             reason="insufficient_candidate_history",
             fallback_reason="insufficient_candidate_history",
+            source_events=comparison.prior_events_used,
+            metric_scope=comparison,
         )
 
-    default_history = _method_rows(prior, default_method, checkpoint).dropna(
-        subset=["quali_gap_to_pole_sec", "predicted_quali_gap_to_pole_sec"]
-    )
-    if default_history.empty:
+    if (
+        comparison.prior_folds_used < settings.min_prior_candidate_folds
+        or comparison.prior_rows_used < settings.min_prior_candidate_predictions
+        or comparison.candidate_mae is None
+        or comparison.default_mae is None
+        or comparison.improvement_sec is None
+    ):
         return _season_aware_decision(
             selected=default_method,
             current_season_prior_event_count=prior_same_season_events,
             candidate_available=True,
             prior_candidate_folds=candidate_folds,
             prior_candidate_predictions=candidate_predictions,
-            reason="default_retained",
-            fallback_reason="insufficient_default_history",
+            reason="insufficient_aligned_comparator_history",
+            fallback_reason="insufficient_aligned_comparator_history",
+            source_events=comparison.prior_events_used,
+            metric_scope=comparison,
         )
 
-    candidate_metric = _mean_absolute_error(candidate_history)
-    default_metric = _mean_absolute_error(default_history)
-    if candidate_metric <= default_metric - settings.improvement_margin_sec:
+    candidate_metric = comparison.candidate_mae
+    default_metric = comparison.default_mae
+    if comparison.improvement_sec >= settings.improvement_margin_sec:
         return _season_aware_decision(
             selected=candidate,
             current_season_prior_event_count=prior_same_season_events,
@@ -486,9 +538,8 @@ def select_season_aware_guarded_method(
             selected_candidate=True,
             reason="selected_after_prior_evidence",
             fallback_used=False,
-            source_events=sorted(
-                candidate_history["test_event"].dropna().astype(str).unique().tolist()
-            ),
+            source_events=comparison.prior_events_used,
+            metric_scope=comparison,
         )
     return _season_aware_decision(
         selected=default_method,
@@ -501,6 +552,121 @@ def select_season_aware_guarded_method(
         default_metric_value=default_metric,
         reason="margin_not_met",
         fallback_reason="margin_not_met",
+        source_events=comparison.prior_events_used,
+        metric_scope=comparison,
+    )
+
+
+def compare_prior_evidence(
+    candidates: pd.DataFrame,
+    *,
+    target_fold_id: int,
+    checkpoint: str,
+    candidate: ChampionMethodConfig,
+    default: ChampionMethodConfig,
+) -> PriorEvidenceComparison:
+    """Compare candidate/default MAE on identical strictly-prior prediction rows."""
+    prior = candidates[candidates["fold_id"].lt(target_fold_id)].copy()
+    candidate_rows = _method_rows(prior, candidate, checkpoint)
+    default_rows = _method_rows(prior, default, checkpoint)
+    valid_columns = ["quali_gap_to_pole_sec", "predicted_quali_gap_to_pole_sec"]
+    candidate_valid = candidate_rows.dropna(subset=valid_columns).copy()
+    default_valid = default_rows.dropna(subset=valid_columns).copy()
+    candidate_before = int(len(candidate_valid))
+    default_before = int(len(default_valid))
+    if candidate_valid.empty or default_valid.empty:
+        return PriorEvidenceComparison(
+            metric_scope_version="aligned_prior_rows_v1",
+            target_fold_id=target_fold_id,
+            checkpoint=checkpoint,
+            candidate=candidate,
+            default=default,
+            prior_fold_ids=[],
+            prior_folds_used=0,
+            prior_events_used=[],
+            prior_rows_used=0,
+            candidate_rows_before_alignment=candidate_before,
+            default_rows_before_alignment=default_before,
+            dropped_candidate_rows=candidate_before,
+            dropped_default_rows=default_before,
+            candidate_mae=None,
+            default_mae=None,
+            improvement_sec=None,
+            candidate_artifact_policy=candidate.temporal_weighting_policy or "uniform",
+            default_artifact_policy=default.temporal_weighting_policy or "uniform",
+        )
+
+    candidate_aligned = candidate_valid.rename(
+        columns={"predicted_quali_gap_to_pole_sec": "candidate_prediction"}
+    )
+    default_aligned = default_valid.rename(
+        columns={"predicted_quali_gap_to_pole_sec": "default_prediction"}
+    )
+    default_columns = [*PREDICTION_KEY_COLUMNS, "default_prediction"]
+    aligned = candidate_aligned.merge(
+        default_aligned.loc[:, default_columns],
+        on=list(PREDICTION_KEY_COLUMNS),
+        how="inner",
+    )
+    if aligned.empty:
+        prior_folds = 0
+        prior_fold_ids = []
+        prior_events: list[str] = []
+        candidate_mae = None
+        default_mae = None
+        improvement = None
+    else:
+        candidate_errors = (
+            aligned["candidate_prediction"].astype(float)
+            - aligned["quali_gap_to_pole_sec"].astype(float)
+        ).abs()
+        default_errors = (
+            aligned["default_prediction"].astype(float)
+            - aligned["quali_gap_to_pole_sec"].astype(float)
+        ).abs()
+        prior_fold_ids = sorted(
+            pd.to_numeric(aligned["fold_id"], errors="coerce")
+            .dropna()
+            .astype(int)
+            .unique()
+            .tolist()
+        )
+        prior_folds = int(len(prior_fold_ids))
+        prior_events = sorted(
+            aligned.get("test_event", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()
+        )
+        if not prior_events:
+            prior_events = sorted(
+                (aligned["season"].astype(str) + "/" + aligned["event_slug"].astype(str))
+                .dropna()
+                .unique()
+                .tolist()
+            )
+        candidate_mae = float(candidate_errors.mean())
+        default_mae = float(default_errors.mean())
+        improvement = default_mae - candidate_mae
+    aligned_candidate_keys = _key_set(aligned) if not aligned.empty else set()
+    candidate_keys = _key_set(candidate_valid)
+    default_keys = _key_set(default_valid)
+    return PriorEvidenceComparison(
+        metric_scope_version="aligned_prior_rows_v1",
+        target_fold_id=target_fold_id,
+        checkpoint=checkpoint,
+        candidate=candidate,
+        default=default,
+        prior_fold_ids=prior_fold_ids,
+        prior_folds_used=prior_folds,
+        prior_events_used=prior_events,
+        prior_rows_used=int(len(aligned)),
+        candidate_rows_before_alignment=candidate_before,
+        default_rows_before_alignment=default_before,
+        dropped_candidate_rows=len(candidate_keys - aligned_candidate_keys),
+        dropped_default_rows=len(default_keys - aligned_candidate_keys),
+        candidate_mae=candidate_mae,
+        default_mae=default_mae,
+        improvement_sec=improvement,
+        candidate_artifact_policy=candidate.temporal_weighting_policy or "uniform",
+        default_artifact_policy=default.temporal_weighting_policy or "uniform",
     )
 
 
@@ -519,6 +685,7 @@ def _season_aware_decision(
     fallback_used: bool = True,
     fallback_reason: str | None = None,
     source_events: list[str] | None = None,
+    metric_scope: PriorEvidenceComparison | None = None,
 ) -> SeasonAwareChampionDecision:
     return SeasonAwareChampionDecision(
         selected=selected,
@@ -534,6 +701,18 @@ def _season_aware_decision(
         fallback_used=fallback_used,
         fallback_reason=fallback_reason,
         source_events=source_events or [],
+        metric_scope=metric_scope,
+    )
+
+
+def _season_aware_default_method(
+    settings: SeasonAwareNestedGuardedChampionConfig,
+) -> ChampionMethodConfig:
+    candidate = settings.required_candidate
+    return ChampionMethodConfig(
+        family=candidate.family,
+        model_name=candidate.model_name,
+        feature_group=candidate.feature_group,
     )
 
 
@@ -1130,6 +1309,12 @@ def _method_rows(
     return rows
 
 
+def _key_set(frame: pd.DataFrame) -> set[tuple[object, ...]]:
+    if frame.empty:
+        return set()
+    return set(frame.loc[:, list(PREDICTION_KEY_COLUMNS)].itertuples(index=False, name=None))
+
+
 def _matches_guarded_default(
     method: ChampionMethodConfig,
     settings: StabilizedNestedGuardedChampionConfig,
@@ -1298,6 +1483,7 @@ def _season_aware_metadata(
     decision: SeasonAwareChampionDecision,
     settings: SeasonAwareNestedGuardedChampionConfig,
 ) -> dict[str, object]:
+    scope = decision.metric_scope
     return {
         "current_season_prior_event_count": decision.current_season_prior_event_count,
         "season_aware_candidate_available": decision.season_aware_candidate_available,
@@ -1311,7 +1497,30 @@ def _season_aware_metadata(
         "season_aware_selection_reason": decision.selection_reason,
         "temporal_weighting_policy": decision.selected.temporal_weighting_policy or "uniform",
         "temporal_weighting_config_summary": _temporal_weighting_config_summary(settings),
+        "metric_scope_version": scope.metric_scope_version if scope is not None else None,
+        "metric_scope_fold_ids": _metric_scope_fold_ids(scope),
+        "metric_scope_event_keys": scope.prior_events_used if scope is not None else [],
+        "metric_scope_aligned_rows": scope.prior_rows_used if scope is not None else 0,
+        "metric_scope_candidate_rows_before_alignment": (
+            scope.candidate_rows_before_alignment if scope is not None else 0
+        ),
+        "metric_scope_default_rows_before_alignment": (
+            scope.default_rows_before_alignment if scope is not None else 0
+        ),
+        "metric_scope_dropped_candidate_rows": (
+            scope.dropped_candidate_rows if scope is not None else 0
+        ),
+        "metric_scope_dropped_default_rows": scope.dropped_default_rows if scope is not None else 0,
+        "metric_scope_candidate_mae": scope.candidate_mae if scope is not None else None,
+        "metric_scope_default_mae": scope.default_mae if scope is not None else None,
+        "metric_scope_improvement_sec": scope.improvement_sec if scope is not None else None,
     }
+
+
+def _metric_scope_fold_ids(scope: PriorEvidenceComparison | None) -> list[int]:
+    if scope is None:
+        return []
+    return scope.prior_fold_ids
 
 
 def _temporal_weighting_config_summary(

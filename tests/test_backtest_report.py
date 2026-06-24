@@ -286,6 +286,36 @@ def test_backtest_report_includes_season_aware_champion_summary() -> None:
     )
 
 
+def test_backtest_report_includes_season_aware_candidate_audit_summary() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        season_aware_candidate_audit_summary={
+            "status": "complete",
+            "recommendation": "retain_gates_and_collect_more_history",
+            "live_gate_summary": {
+                "candidate_selected_folds": 0,
+                "gate_failure_reasons": {"insufficient_candidate_history": 3},
+            },
+            "artifact_alignment_summary": {"unmatched_rows": 0},
+            "live_audit_metric_consistency_rate": 1.0,
+            "live_audit_selection_consistency_rate": 0.75,
+            "comparator_scope_description": "aligned_prior_rows_v1",
+        },
+    )
+
+    assert report["season_aware_candidate_audit_available"] is True
+    assert (
+        report["season_aware_candidate_audit_recommendation"]
+        == "retain_gates_and_collect_more_history"
+    )
+    assert report["season_aware_candidate_gate_failure_summary"]["candidate_selected_folds"] == 0
+    assert report["season_aware_candidate_comparator_consistency_rate"] == 1.0
+    assert report["season_aware_candidate_selection_consistency_rate"] == 0.75
+    assert report["season_aware_candidate_comparator_scope"] == "aligned_prior_rows_v1"
+
+
 def _quality() -> dict[str, object]:
     return {
         "n_rows": 120,

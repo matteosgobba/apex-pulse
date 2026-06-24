@@ -14,7 +14,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from f1_prediction.config import DataConfig, SeasonAwareNestedGuardedChampionConfig
+from f1_prediction.config import (
+    ChampionMethodConfig,
+    DataConfig,
+    SeasonAwareNestedGuardedChampionConfig,
+)
+from f1_prediction.modeling.champion_policy import compare_prior_evidence
 from f1_prediction.modeling.season_aware_validation import (
     BOOTSTRAP_ITERATIONS,
     BOOTSTRAP_SEED,
@@ -81,6 +86,7 @@ def create_season_aware_candidate_audit_report(
     )
     eligibility = build_candidate_eligibility_by_fold(history, selection, settings)
     gate_failures = build_candidate_gate_failures(eligibility)
+    consistency = build_comparator_consistency_report(eligibility, selection)
     sensitivity, sensitivity_summary = build_candidate_gate_sensitivity(
         weighted,
         default,
@@ -95,6 +101,7 @@ def create_season_aware_candidate_audit_report(
         metrics_dir / "season_aware_candidate_alignment.csv",
         metrics_dir / "season_aware_candidate_gate_sensitivity.csv",
         metrics_dir / "season_aware_candidate_gate_sensitivity_summary.csv",
+        metrics_dir / "season_aware_candidate_comparator_consistency.csv",
     )
     eligibility.to_csv(table_paths[0], index=False)
     history.to_csv(table_paths[1], index=False)
@@ -102,11 +109,13 @@ def create_season_aware_candidate_audit_report(
     alignment.to_csv(table_paths[3], index=False)
     sensitivity.to_csv(table_paths[4], index=False)
     sensitivity_summary.to_csv(table_paths[5], index=False)
+    consistency.to_csv(table_paths[6], index=False)
 
     figure_paths, figure_issues = generate_candidate_audit_figures(
         figures_dir=figures_dir,
         eligibility=eligibility,
         history=history,
+        consistency=consistency,
         sensitivity_summary=sensitivity_summary,
     )
     summary_payload = build_candidate_audit_summary_payload(
@@ -115,6 +124,7 @@ def create_season_aware_candidate_audit_report(
         eligibility=eligibility,
         history=history,
         gate_failures=gate_failures,
+        consistency=consistency,
         sensitivity_summary=sensitivity_summary,
         generated_figures=figure_paths,
         figure_issues=figure_issues,
@@ -268,14 +278,30 @@ def build_candidate_history_by_fold(
     if not folds:
         return pd.DataFrame(columns=columns)
     rows: list[dict[str, object]] = []
+    candidate_frames = [frame for frame in (weighted, default) if not frame.empty]
+    combined_candidates = (
+        pd.concat(candidate_frames, ignore_index=True, sort=False)
+        if candidate_frames
+        else pd.DataFrame(columns=_prediction_columns())
+    )
     for fold in folds:
         fold_id = int(fold["fold_id"])
         weighted_current = _fold_rows(weighted, fold_id)
         default_current = _fold_rows(default, fold_id)
-        weighted_prior = _prior_rows(weighted, fold_id)
-        default_prior = _prior_rows(default, fold_id)
-        weighted_metric = _mean_abs_error(weighted_prior)
-        default_metric = _mean_abs_error(default_prior)
+        comparison = compare_prior_evidence(
+            combined_candidates,
+            target_fold_id=fold_id,
+            checkpoint=FP3_CHECKPOINT,
+            candidate=_candidate_method(settings),
+            default=_default_method(settings),
+        )
+        candidate_prior = _prior_rows(weighted, fold_id).dropna(
+            subset=["quali_gap_to_pole_sec", "predicted_quali_gap_to_pole_sec"]
+        )
+        candidate_prior_folds = (
+            int(candidate_prior["fold_id"].nunique()) if not candidate_prior.empty else 0
+        )
+        candidate_prior_predictions = int(len(candidate_prior))
         composition_row = _composition_row(composition, CURRENT_POLICY, fold_id)
         prior_count = _prior_event_count(fold, selection, composition_row)
         rows.append(
@@ -289,17 +315,31 @@ def build_candidate_history_by_fold(
                 "weighted_candidate_artifact_available": not weighted.empty,
                 "weighted_candidate_prediction_rows": int(len(weighted_current)),
                 "default_candidate_prediction_rows": int(len(default_current)),
-                "weighted_candidate_prior_folds": int(weighted_prior["fold_id"].nunique())
-                if not weighted_prior.empty
-                else 0,
-                "weighted_candidate_prior_predictions": int(len(weighted_prior)),
-                "default_prior_folds": int(default_prior["fold_id"].nunique())
-                if not default_prior.empty
-                else 0,
-                "default_prior_predictions": int(len(default_prior)),
-                "weighted_candidate_metric_value": weighted_metric,
-                "default_metric_value": default_metric,
-                "improvement_delta_sec": _safe_delta(weighted_metric, default_metric),
+                "weighted_candidate_prior_folds": candidate_prior_folds,
+                "weighted_candidate_prior_predictions": candidate_prior_predictions,
+                "default_prior_folds": comparison.prior_folds_used,
+                "default_prior_predictions": comparison.prior_rows_used,
+                "weighted_candidate_metric_value": comparison.candidate_mae,
+                "default_metric_value": comparison.default_mae,
+                "improvement_delta_sec": _safe_delta(
+                    comparison.candidate_mae,
+                    comparison.default_mae,
+                ),
+                "metric_scope_version": comparison.metric_scope_version,
+                "metric_scope_fold_ids": comparison.prior_fold_ids,
+                "metric_scope_event_keys": comparison.prior_events_used,
+                "metric_scope_aligned_rows": comparison.prior_rows_used,
+                "metric_scope_candidate_rows_before_alignment": (
+                    comparison.candidate_rows_before_alignment
+                ),
+                "metric_scope_default_rows_before_alignment": (
+                    comparison.default_rows_before_alignment
+                ),
+                "metric_scope_dropped_candidate_rows": comparison.dropped_candidate_rows,
+                "metric_scope_dropped_default_rows": comparison.dropped_default_rows,
+                "metric_scope_candidate_mae": comparison.candidate_mae,
+                "metric_scope_default_mae": comparison.default_mae,
+                "metric_scope_improvement_sec": comparison.improvement_sec,
                 "required_min_prior_candidate_folds": settings.min_prior_candidate_folds,
                 "required_min_prior_candidate_predictions": (
                     settings.min_prior_candidate_predictions
@@ -308,8 +348,9 @@ def build_candidate_history_by_fold(
                     settings.min_current_season_prior_events
                 ),
                 "required_improvement_margin_sec": settings.improvement_margin_sec,
-                "historical_source_events": _event_list(weighted_prior),
-                "current_event_in_history": _current_event_in_history(fold, weighted_prior),
+                "historical_source_events": "; ".join(comparison.prior_events_used),
+                "current_event_in_history": _current_event_key(fold)
+                in set(comparison.prior_events_used),
                 "effective_sample_size": composition_row.get("effective_sample_size"),
                 "same_season_weight_share": composition_row.get("same_season_weight_share"),
                 "prior_season_weight_share": composition_row.get("prior_season_weight_share"),
@@ -330,6 +371,7 @@ def build_candidate_eligibility_by_fold(
     selection_lookup = _selection_lookup(selection)
     rows: list[dict[str, object]] = []
     for item in history.to_dict("records"):
+        live = selection_lookup.get(int(item["fold_id"]), {})
         cold = int(item.get("current_season_prior_event_count") or 0) >= (
             settings.min_current_season_prior_events
         )
@@ -339,13 +381,14 @@ def build_candidate_eligibility_by_fold(
             and int(item.get("weighted_candidate_prior_predictions") or 0)
             >= settings.min_prior_candidate_predictions
         )
-        prediction_gate = bool(item.get("weighted_candidate_artifact_available")) and int(
-            item.get("weighted_candidate_prediction_rows") or 0
-        ) > 0
-        delta = item.get("improvement_delta_sec")
-        margin = pd.notna(delta) and float(delta) <= -settings.improvement_margin_sec
+        prediction_gate = (
+            bool(item.get("weighted_candidate_artifact_available"))
+            and int(item.get("weighted_candidate_prediction_rows") or 0) > 0
+        )
+        improvement = item.get("metric_scope_improvement_sec")
+        margin = pd.notna(improvement) and float(improvement) >= settings.improvement_margin_sec
         eligible = bool(cold and history_gate and prediction_gate and margin)
-        selected = bool(selection_lookup.get(int(item["fold_id"]), {}).get("selected", False))
+        selected = bool(live.get("selected", False))
         reason = _gate_reason(
             prediction_gate=prediction_gate,
             cold_start_gate=cold,
@@ -353,7 +396,7 @@ def build_candidate_eligibility_by_fold(
             margin_gate=margin,
             eligible=eligible,
             selected=selected,
-            selection_reason=selection_lookup.get(int(item["fold_id"]), {}).get("reason"),
+            selection_reason=live.get("reason"),
         )
         rows.append(
             {
@@ -364,6 +407,9 @@ def build_candidate_eligibility_by_fold(
                 "margin_gate_passed": margin,
                 "candidate_eligible": eligible,
                 "candidate_selected": selected,
+                "live_candidate_eligible": bool(live.get("eligible", False)),
+                "live_candidate_selected": selected,
+                "live_selection_reason": live.get("reason"),
                 "selection_reason": reason,
             }
         )
@@ -412,6 +458,72 @@ def build_candidate_gate_failures(eligibility: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
+def build_comparator_consistency_report(
+    eligibility: pd.DataFrame,
+    selection: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compare live selection metadata with the audit's canonical comparator metrics."""
+    columns = [
+        "fold_id",
+        "season",
+        "event",
+        "live_candidate_mae",
+        "audit_candidate_mae",
+        "live_default_mae",
+        "audit_default_mae",
+        "live_improvement_sec",
+        "audit_improvement_sec",
+        "candidate_metric_match",
+        "default_metric_match",
+        "improvement_match",
+        "live_selection_reason",
+        "audit_expected_selection_reason",
+        "selection_reason_match",
+    ]
+    if eligibility.empty:
+        return pd.DataFrame(columns=columns)
+    live = _selection_lookup(selection)
+    rows: list[dict[str, object]] = []
+    for item in eligibility.to_dict("records"):
+        fold_id = int(item["fold_id"])
+        live_item = live.get(fold_id, {})
+        live_candidate = live_item.get("metric_scope_candidate_mae")
+        if live_candidate is None:
+            live_candidate = live_item.get("candidate_metric")
+        live_default = live_item.get("metric_scope_default_mae")
+        if live_default is None:
+            live_default = live_item.get("default_metric")
+        live_improvement = live_item.get("metric_scope_improvement_sec")
+        if live_improvement is None:
+            live_improvement = _positive_improvement(live_candidate, live_default)
+        audit_candidate = item.get("metric_scope_candidate_mae")
+        audit_default = item.get("metric_scope_default_mae")
+        audit_improvement = item.get("metric_scope_improvement_sec")
+        live_reason = live_item.get("reason")
+        audit_reason = item.get("selection_reason")
+        rows.append(
+            {
+                "fold_id": fold_id,
+                "season": item.get("season"),
+                "event": item.get("event"),
+                "live_candidate_mae": live_candidate,
+                "audit_candidate_mae": audit_candidate,
+                "live_default_mae": live_default,
+                "audit_default_mae": audit_default,
+                "live_improvement_sec": live_improvement,
+                "audit_improvement_sec": audit_improvement,
+                "candidate_metric_match": _close_or_both_missing(live_candidate, audit_candidate),
+                "default_metric_match": _close_or_both_missing(live_default, audit_default),
+                "improvement_match": _close_or_both_missing(live_improvement, audit_improvement),
+                "live_selection_reason": live_reason,
+                "audit_expected_selection_reason": audit_reason,
+                "selection_reason_match": _normalized_selection_reason(live_reason)
+                == _normalized_selection_reason(audit_reason),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def build_candidate_gate_sensitivity(
     weighted: pd.DataFrame,
     default: pd.DataFrame,
@@ -444,8 +556,8 @@ def build_candidate_gate_sensitivity(
                 and int(item.get("weighted_candidate_prior_predictions") or 0) >= min_predictions
             )
             prediction_gate = int(item.get("weighted_candidate_prediction_rows") or 0) > 0
-            delta = item.get("improvement_delta_sec")
-            margin_gate = pd.notna(delta) and float(delta) <= -margin
+            improvement = item.get("metric_scope_improvement_sec")
+            margin_gate = pd.notna(improvement) and float(improvement) >= margin
             eligible = bool(cold and history_gate and prediction_gate and margin_gate)
             simulated = (
                 current["candidate_abs_error_gap_sec"]
@@ -547,6 +659,7 @@ def build_candidate_audit_summary_payload(
     eligibility: pd.DataFrame,
     history: pd.DataFrame,
     gate_failures: pd.DataFrame,
+    consistency: pd.DataFrame,
     sensitivity_summary: pd.DataFrame,
     generated_figures: list[Path],
     figure_issues: list[str],
@@ -555,20 +668,31 @@ def build_candidate_audit_summary_payload(
     missing = list(artifacts["missing_inputs"])
     schema_issues = list(artifacts["schema_issues"])
     available = not eligibility.empty and not artifacts["weighted_candidate_predictions"].empty
-    gate_counts = (
+    audited_gate_counts = (
         gate_failures["failure_reason"].astype(str).value_counts().to_dict()
         if not gate_failures.empty
         else {}
+    )
+    live_gate_counts = (
+        eligibility["live_selection_reason"].dropna().astype(str).value_counts().to_dict()
+        if "live_selection_reason" in eligibility and not eligibility.empty
+        else {}
+    )
+    live_selected = int(eligibility["candidate_selected"].sum()) if not eligibility.empty else 0
+    audited_eligible = int(eligibility["candidate_eligible"].sum()) if not eligibility.empty else 0
+    eligible_not_selected = (
+        int((eligibility["candidate_eligible"] & ~eligibility["candidate_selected"]).sum())
+        if not eligibility.empty
+        else 0
     )
     recommendation = _audit_recommendation(
         missing_inputs=missing,
         schema_issues=schema_issues,
         alignment=alignment,
         eligibility=eligibility,
-        gate_counts=gate_counts,
+        gate_counts=audited_gate_counts,
+        eligible_not_selected=eligible_not_selected,
     )
-    live_selected = int(eligibility["candidate_selected"].sum()) if not eligibility.empty else 0
-    eligible = int(eligibility["candidate_eligible"].sum()) if not eligibility.empty else 0
     return {
         "status": "complete" if available else "partial",
         "inputs_available": artifacts["inputs_available"],
@@ -582,23 +706,39 @@ def build_candidate_audit_summary_payload(
         "artifact_alignment_summary": _alignment_summary(alignment),
         "live_gate_summary": {
             "folds_evaluated": int(len(eligibility)),
-            "candidate_eligible_folds": eligible,
+            "audited_candidate_eligible_folds": audited_eligible,
+            "live_candidate_eligible_folds": int(eligibility["live_candidate_eligible"].sum())
+            if "live_candidate_eligible" in eligibility
+            else 0,
             "candidate_selected_folds": live_selected,
+            "audited_eligible_not_selected_folds": eligible_not_selected,
             "weighted_candidate_selection_rate": float(live_selected / len(eligibility))
             if len(eligibility)
             else None,
-            "gate_failure_reasons": gate_counts,
-            "zero_selection_expected": bool(live_selected == 0 and not schema_issues and available),
+            "live_gate_failure_reasons": live_gate_counts,
+            "audited_gate_failure_reasons": audited_gate_counts,
+            "zero_selection_expected": bool(
+                live_selected == 0 and audited_eligible == 0 and not schema_issues and available
+            ),
         },
         "history_summary": _history_summary(history),
         "sensitivity_analysis_summary": _sensitivity_summary(sensitivity_summary),
+        "live_audit_metric_consistency_rate": _metric_consistency_rate(consistency),
+        "live_audit_selection_consistency_rate": _selection_consistency_rate(consistency),
+        "mismatched_folds_before_fix_if_available": eligible_not_selected,
+        "mismatched_folds_after_fix": _mismatched_folds_after_fix(consistency),
+        "comparator_scope_description": (
+            "aligned_prior_rows_v1: strictly prior folds, identical "
+            "fold/season/event/checkpoint/driver rows, valid target and prediction only"
+        ),
         "main_findings": _main_findings(
             eligibility,
             alignment,
-            gate_counts,
+            audited_gate_counts,
             missing,
             schema_issues,
             sensitivity_summary,
+            eligible_not_selected=eligible_not_selected,
         ),
         "recommendation": recommendation,
         "generated_at": _utc_now(),
@@ -611,6 +751,7 @@ def build_candidate_audit_summary_payload(
                 "reports/metrics/season_aware_candidate_alignment.csv",
                 "reports/metrics/season_aware_candidate_gate_sensitivity.csv",
                 "reports/metrics/season_aware_candidate_gate_sensitivity_summary.csv",
+                "reports/metrics/season_aware_candidate_comparator_consistency.csv",
             ],
             "figures": [_relative_report_path(path) for path in generated_figures],
         },
@@ -621,6 +762,7 @@ def build_candidate_audit_summary_payload(
             "season_aware_candidate_gate_failures": int(len(gate_failures)),
             "season_aware_candidate_alignment": int(len(alignment)),
             "season_aware_candidate_gate_sensitivity_summary": int(len(sensitivity_summary)),
+            "season_aware_candidate_comparator_consistency": int(len(consistency)),
         },
     }
 
@@ -630,6 +772,7 @@ def generate_candidate_audit_figures(
     figures_dir: Path,
     eligibility: pd.DataFrame,
     history: pd.DataFrame,
+    consistency: pd.DataFrame,
     sensitivity_summary: pd.DataFrame,
 ) -> tuple[list[Path], list[str]]:
     """Generate static matplotlib figures for the candidate audit."""
@@ -648,38 +791,24 @@ def generate_candidate_audit_figures(
 
     specs = (
         (
-            "season_aware_candidate_gate_failure_reasons.png",
-            lambda path: _plot_gate_failures(plt, eligibility, path),
+            "season_aware_comparator_live_vs_audit_mae.png",
+            lambda path: _plot_live_vs_audit_mae(plt, consistency, path),
         ),
         (
-            "season_aware_candidate_history_growth.png",
-            lambda path: _plot_history_growth(plt, history, path),
+            "season_aware_comparator_improvement_delta.png",
+            lambda path: _plot_comparator_improvement(plt, consistency, path),
         ),
         (
-            "season_aware_candidate_metric_delta_over_folds.png",
+            "season_aware_comparator_consistency_by_fold.png",
+            lambda path: _plot_comparator_consistency(plt, consistency, path),
+        ),
+        (
+            "season_aware_candidate_selection_after_fix.png",
+            lambda path: _plot_selection_after_fix(plt, eligibility, path),
+        ),
+        (
+            "season_aware_candidate_fp3_delta_after_fix.png",
             lambda path: _plot_metric_delta(plt, history, path),
-        ),
-        (
-            "season_aware_candidate_sensitivity_selection_rate.png",
-            lambda path: _plot_sensitivity(
-                plt,
-                sensitivity_summary,
-                path,
-                value_column="candidate_selection_rate",
-                ylabel="Selection rate",
-                title="Retrospective gate sensitivity selection rate",
-            ),
-        ),
-        (
-            "season_aware_candidate_sensitivity_fp3_mae.png",
-            lambda path: _plot_sensitivity(
-                plt,
-                sensitivity_summary,
-                path,
-                value_column="fp3_retrospective_mae",
-                ylabel="FP3 MAE (sec)",
-                title="Retrospective gate sensitivity FP3 MAE",
-            ),
         ),
     )
     paths: list[Path] = []
@@ -729,6 +858,7 @@ def _read_predictions(
         return pd.DataFrame(columns=_prediction_columns())
     candidate["candidate_family"] = family
     candidate["training_policy"] = training_policy
+    candidate["temporal_weighting_policy"] = training_policy
     candidate["candidate_model_name"] = candidate["model_name"].astype(str)
     candidate["candidate_feature_group"] = (
         candidate["feature_group"].astype("string").fillna("").astype(str)
@@ -739,6 +869,10 @@ def _read_predictions(
         candidate["quali_position"] = pd.NA
     if "team" not in candidate:
         candidate["team"] = pd.NA
+    if "test_event" not in candidate:
+        candidate["test_event"] = (
+            candidate["season"].astype(str) + "/" + candidate["event_slug"].astype(str)
+        )
     result = candidate.loc[:, _prediction_columns()].copy()
     result["fold_id"] = pd.to_numeric(result["fold_id"], errors="coerce").astype("Int64")
     result = result[result["fold_id"].notna()].copy()
@@ -843,7 +977,9 @@ def _aligned_current_predictions(weighted: pd.DataFrame, default: pd.DataFrame) 
     weighted_current = weighted.rename(
         columns={"predicted_quali_gap_to_pole_sec": "candidate_prediction"}
     )
-    default_current = default.rename(columns={"predicted_quali_gap_to_pole_sec": "static_prediction"})
+    default_current = default.rename(
+        columns={"predicted_quali_gap_to_pole_sec": "static_prediction"}
+    )
     merged = weighted_current.merge(
         default_current.loc[:, [*KEY_COLUMNS, "static_prediction"]],
         on=list(KEY_COLUMNS),
@@ -855,8 +991,7 @@ def _aligned_current_predictions(weighted: pd.DataFrame, default: pd.DataFrame) 
         merged["static_prediction"].astype(float) - merged["quali_gap_to_pole_sec"].astype(float)
     ).abs()
     merged["candidate_abs_error_gap_sec"] = (
-        merged["candidate_prediction"].astype(float)
-        - merged["quali_gap_to_pole_sec"].astype(float)
+        merged["candidate_prediction"].astype(float) - merged["quali_gap_to_pole_sec"].astype(float)
     ).abs()
     return merged.loc[:, columns]
 
@@ -875,9 +1010,28 @@ def _selection_lookup(selection: pd.DataFrame) -> dict[int, dict[str, object]]:
             selected = True
         lookup[fold_id] = {
             "selected": selected,
+            "eligible": bool(row.get("season_aware_candidate_eligible", False)),
             "reason": row.get("season_aware_selection_reason") or row.get("fallback_reason"),
+            "candidate_metric": row.get("season_aware_candidate_metric_value"),
+            "default_metric": row.get("season_aware_default_metric_value"),
+            "metric_scope_candidate_mae": row.get("metric_scope_candidate_mae"),
+            "metric_scope_default_mae": row.get("metric_scope_default_mae"),
+            "metric_scope_improvement_sec": row.get("metric_scope_improvement_sec"),
         }
     return lookup
+
+
+def _candidate_method(settings: SeasonAwareNestedGuardedChampionConfig) -> ChampionMethodConfig:
+    return settings.required_candidate
+
+
+def _default_method(settings: SeasonAwareNestedGuardedChampionConfig) -> ChampionMethodConfig:
+    candidate = settings.required_candidate
+    return ChampionMethodConfig(
+        family=candidate.family,
+        model_name=candidate.model_name,
+        feature_group=candidate.feature_group,
+    )
 
 
 def _composition_row(
@@ -932,6 +1086,12 @@ def _safe_delta(value: object, baseline: object) -> float | None:
     if value is None or baseline is None or pd.isna(value) or pd.isna(baseline):
         return None
     return float(value) - float(baseline)
+
+
+def _positive_improvement(candidate: object, default: object) -> float | None:
+    if candidate is None or default is None or pd.isna(candidate) or pd.isna(default):
+        return None
+    return float(default) - float(candidate)
 
 
 def _gate_reason(
@@ -1006,6 +1166,7 @@ def _audit_recommendation(
     alignment: pd.DataFrame,
     eligibility: pd.DataFrame,
     gate_counts: dict[str, int],
+    eligible_not_selected: int = 0,
 ) -> str:
     required_missing = {WEIGHTED_PREDICTIONS, UNIFORM_PREDICTIONS, WEIGHTED_METRICS}
     if schema_issues or required_missing.intersection(missing_inputs):
@@ -1015,8 +1176,11 @@ def _audit_recommendation(
         or alignment["unmatched_default_candidate_rows"].fillna(0).astype(int).sum() > 0
     ):
         return "artifact_pipeline_fix_required"
+    if eligible_not_selected > 0:
+        return "artifact_pipeline_fix_required"
     if eligibility.empty or int(eligibility["candidate_eligible"].sum()) == 0:
-        if any(reason in gate_counts for reason in ("season_aware_cold_start", "insufficient_candidate_history")):
+        history_reasons = ("season_aware_cold_start", "insufficient_candidate_history")
+        if any(reason in gate_counts for reason in history_reasons):
             return "retain_gates_and_collect_more_history"
         return "retain_static_policy"
     return "candidate_eligible_for_future_broader_validation"
@@ -1089,6 +1253,35 @@ def _sensitivity_summary(summary: pd.DataFrame) -> dict[str, object]:
     }
 
 
+def _metric_consistency_rate(consistency: pd.DataFrame) -> float | None:
+    if consistency.empty:
+        return None
+    matches = (
+        consistency["candidate_metric_match"].astype(bool)
+        & consistency["default_metric_match"].astype(bool)
+        & consistency["improvement_match"].astype(bool)
+    )
+    return float(matches.mean())
+
+
+def _selection_consistency_rate(consistency: pd.DataFrame) -> float | None:
+    if consistency.empty:
+        return None
+    return float(consistency["selection_reason_match"].astype(bool).mean())
+
+
+def _mismatched_folds_after_fix(consistency: pd.DataFrame) -> list[int]:
+    if consistency.empty:
+        return []
+    matches = (
+        consistency["candidate_metric_match"].astype(bool)
+        & consistency["default_metric_match"].astype(bool)
+        & consistency["improvement_match"].astype(bool)
+        & consistency["selection_reason_match"].astype(bool)
+    )
+    return [int(value) for value in consistency.loc[~matches, "fold_id"].tolist()]
+
+
 def _main_findings(
     eligibility: pd.DataFrame,
     alignment: pd.DataFrame,
@@ -1096,14 +1289,19 @@ def _main_findings(
     missing: list[str],
     schema_issues: list[str],
     sensitivity_summary: pd.DataFrame,
+    eligible_not_selected: int = 0,
 ) -> list[str]:
     findings: list[str] = []
     if missing:
         findings.append("Candidate audit is partial because required saved artifacts are missing.")
     if schema_issues:
-        findings.append("Candidate artifact schema mismatches prevent a complete eligibility audit.")
+        findings.append(
+            "Candidate artifact schema mismatches prevent a complete eligibility audit."
+        )
     if not alignment.empty and int(alignment["unmatched_default_candidate_rows"].sum()) == 0:
-        findings.append("Weighted and default FP3 candidate rows align on identical fold/event/driver keys.")
+        findings.append(
+            "Weighted and default FP3 candidate rows align on identical fold/event/driver keys."
+        )
     if not eligibility.empty:
         selected = int(eligibility["candidate_selected"].sum())
         eligible = int(eligibility["candidate_eligible"].sum())
@@ -1111,6 +1309,11 @@ def _main_findings(
             f"Live season-aware gates selected the weighted candidate in {selected} of "
             f"{len(eligibility)} FP3 folds; {eligible} folds passed all audited gates."
         )
+        if eligible_not_selected:
+            findings.append(
+                f"{eligible_not_selected} audited-eligible FP3 folds were not selected by the "
+                "live records, indicating a candidate/default metric-scope consistency issue."
+            )
     if gate_counts:
         reason, count = max(gate_counts.items(), key=lambda item: item[1])
         findings.append(f"The most common audited blocking reason is `{reason}` ({count} rows).")
@@ -1178,6 +1381,25 @@ def _current_event_in_history(fold: dict[str, object], prior: pd.DataFrame) -> b
     same_season = prior["season"].astype(str).eq(str(fold.get("season")))
     same_event = prior["event_slug"].astype(str).eq(str(fold.get("event_slug")))
     return bool((same_season & same_event).any())
+
+
+def _current_event_key(fold: dict[str, object]) -> str:
+    return f"{fold.get('season')}/{fold.get('event_slug')}"
+
+
+def _close_or_both_missing(left: object, right: object, *, tolerance: float = 1e-9) -> bool:
+    if (left is None or pd.isna(left)) and (right is None or pd.isna(right)):
+        return True
+    if left is None or right is None or pd.isna(left) or pd.isna(right):
+        return False
+    return abs(float(left) - float(right)) <= tolerance
+
+
+def _normalized_selection_reason(value: object) -> str:
+    aliases = {
+        "cold_start": "season_aware_cold_start",
+    }
+    return aliases.get(str(value), str(value))
 
 
 def _mean_numeric(values: pd.Series) -> float | None:
@@ -1256,19 +1478,98 @@ def _plot_sensitivity(
     return True
 
 
+def _plot_live_vs_audit_mae(plt: Any, consistency: pd.DataFrame, path: Path) -> bool:
+    if consistency.empty:
+        return False
+    frame = consistency.sort_values("fold_id")
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.plot(frame["fold_id"], frame["audit_candidate_mae"], marker="o", label="audit candidate")
+    ax.plot(frame["fold_id"], frame["live_candidate_mae"], marker=".", label="live candidate")
+    ax.plot(frame["fold_id"], frame["audit_default_mae"], marker="o", label="audit default")
+    ax.plot(frame["fold_id"], frame["live_default_mae"], marker=".", label="live default")
+    ax.set_title("Season-aware comparator live vs audit MAE")
+    ax.set_xlabel("Fold")
+    ax.set_ylabel("Prior MAE (sec)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return True
+
+
+def _plot_comparator_improvement(plt: Any, consistency: pd.DataFrame, path: Path) -> bool:
+    if consistency.empty:
+        return False
+    frame = consistency.sort_values("fold_id")
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.axhline(0.0, color="#555555", linewidth=1)
+    ax.plot(frame["fold_id"], frame["audit_improvement_sec"], marker="o", label="audit")
+    ax.plot(frame["fold_id"], frame["live_improvement_sec"], marker=".", label="live")
+    ax.set_title("Season-aware comparator improvement")
+    ax.set_xlabel("Fold")
+    ax.set_ylabel("Default MAE minus candidate MAE (sec)")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return True
+
+
+def _plot_comparator_consistency(plt: Any, consistency: pd.DataFrame, path: Path) -> bool:
+    if consistency.empty:
+        return False
+    frame = consistency.sort_values("fold_id").copy()
+    frame["metric_match"] = (
+        frame["candidate_metric_match"].astype(bool)
+        & frame["default_metric_match"].astype(bool)
+        & frame["improvement_match"].astype(bool)
+    ).astype(int)
+    fig, ax = plt.subplots(figsize=(8, 3.5))
+    ax.bar(frame["fold_id"], frame["metric_match"], color="#4c78a8")
+    ax.set_title("Comparator metric consistency by fold")
+    ax.set_xlabel("Fold")
+    ax.set_ylabel("Metric match")
+    ax.set_ylim(0, 1.1)
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return True
+
+
+def _plot_selection_after_fix(plt: Any, eligibility: pd.DataFrame, path: Path) -> bool:
+    if eligibility.empty:
+        return False
+    counts = eligibility["selection_reason"].astype(str).value_counts()
+    if counts.empty:
+        return False
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    counts.sort_values().plot(kind="barh", ax=ax, color="#59A14F")
+    ax.set_title("Season-aware candidate selection reasons after comparator fix")
+    ax.set_xlabel("FP3 folds")
+    ax.set_ylabel("")
+    fig.tight_layout()
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    return True
+
+
 def _prediction_columns() -> list[str]:
     return [
         *KEY_COLUMNS,
         "event",
         "team",
+        "test_event",
         "quali_gap_to_pole_sec",
         "predicted_quali_gap_to_pole_sec",
         "quali_position",
         "predicted_quali_position",
         "candidate_family",
+        "model_name",
+        "feature_group",
         "candidate_model_name",
         "candidate_feature_group",
         "training_policy",
+        "temporal_weighting_policy",
     ]
 
 
@@ -1338,6 +1639,17 @@ def _history_columns() -> list[str]:
         "weighted_candidate_metric_value",
         "default_metric_value",
         "improvement_delta_sec",
+        "metric_scope_version",
+        "metric_scope_fold_ids",
+        "metric_scope_event_keys",
+        "metric_scope_aligned_rows",
+        "metric_scope_candidate_rows_before_alignment",
+        "metric_scope_default_rows_before_alignment",
+        "metric_scope_dropped_candidate_rows",
+        "metric_scope_dropped_default_rows",
+        "metric_scope_candidate_mae",
+        "metric_scope_default_mae",
+        "metric_scope_improvement_sec",
         "required_min_prior_candidate_folds",
         "required_min_prior_candidate_predictions",
         "required_min_current_season_prior_events",
@@ -1359,6 +1671,9 @@ def _eligibility_columns() -> list[str]:
         "margin_gate_passed",
         "candidate_eligible",
         "candidate_selected",
+        "live_candidate_eligible",
+        "live_candidate_selected",
+        "live_selection_reason",
         "selection_reason",
     ]
 

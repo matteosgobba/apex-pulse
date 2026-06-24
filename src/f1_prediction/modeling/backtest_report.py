@@ -649,6 +649,9 @@ def _season_aware_candidate_audit_summary(summary: dict[str, Any] | None) -> dic
             "season_aware_candidate_audit_recommendation": "retain_static_policy",
             "season_aware_candidate_gate_failure_summary": {},
             "season_aware_candidate_artifact_alignment_summary": {},
+            "season_aware_candidate_comparator_consistency_rate": None,
+            "season_aware_candidate_selection_consistency_rate": None,
+            "season_aware_candidate_comparator_scope": None,
         }
     return {
         "season_aware_candidate_audit_available": bool(summary.get("status") != "missing_inputs"),
@@ -664,6 +667,13 @@ def _season_aware_candidate_audit_summary(summary: dict[str, Any] | None) -> dic
             "artifact_alignment_summary",
             {},
         ),
+        "season_aware_candidate_comparator_consistency_rate": summary.get(
+            "live_audit_metric_consistency_rate"
+        ),
+        "season_aware_candidate_selection_consistency_rate": summary.get(
+            "live_audit_selection_consistency_rate"
+        ),
+        "season_aware_candidate_comparator_scope": summary.get("comparator_scope_description"),
     }
 
 

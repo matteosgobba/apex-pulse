@@ -29,6 +29,7 @@ from f1_prediction.modeling.champion_policy import (
     apply_stabilized_nested_guardrail,
     assign_predicted_gap_bucket,
     build_champion_metrics_payload,
+    compare_prior_evidence,
     is_practice_baseline_method,
     resolve_static_champion_policy,
     run_champion_backtest,
@@ -291,6 +292,74 @@ def test_season_aware_candidate_not_eligible_for_fp1_or_fp2() -> None:
         assert decision.selected_candidate is False
 
 
+def test_canonical_prior_evidence_comparator_uses_strictly_prior_aligned_rows() -> None:
+    candidate = ChampionMethodConfig(
+        "ablation",
+        "random_forest",
+        "base_plus_relative",
+        "current_season_only_with_prior",
+    )
+    default = _static_fp3_method()
+    candidates = pd.concat(
+        [
+            _season_aware_candidates(prior_folds=5, candidate_error=0.05, default_error=0.2),
+            _season_aware_candidates(
+                prior_folds=1,
+                candidate_error=10.0,
+                default_error=0.0,
+                start_fold=6,
+                event_prefix="current",
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    comparison = compare_prior_evidence(
+        candidates,
+        target_fold_id=6,
+        checkpoint="after_fp3",
+        candidate=candidate,
+        default=default,
+    )
+
+    assert comparison.prior_fold_ids == [1, 2, 3, 4, 5]
+    assert comparison.prior_rows_used == 10
+    assert comparison.candidate_mae == pytest.approx(0.05)
+    assert comparison.default_mae == pytest.approx(0.2)
+    assert comparison.improvement_sec == pytest.approx(0.15)
+
+
+def test_canonical_prior_evidence_comparator_counts_unmatched_rows() -> None:
+    candidate = ChampionMethodConfig(
+        "ablation",
+        "random_forest",
+        "base_plus_relative",
+        "current_season_only_with_prior",
+    )
+    default = _static_fp3_method()
+    candidates = _season_aware_candidates(prior_folds=5, candidate_error=0.05, default_error=0.2)
+    default_ver = (
+        candidates["temporal_weighting_policy"].eq("uniform")
+        & candidates["fold_id"].eq(1)
+        & candidates["driver"].eq("VER")
+    )
+    candidates = candidates[~default_ver].copy()
+
+    comparison = compare_prior_evidence(
+        candidates,
+        target_fold_id=6,
+        checkpoint="after_fp3",
+        candidate=candidate,
+        default=default,
+    )
+
+    assert comparison.candidate_rows_before_alignment == 10
+    assert comparison.default_rows_before_alignment == 9
+    assert comparison.prior_rows_used == 9
+    assert comparison.dropped_candidate_rows == 1
+    assert comparison.dropped_default_rows == 0
+
+
 def test_season_aware_candidate_blocked_by_cold_start() -> None:
     default = _static_fp3_method()
     candidates = _season_aware_candidates(prior_folds=5, candidate_error=0.0, default_error=0.2)
@@ -343,6 +412,8 @@ def test_season_aware_candidate_blocked_when_margin_not_met() -> None:
     assert decision.selected == default
     assert decision.selection_reason == "margin_not_met"
     assert decision.candidate_metric_value == pytest.approx(0.17)
+    assert decision.metric_scope is not None
+    assert decision.metric_scope.improvement_sec == pytest.approx(0.03)
 
 
 def test_season_aware_candidate_selected_after_prior_evidence() -> None:
@@ -363,6 +434,31 @@ def test_season_aware_candidate_selected_after_prior_evidence() -> None:
     assert decision.selection_reason == "selected_after_prior_evidence"
     assert decision.candidate_metric_value == pytest.approx(0.05)
     assert decision.default_metric_value == pytest.approx(0.2)
+    assert decision.metric_scope is not None
+    assert decision.metric_scope.prior_rows_used == 10
+
+
+def test_season_aware_candidate_rejected_with_insufficient_aligned_comparator_history() -> None:
+    default = _static_fp3_method()
+    candidates = _season_aware_candidates(prior_folds=5, candidate_error=0.05, default_error=0.2)
+    prior_default = candidates["temporal_weighting_policy"].eq("uniform") & candidates[
+        "fold_id"
+    ].lt(6)
+    candidates = candidates[~prior_default].copy()
+    fold = _season_aware_fold(fold_id=6, prior_same_season_events=5)
+
+    decision = select_season_aware_guarded_method(
+        candidates,
+        fold=fold,
+        checkpoint="after_fp3",
+        default_method=default,
+        settings=_season_aware_settings(min_folds=5, min_predictions=10, margin=0.05),
+    )
+
+    assert decision.selected == default
+    assert decision.selection_reason == "insufficient_aligned_comparator_history"
+    assert decision.metric_scope is not None
+    assert decision.metric_scope.prior_rows_used == 0
 
 
 def test_season_aware_candidate_uses_prior_folds_only() -> None:
@@ -392,7 +488,8 @@ def test_season_aware_candidate_uses_prior_folds_only() -> None:
 
     assert decision.selected == default
     assert decision.selection_reason == "margin_not_met"
-    assert decision.source_events == []
+    assert decision.source_events == [f"2024/event-{fold_id}" for fold_id in range(1, 6)]
+    assert "2024/current-6" not in decision.source_events
 
 
 def test_season_aware_candidate_records_missing_weighted_artifact() -> None:
