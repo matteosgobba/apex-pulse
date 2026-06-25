@@ -316,6 +316,53 @@ def test_backtest_report_includes_season_aware_candidate_audit_summary() -> None
     assert report["season_aware_candidate_comparator_scope"] == "aligned_prior_rows_v1"
 
 
+def test_backtest_report_includes_season_aware_policy_forensics_summary() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        season_aware_policy_forensics_summary={
+            "status": "complete",
+            "recommendation": "retain_static_policy",
+            "reconstruction_summary": {"all_folds_reconstructed": True},
+            "selected_fold_summary": {"selected_folds": 15},
+            "guardrail_simulation_summary": {"policies_tested": ["static_lock"]},
+        },
+    )
+
+    assert report["season_aware_policy_forensics_available"] is True
+    assert report["season_aware_policy_reconstruction_summary"]["all_folds_reconstructed"] is True
+    assert report["season_aware_policy_selected_fold_summary"]["selected_folds"] == 15
+    assert report["season_aware_policy_forensics_recommendation"] == "retain_static_policy"
+
+
+def test_backtest_report_includes_champion_source_lineage_summary() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        champion_source_lineage_summary={
+            "status": "complete",
+            "root_cause_classification": "stale_artifact_generation_order",
+            "static_source_verification": {
+                "static_source_verified": False,
+                "counterfactual_comparison_valid": False,
+                "counterfactual_invalid_reason": "saved_static_predictions_do_not_match_uniform",
+            },
+            "clean_rebuild_workflow": {"commands": ["champion-source-lineage"]},
+        },
+    )
+
+    assert report["champion_source_lineage_available"] is True
+    assert report["static_source_lineage_verified"] is False
+    assert report["season_aware_counterfactual_comparisons_valid"] is False
+    assert report["champion_source_lineage_root_cause"] == "stale_artifact_generation_order"
+    assert "unverified" in report["champion_source_lineage_warning"]
+    assert report["champion_source_lineage_rebuild_workflow"]["commands"] == [
+        "champion-source-lineage"
+    ]
+
+
 def _quality() -> dict[str, object]:
     return {
         "n_rows": 120,

@@ -327,6 +327,85 @@ def test_portfolio_report_includes_season_aware_candidate_audit_when_available(
     assert "Season-aware candidate audit" in model_card
 
 
+def test_portfolio_report_includes_season_aware_policy_forensics_when_available(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_minimal_artifacts(config.metrics_output_dir)
+    (config.metrics_output_dir / "season_aware_policy_forensics_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "reconstruction_summary": {
+                    "all_folds_reconstructed": True,
+                    "saved_fp3_mae_gap_sec": 0.8,
+                    "static_fp3_mae_gap_sec": 0.7,
+                    "delta_live_vs_static_sec": 0.1,
+                },
+                "selected_fold_summary": {"selected_folds": 15},
+                "harmful_switch_summary": {"harmful_driver_switches": 3},
+                "guardrail_simulation_summary": {
+                    "policies_tested": ["current_live_policy", "static_lock"]
+                },
+                "recommendation": "retain_static_policy",
+                "main_findings": ["Saved predictions reconstruct exactly."],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = create_portfolio_report(config)
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+    model_card = summary.model_card_path.read_text(encoding="utf-8")
+
+    forensics = payload["season_aware_policy_forensics_if_available"]
+    assert forensics["reconstruction_summary"]["all_folds_reconstructed"] is True
+    assert forensics["recommendation"] == "retain_static_policy"
+    assert any("Season-aware policy forensics" in item for item in payload["main_takeaways"])
+    assert "Season-aware policy forensics" in model_card
+
+
+def test_portfolio_report_includes_champion_source_lineage_when_available(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_minimal_artifacts(config.metrics_output_dir)
+    (config.metrics_output_dir / "champion_source_lineage_manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "root_cause_classification": "stale_artifact_generation_order",
+                "static_source_verification": {
+                    "static_source_verified": False,
+                    "static_source_verification_reason": (
+                        "static_uniform_prediction_mismatch:stale_artifact_generation_order"
+                    ),
+                    "counterfactual_comparison_valid": False,
+                    "counterfactual_invalid_reason": (
+                        "saved_static_predictions_do_not_match_uniform_ablation_source_contract"
+                    ),
+                },
+                "m26_counterfactual_conclusions_valid": False,
+                "clean_rebuild_workflow": {"commands": ["champion-source-lineage"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = create_portfolio_report(config)
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+    model_card = summary.model_card_path.read_text(encoding="utf-8")
+
+    lineage = payload["champion_source_lineage_if_available"]
+    assert lineage["static_source_verified"] is False
+    assert lineage["root_cause_classification"] == "stale_artifact_generation_order"
+    assert lineage["m26_counterfactual_conclusions_valid"] is False
+    assert any(
+        "Static FP3 source lineage is not verified" in item for item in payload["main_takeaways"]
+    )
+    assert "Champion source lineage" in model_card
+
+
 def _metrics_payload(mode: str, mae: float, delta: float) -> dict[str, object]:
     return {
         "status": "complete",

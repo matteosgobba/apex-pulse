@@ -357,6 +357,9 @@ def build_portfolio_summary_payload(
     season_aware_summary = artifacts["season_aware_validation_summary"] or {}
     season_aware_champion_summary = artifacts["season_aware_champion_summary"] or {}
     season_aware_candidate_audit = artifacts["season_aware_candidate_audit_summary"] or {}
+    season_aware_policy_forensics = artifacts["season_aware_policy_forensics_summary"] or {}
+    champion_source_lineage = artifacts["champion_source_lineage_manifest"] or {}
+    season_aware_rebuild = artifacts["season_aware_rebuild_summary"] or {}
     missing_artifacts = artifacts["missing_artifacts"]
     modes_available = [mode for mode in CHAMPION_MODES if mode in champion_metrics]
     best_by_checkpoint = _best_champion_mode_by_checkpoint(champion_metrics, backtest_report)
@@ -380,11 +383,13 @@ def build_portfolio_summary_payload(
             temporal_weighting_summary,
             season_aware_summary,
             season_aware_candidate_audit,
+            season_aware_policy_forensics,
+            champion_source_lineage,
         ),
         "limitations": _limitations(),
         "recommended_next_milestone": (
-            "Milestone 23: decide whether the season-aware weighted FP3 candidate should enter "
-            "future nested champion evaluation while keeping current champion defaults unchanged."
+            "Milestone 29: review verified season-aware FP3 results conservatively and decide "
+            "whether any candidate should enter broader prospective champion evaluation."
         ),
         "temporal_weighting_if_available": _temporal_weighting_portfolio_summary(
             temporal_weighting_summary
@@ -397,6 +402,15 @@ def build_portfolio_summary_payload(
         ),
         "season_aware_candidate_audit_if_available": (
             _season_aware_candidate_audit_portfolio_summary(season_aware_candidate_audit)
+        ),
+        "season_aware_policy_forensics_if_available": (
+            _season_aware_policy_forensics_portfolio_summary(season_aware_policy_forensics)
+        ),
+        "champion_source_lineage_if_available": _champion_source_lineage_portfolio_summary(
+            champion_source_lineage
+        ),
+        "season_aware_rebuild_if_available": _season_aware_rebuild_portfolio_summary(
+            season_aware_rebuild
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -549,6 +563,17 @@ def build_model_card(
             summary.get("season_aware_candidate_audit_if_available")
         ),
         "",
+        "## Season-aware policy forensics",
+        _season_aware_policy_forensics_card_text(
+            summary.get("season_aware_policy_forensics_if_available")
+        ),
+        "",
+        "## Champion source lineage",
+        _champion_source_lineage_card_text(summary.get("champion_source_lineage_if_available")),
+        "",
+        "## Reproducibility rebuild",
+        _season_aware_rebuild_card_text(summary.get("season_aware_rebuild_if_available")),
+        "",
         "## Baselines",
         "The report compares champion policies against practice-lap baselines, including robust "
         "baselines that fall back from weak or extreme latest-session signals.",
@@ -616,6 +641,15 @@ def _load_artifacts(metrics_dir: Path) -> dict[str, Any]:
         ),
         "season_aware_candidate_audit_summary": _read_json_if_exists(
             metrics_dir / "season_aware_candidate_audit_summary.json"
+        ),
+        "season_aware_policy_forensics_summary": _read_json_if_exists(
+            metrics_dir / "season_aware_policy_forensics_summary.json"
+        ),
+        "champion_source_lineage_manifest": _read_json_if_exists(
+            metrics_dir / "champion_source_lineage_manifest.json"
+        ),
+        "season_aware_rebuild_summary": _read_json_if_exists(
+            metrics_dir / "season_aware_rebuild_summary.json"
         ),
         "event_error_summary": _read_parquet_if_exists(metrics_dir / "event_error_summary.parquet"),
         "driver_error_summary": _read_parquet_if_exists(
@@ -795,6 +829,8 @@ def _main_takeaways(
     temporal_weighting_summary: dict[str, Any] | None = None,
     season_aware_summary: dict[str, Any] | None = None,
     season_aware_candidate_audit: dict[str, Any] | None = None,
+    season_aware_policy_forensics: dict[str, Any] | None = None,
+    champion_source_lineage: dict[str, Any] | None = None,
 ) -> list[str]:
     takeaways: list[str] = []
     static = champion_metrics.get("static", {})
@@ -836,6 +872,24 @@ def _main_takeaways(
             "Season-aware candidate audit is diagnostic; static champion remains the current "
             f"policy with recommendation `{recommendation}`."
         )
+    if season_aware_policy_forensics:
+        recommendation = season_aware_policy_forensics.get(
+            "recommendation",
+            "retain_static_policy",
+        )
+        takeaways.append(
+            "Season-aware policy forensics reconstructs live switching and keeps guardrail "
+            f"simulations retrospective; recommendation `{recommendation}`."
+        )
+    if champion_source_lineage:
+        verification = champion_source_lineage.get("static_source_verification", {})
+        if verification.get("static_source_verified"):
+            takeaways.append("Static FP3 source lineage is verified against the uniform contract.")
+        else:
+            takeaways.append(
+                "Static FP3 source lineage is not verified; source-level conclusions are "
+                "diagnostic until artifacts are rebuilt and rechecked."
+            )
     if not takeaways:
         takeaways.append(
             "Portfolio outputs are partial because key champion artifacts are missing."
@@ -925,6 +979,58 @@ def _season_aware_candidate_audit_portfolio_summary(
         "sensitivity_analysis_summary": summary.get("sensitivity_analysis_summary", {}),
         "recommendation": summary.get("recommendation", "retain_static_policy"),
         "main_findings": summary.get("main_findings", []),
+    }
+
+
+def _season_aware_policy_forensics_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "season_aware_policy_forensics_available": summary.get("status") != "missing_inputs",
+        "reconstruction_summary": summary.get("reconstruction_summary", {}),
+        "selected_fold_summary": summary.get("selected_fold_summary", {}),
+        "harmful_switch_summary": summary.get("harmful_switch_summary", {}),
+        "guardrail_simulation_summary": summary.get("guardrail_simulation_summary", {}),
+        "recommendation": summary.get("recommendation", "retain_static_policy"),
+        "main_findings": summary.get("main_findings", []),
+    }
+
+
+def _champion_source_lineage_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    verification = summary.get("static_source_verification", {})
+    return {
+        "champion_source_lineage_available": summary.get("status") != "missing_inputs",
+        "static_source_verified": verification.get("static_source_verified"),
+        "static_source_verification_reason": verification.get("static_source_verification_reason"),
+        "counterfactual_comparison_valid": verification.get("counterfactual_comparison_valid"),
+        "counterfactual_invalid_reason": verification.get("counterfactual_invalid_reason"),
+        "root_cause_classification": summary.get("root_cause_classification"),
+        "m26_counterfactual_conclusions_valid": summary.get("m26_counterfactual_conclusions_valid"),
+        "clean_rebuild_workflow": summary.get("clean_rebuild_workflow", {}),
+    }
+
+
+def _season_aware_rebuild_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "season_aware_rebuild_available": True,
+        "status": summary.get("status"),
+        "static_source_verified": summary.get("static_source_verified"),
+        "static_uniform_prediction_match_rate": summary.get("static_uniform_prediction_match_rate"),
+        "uniform_weighted_artifacts_distinct": summary.get("uniform_weighted_artifacts_distinct"),
+        "season_aware_weighted_source_verified": summary.get(
+            "season_aware_weighted_source_verified"
+        ),
+        "forensics_counterfactual_valid": summary.get("forensics_counterfactual_valid"),
     }
 
 
@@ -1138,6 +1244,66 @@ def _season_aware_candidate_audit_card_text(value: object) -> str:
             + f"{_format_metric(consistency)}; recommendation: `{recommendation}`."
         )
     return intro + f" Recommendation: `{recommendation}`."
+
+
+def _season_aware_policy_forensics_card_text(value: object) -> str:
+    intro = (
+        "The season-aware policy forensic report reconstructs saved live FP3 predictions from "
+        "selected/default artifact rows and evaluates selected weighted-candidate events against "
+        "static and guarded counterfactuals. Guardrail simulations are retrospective and not "
+        "deployed behavior."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No season-aware policy forensic report was available."
+    recommendation = value.get("recommendation", "retain_static_policy")
+    reconstruction = value.get("reconstruction_summary", {})
+    if isinstance(reconstruction, dict) and reconstruction:
+        live = reconstruction.get("saved_fp3_mae_gap_sec")
+        static = reconstruction.get("static_fp3_mae_gap_sec")
+        delta = reconstruction.get("delta_live_vs_static_sec")
+        reconstructed = reconstruction.get("all_folds_reconstructed")
+        return (
+            intro
+            + f" Reconstructed all folds: {reconstructed}; live FP3 MAE: "
+            + f"{_format_metric(live)}; static FP3 MAE: {_format_metric(static)}; "
+            + f"delta: {_format_metric(delta)}; recommendation: `{recommendation}`."
+        )
+    return intro + f" Recommendation: `{recommendation}`."
+
+
+def _champion_source_lineage_card_text(value: object) -> str:
+    intro = (
+        "The champion source-lineage report compares saved static FP3 champion rows against the "
+        "intended uniform ablation Random Forest/base_plus_relative source contract."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No source-lineage report was available."
+    verified = value.get("static_source_verified")
+    root_cause = value.get("root_cause_classification")
+    valid = value.get("counterfactual_comparison_valid")
+    if verified:
+        return intro + " Static source lineage is verified; counterfactual comparisons are valid."
+    return (
+        intro
+        + " Static source lineage is not verified; season-aware counterfactual labels remain "
+        + f"diagnostic. Root cause classification: `{root_cause}`; comparisons valid: {valid}."
+    )
+
+
+def _season_aware_rebuild_card_text(value: object) -> str:
+    intro = (
+        "The deterministic season-aware rebuild refreshes uniform and weighted ablation "
+        "snapshots separately, then verifies the static FP3 source contract end to end."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No scoped rebuild summary was available."
+    return (
+        intro
+        + f" Status: `{value.get('status')}`; static source verified: "
+        + f"{value.get('static_source_verified')}; static/uniform match rate: "
+        + f"{_format_metric(value.get('static_uniform_prediction_match_rate'))}. "
+        + "The static champion is not replaced automatically."
+    )
 
 
 def _results_card_table(champion_summary: pd.DataFrame) -> str:

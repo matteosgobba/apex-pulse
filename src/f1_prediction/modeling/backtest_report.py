@@ -44,6 +44,9 @@ def create_backtest_report(
     temporal_weighting_summary_path: Path | None = None,
     season_aware_validation_summary_path: Path | None = None,
     season_aware_candidate_audit_summary_path: Path | None = None,
+    season_aware_policy_forensics_summary_path: Path | None = None,
+    champion_source_lineage_summary_path: Path | None = None,
+    season_aware_rebuild_summary_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -102,6 +105,21 @@ def create_backtest_report(
         or config.metrics_output_dir / "season_aware_candidate_audit_summary.json",
         config.project_root,
     )
+    season_aware_policy_forensics_path = _resolve_path(
+        season_aware_policy_forensics_summary_path
+        or config.metrics_output_dir / "season_aware_policy_forensics_summary.json",
+        config.project_root,
+    )
+    champion_source_lineage_path = _resolve_path(
+        champion_source_lineage_summary_path
+        or config.metrics_output_dir / "champion_source_lineage_manifest.json",
+        config.project_root,
+    )
+    season_aware_rebuild_path = _resolve_path(
+        season_aware_rebuild_summary_path
+        or config.metrics_output_dir / "season_aware_rebuild_summary.json",
+        config.project_root,
+    )
     champion_mode_metrics = _read_champion_mode_metrics(config.metrics_output_dir)
     dataset = pd.read_parquet(source_path)
     quality = (
@@ -130,6 +148,17 @@ def create_backtest_report(
         if season_aware_candidate_audit_path.is_file()
         else None
     )
+    season_aware_policy_forensics_summary = (
+        _read_json(season_aware_policy_forensics_path)
+        if season_aware_policy_forensics_path.is_file()
+        else None
+    )
+    champion_source_lineage_summary = (
+        _read_json(champion_source_lineage_path) if champion_source_lineage_path.is_file() else None
+    )
+    season_aware_rebuild_summary = (
+        _read_json(season_aware_rebuild_path) if season_aware_rebuild_path.is_file() else None
+    )
     if champion_metrics is not None:
         mode = str(champion_metrics.get("selection_mode", ""))
         if mode:
@@ -148,6 +177,9 @@ def create_backtest_report(
         season_aware_validation_summary=season_aware_validation_summary,
         season_aware_champion_summary=season_aware_champion_summary,
         season_aware_candidate_audit_summary=season_aware_candidate_audit_summary,
+        season_aware_policy_forensics_summary=season_aware_policy_forensics_summary,
+        champion_source_lineage_summary=champion_source_lineage_summary,
+        season_aware_rebuild_summary=season_aware_rebuild_summary,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -179,6 +211,9 @@ def build_backtest_report_payload(
     season_aware_validation_summary: dict[str, Any] | None = None,
     season_aware_champion_summary: dict[str, Any] | None = None,
     season_aware_candidate_audit_summary: dict[str, Any] | None = None,
+    season_aware_policy_forensics_summary: dict[str, Any] | None = None,
+    champion_source_lineage_summary: dict[str, Any] | None = None,
+    season_aware_rebuild_summary: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -204,6 +239,11 @@ def build_backtest_report_payload(
         payload.update(_season_aware_validation_summary(season_aware_validation_summary))
         payload.update(_season_aware_champion_summary(season_aware_champion_summary))
         payload.update(_season_aware_candidate_audit_summary(season_aware_candidate_audit_summary))
+        payload.update(
+            _season_aware_policy_forensics_summary(season_aware_policy_forensics_summary)
+        )
+        payload.update(_champion_source_lineage_summary(champion_source_lineage_summary))
+        payload.update(_season_aware_rebuild_summary(season_aware_rebuild_summary))
         return payload
 
     training_status = (
@@ -255,6 +295,9 @@ def build_backtest_report_payload(
     payload.update(_season_aware_validation_summary(season_aware_validation_summary))
     payload.update(_season_aware_champion_summary(season_aware_champion_summary))
     payload.update(_season_aware_candidate_audit_summary(season_aware_candidate_audit_summary))
+    payload.update(_season_aware_policy_forensics_summary(season_aware_policy_forensics_summary))
+    payload.update(_champion_source_lineage_summary(champion_source_lineage_summary))
+    payload.update(_season_aware_rebuild_summary(season_aware_rebuild_summary))
     return payload
 
 
@@ -674,6 +717,90 @@ def _season_aware_candidate_audit_summary(summary: dict[str, Any] | None) -> dic
             "live_audit_selection_consistency_rate"
         ),
         "season_aware_candidate_comparator_scope": summary.get("comparator_scope_description"),
+    }
+
+
+def _season_aware_policy_forensics_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "season_aware_policy_forensics_available": False,
+            "season_aware_policy_reconstruction_summary": {},
+            "season_aware_policy_selected_fold_summary": {},
+            "season_aware_policy_guardrail_summary": {},
+            "season_aware_policy_forensics_recommendation": "retain_static_policy",
+        }
+    return {
+        "season_aware_policy_forensics_available": bool(summary.get("status") != "missing_inputs"),
+        "season_aware_policy_reconstruction_summary": summary.get("reconstruction_summary", {}),
+        "season_aware_policy_selected_fold_summary": summary.get("selected_fold_summary", {}),
+        "season_aware_policy_guardrail_summary": summary.get("guardrail_simulation_summary", {}),
+        "season_aware_policy_forensics_recommendation": summary.get(
+            "recommendation",
+            "retain_static_policy",
+        ),
+    }
+
+
+def _champion_source_lineage_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "champion_source_lineage_available": False,
+            "static_source_lineage_verified": None,
+            "season_aware_counterfactual_comparisons_valid": None,
+            "champion_source_lineage_warning": None,
+            "champion_source_lineage_rebuild_workflow": {},
+        }
+    verification = summary.get("static_source_verification", {})
+    root_cause = summary.get("root_cause_classification")
+    verified = bool(verification.get("static_source_verified", False))
+    invalid_reason = verification.get("counterfactual_invalid_reason")
+    warning = None
+    if not verified:
+        warning = (
+            "Static-source lineage is unverified; season-aware counterfactual labels should be "
+            f"treated as diagnostic only. Root cause: {root_cause}; reason: {invalid_reason}."
+        )
+    return {
+        "champion_source_lineage_available": bool(summary.get("status") != "missing_inputs"),
+        "static_source_lineage_verified": verified,
+        "season_aware_counterfactual_comparisons_valid": bool(
+            verification.get("counterfactual_comparison_valid", False)
+        ),
+        "champion_source_lineage_root_cause": root_cause,
+        "champion_source_lineage_warning": warning,
+        "champion_source_lineage_rebuild_workflow": summary.get("clean_rebuild_workflow", {}),
+    }
+
+
+def _season_aware_rebuild_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "season_aware_rebuild_available": False,
+            "season_aware_rebuild_status": None,
+            "season_aware_rebuild_static_source_verified": None,
+            "season_aware_rebuild_forensics_counterfactual_valid": None,
+            "season_aware_rebuild_warning": None,
+        }
+    verified = bool(summary.get("static_source_verified", False))
+    valid = bool(summary.get("forensics_counterfactual_valid", False))
+    warning = None
+    if not verified or not valid:
+        warning = (
+            "Season-aware source-contract rebuild is incomplete or unverified; keep "
+            "season-aware conclusions diagnostic until the scoped rebuild passes."
+        )
+    return {
+        "season_aware_rebuild_available": True,
+        "season_aware_rebuild_status": summary.get("status"),
+        "season_aware_rebuild_static_source_verified": verified,
+        "season_aware_rebuild_forensics_counterfactual_valid": valid,
+        "season_aware_rebuild_static_uniform_prediction_match_rate": summary.get(
+            "static_uniform_prediction_match_rate"
+        ),
+        "season_aware_rebuild_guarded_static_prediction_match_rate": summary.get(
+            "guarded_static_prediction_match_rate"
+        ),
+        "season_aware_rebuild_warning": warning,
     }
 
 

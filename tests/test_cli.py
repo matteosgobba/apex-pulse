@@ -9,6 +9,7 @@ from f1_prediction.data.season_builder import SeasonDatasetBuildSummary
 from f1_prediction.features.build import SessionFeatureBuildSummary
 from f1_prediction.features.modeling_dataset import ModelingDatasetBuildSummary
 from f1_prediction.modeling.ablation import AblationBacktestSummary
+from f1_prediction.modeling.artifact_lineage import ChampionSourceLineageSummary
 from f1_prediction.modeling.backtest_tabular import TabularBacktestSummary
 from f1_prediction.modeling.boosted_backtest import BoostedBacktestSummary
 from f1_prediction.modeling.champion_diagnostics import ChampionDiagnosticsSummary
@@ -19,6 +20,10 @@ from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
 from f1_prediction.modeling.season_aware_candidate_audit import (
     SeasonAwareCandidateAuditSummary,
 )
+from f1_prediction.modeling.season_aware_policy_forensics import (
+    SeasonAwarePolicyForensicsSummary,
+)
+from f1_prediction.modeling.season_aware_rebuild import SeasonAwareRebuildSummary
 from f1_prediction.modeling.season_aware_validation import SeasonAwareValidationSummary
 from f1_prediction.modeling.temporal_weighting_report import TemporalWeightingReportSummary
 
@@ -887,6 +892,96 @@ def test_season_aware_candidate_audit_command_is_registered(
 
     assert result.exit_code == 0
     assert "Season-aware candidate audit complete" in result.output
+
+
+def test_season_aware_policy_forensics_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    model_config = type(
+        "ModelConfigStub",
+        (),
+        {
+            "champion_diagnostics": type(
+                "ChampionDiagnosticsStub",
+                (),
+                {"harmful_switch_tolerance_sec": 0.05},
+            )()
+        },
+    )()
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: model_config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_season_aware_policy_forensics_report",
+        lambda data_config, harmful_switch_tolerance_sec: SeasonAwarePolicyForensicsSummary(
+            status="partial",
+            summary_path=tmp_path / "metrics/season_aware_policy_forensics_summary.json",
+            table_paths=(tmp_path / "metrics/season_aware_policy_fold_reconstruction.csv",),
+            figure_paths=(tmp_path / "figures/season_aware_policy_guardrail_fp3_mae.png",),
+            missing_inputs=("champion_static_predictions.parquet",),
+            generation_issues=(),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["season-aware-policy-forensics"])
+
+    assert result.exit_code == 0
+    assert "Season-aware policy forensics complete" in result.output
+
+
+def test_champion_source_lineage_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    model_config = type("ModelConfigStub", (), {})()
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: model_config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_champion_source_lineage_report",
+        lambda data_config, model_config: ChampionSourceLineageSummary(
+            status="partial",
+            summary_path=tmp_path / "metrics/champion_source_lineage_manifest.json",
+            table_paths=(tmp_path / "metrics/champion_source_lineage_artifact_summary.csv",),
+            figure_paths=(tmp_path / "figures/champion_source_lineage_contract_status.png",),
+            missing_inputs=("champion_static_predictions.parquet",),
+            generation_issues=(),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["champion-source-lineage"])
+
+    assert result.exit_code == 0
+    assert "Champion source lineage complete" in result.output
+
+
+def test_rebuild_season_aware_artifacts_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: object())
+    monkeypatch.setattr("f1_prediction.cli.load_feature_config", lambda **kwargs: object())
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_season_aware_rebuild_report",
+        lambda *args, **kwargs: SeasonAwareRebuildSummary(
+            status="dry_run",
+            summary_path=tmp_path / "metrics/season_aware_rebuild_summary.json",
+            registry_path=None,
+            validation_path=None,
+            figure_paths=(),
+            steps_completed=(),
+            steps_skipped=("ablation_uniform",),
+            warnings=("dry_run_only_no_artifacts_refreshed",),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["rebuild-season-aware-artifacts", "--dry-run"])
+
+    assert result.exit_code == 0
+    assert "Season-aware artifact rebuild complete" in result.output
 
 
 def _config(project_root: Path) -> DataConfig:

@@ -25,6 +25,10 @@ from f1_prediction.features.modeling_dataset import (
     build_modeling_dataset_files as run_modeling_dataset_build,
 )
 from f1_prediction.modeling.ablation import AblationBacktestSummary, run_ablation_backtest
+from f1_prediction.modeling.artifact_lineage import ChampionSourceLineageSummary
+from f1_prediction.modeling.artifact_lineage import (
+    create_champion_source_lineage_report as run_champion_source_lineage_report,
+)
 from f1_prediction.modeling.backtest_report import BacktestReportSummary
 from f1_prediction.modeling.backtest_report import create_backtest_report as run_backtest_report
 from f1_prediction.modeling.backtest_tabular import (
@@ -65,6 +69,16 @@ from f1_prediction.modeling.season_aware_candidate_audit import (
 )
 from f1_prediction.modeling.season_aware_candidate_audit import (
     create_season_aware_candidate_audit_report as run_season_aware_candidate_audit_report,
+)
+from f1_prediction.modeling.season_aware_policy_forensics import (
+    SeasonAwarePolicyForensicsSummary,
+)
+from f1_prediction.modeling.season_aware_policy_forensics import (
+    create_season_aware_policy_forensics_report as run_season_aware_policy_forensics_report,
+)
+from f1_prediction.modeling.season_aware_rebuild import SeasonAwareRebuildSummary
+from f1_prediction.modeling.season_aware_rebuild import (
+    create_season_aware_rebuild_report as run_season_aware_rebuild_report,
 )
 from f1_prediction.modeling.season_aware_validation import SeasonAwareValidationSummary
 from f1_prediction.modeling.season_aware_validation import (
@@ -1024,6 +1038,132 @@ def season_aware_candidate_audit_command(
     _print_season_aware_candidate_audit_summary(summary, data_config.project_root)
 
 
+@app.command("season-aware-policy-forensics")
+def season_aware_policy_forensics_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Forensically reconstruct and evaluate the season-aware champion policy."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_season_aware_policy_forensics_report(
+            data_config,
+            harmful_switch_tolerance_sec=(
+                model_config.champion_diagnostics.harmful_switch_tolerance_sec
+            ),
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_season_aware_policy_forensics_summary(summary, data_config.project_root)
+
+
+@app.command("champion-source-lineage")
+def champion_source_lineage_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Inspect champion source lineage and static FP3 source-contract consistency."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_champion_source_lineage_report(data_config, model_config)
+    except (FileNotFoundError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_champion_source_lineage_summary(summary, data_config.project_root)
+
+
+@app.command("rebuild-season-aware-artifacts")
+def rebuild_season_aware_artifacts_command(
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    seasons: Annotated[
+        list[int] | None,
+        typer.Option("--season", "--seasons", min=1950, help="Season scope for dataset rebuild."),
+    ] = None,
+    include_dataset_rebuild: Annotated[
+        bool,
+        typer.Option(
+            "--include-dataset-rebuild/--no-include-dataset-rebuild",
+            help="Rebuild the combined dataset before refreshing model artifacts.",
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="List scoped actions without refreshing artifacts."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Refresh only the known season-aware workflow artifacts."),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Refresh and verify the scoped season-aware source-contract artifact set."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_season_aware_rebuild_report(
+            data_config,
+            model_config,
+            feature_config,
+            dataset_path=dataset_path,
+            seasons=tuple(seasons or [2023, 2024, 2025]),
+            include_dataset_rebuild=include_dataset_rebuild,
+            dry_run=dry_run,
+            force=force,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_season_aware_rebuild_summary(summary, data_config.project_root)
+
+
 @app.command("ablation-backtest")
 def ablation_backtest_command(
     strategy: Annotated[
@@ -1407,6 +1547,54 @@ def _print_season_aware_candidate_audit_summary(
         typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
     if summary.generation_issues:
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_season_aware_policy_forensics_summary(
+    summary: SeasonAwarePolicyForensicsSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Season-aware policy forensics complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_champion_source_lineage_summary(
+    summary: ChampionSourceLineageSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Champion source lineage complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_season_aware_rebuild_summary(
+    summary: SeasonAwareRebuildSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Season-aware artifact rebuild complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    if summary.registry_path:
+        typer.echo(f"Registry: {_display_path(summary.registry_path, project_root)}")
+    if summary.validation_path:
+        typer.echo(f"Validation: {_display_path(summary.validation_path, project_root)}")
+    typer.echo(f"Steps completed: {len(summary.steps_completed)}")
+    typer.echo(f"Steps skipped: {len(summary.steps_skipped)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.warnings:
+        typer.echo(f"Warnings: {len(summary.warnings)}")
 
 
 def _print_ablation_summary(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -169,19 +170,18 @@ def load_champion_candidates(
 ) -> pd.DataFrame:
     """Load and standardize available out-of-sample prediction families."""
     expected_by_event = {fold.test_event: fold.fold_id for fold in expected_folds}
+    uniform_ablation_path = metrics_dir / "ablation_uniform_predictions.parquet"
+    if not uniform_ablation_path.is_file():
+        raise FileNotFoundError(
+            "Static FP3 source contract requires reports/metrics/"
+            "ablation_uniform_predictions.parquet. Run ablation-backtest with "
+            "--temporal-weighting uniform before champion-backtest."
+        )
     artifacts = [
         ("walk_forward", metrics_dir / "walk_forward_predictions.parquet", "uniform"),
         ("boosted", metrics_dir / "boosted_predictions.parquet", "uniform"),
+        ("ablation", uniform_ablation_path, "uniform"),
     ]
-    if include_temporal_weighted:
-        artifacts.append(
-            (
-                "ablation",
-                metrics_dir / "ablation_uniform_predictions.parquet",
-                "uniform",
-            )
-        )
-    artifacts.append(("ablation", metrics_dir / "ablation_predictions.parquet", "uniform"))
     if include_temporal_weighted:
         artifacts.append(
             (
@@ -201,6 +201,20 @@ def load_champion_candidates(
         if frame.empty:
             continue
         frame["temporal_weighting_policy"] = temporal_policy
+        frame["source_artifact_kind"] = source
+        frame["source_artifact_path"] = path.as_posix()
+        frame["source_family"] = frame["candidate_family"]
+        frame["source_model_name"] = frame["model_name"]
+        frame["source_feature_group"] = frame["feature_group"]
+        frame["source_temporal_weighting_policy"] = temporal_policy
+        frame["source_strategy"] = (
+            frame["strategy"].astype(str)
+            if "strategy" in frame
+            else pd.Series(pd.NA, index=frame.index)
+        )
+        frame["source_dataset_signature"] = pd.NA
+        frame["source_config_signature"] = pd.NA
+        frame["source_prediction_signature"] = _prediction_signature(frame)
         frame = frame[frame["test_event"].isin(expected_by_event)].copy()
         frame["fold_id"] = frame["test_event"].map(expected_by_event).astype("int64")
         frames.append(frame)
@@ -1074,7 +1088,15 @@ def run_champion_backtest(
                         f"Selected method unavailable for fold {fold.fold_id} {checkpoint}: "
                         f"{selected.family}/{selected.model_name}/{selected.feature_group}"
                     )
-                fold_frames.append(_champion_prediction_rows(rows, selection_mode, selected))
+                source_metadata = _source_contract_metadata(rows, selected, checkpoint)
+                fold_frames.append(
+                    _champion_prediction_rows(
+                        rows,
+                        selection_mode,
+                        selected,
+                        source_metadata=source_metadata,
+                    )
+                )
                 selection_records.append(
                     {
                         "selection_mode": selection_mode.value,
@@ -1125,6 +1147,7 @@ def run_champion_backtest(
                         "post_guardrail_selected_feature_group": (
                             post_guardrail_selected.feature_group
                         ),
+                        **source_metadata,
                         **season_aware_metadata,
                     }
                 )
@@ -1315,6 +1338,26 @@ def _key_set(frame: pd.DataFrame) -> set[tuple[object, ...]]:
     return set(frame.loc[:, list(PREDICTION_KEY_COLUMNS)].itertuples(index=False, name=None))
 
 
+def _prediction_signature(frame: pd.DataFrame) -> str:
+    """Return a stable lightweight signature for a candidate prediction artifact."""
+    columns = [
+        column
+        for column in [
+            *PREDICTION_KEY_COLUMNS,
+            "candidate_family",
+            "model_name",
+            "feature_group",
+            "temporal_weighting_policy",
+            "predicted_quali_gap_to_pole_sec",
+        ]
+        if column in frame
+    ]
+    if not columns:
+        return ""
+    values = frame.loc[:, columns].sort_values(columns).to_csv(index=False)
+    return hashlib.sha256(values.encode("utf-8")).hexdigest()
+
+
 def _matches_guarded_default(
     method: ChampionMethodConfig,
     settings: StabilizedNestedGuardedChampionConfig,
@@ -1340,6 +1383,8 @@ def _champion_prediction_rows(
     rows: pd.DataFrame,
     selection_mode: ChampionSelectionMode,
     method: ChampionMethodConfig,
+    *,
+    source_metadata: dict[str, object] | None = None,
 ) -> pd.DataFrame:
     columns = [
         "strategy",
@@ -1364,7 +1409,61 @@ def _champion_prediction_rows(
     result["selected_feature_group"] = method.feature_group
     result["selected_temporal_weighting_policy"] = method.temporal_weighting_policy or "uniform"
     result["temporal_weighting_policy"] = method.temporal_weighting_policy or "uniform"
+    source_columns = [
+        "source_artifact_kind",
+        "source_artifact_path",
+        "source_family",
+        "source_model_name",
+        "source_feature_group",
+        "source_temporal_weighting_policy",
+        "source_strategy",
+        "source_dataset_signature",
+        "source_config_signature",
+        "source_prediction_signature",
+    ]
+    for column in source_columns:
+        result[column] = rows[column].iloc[0] if column in rows and not rows.empty else pd.NA
+    for column, value in (source_metadata or {}).items():
+        result[column] = value
     return result
+
+
+def _source_contract_metadata(
+    rows: pd.DataFrame,
+    method: ChampionMethodConfig,
+    checkpoint: str,
+) -> dict[str, object]:
+    """Return reproducibility metadata for the selected prediction source."""
+    source_path = rows["source_artifact_path"].iloc[0] if "source_artifact_path" in rows else pd.NA
+    source_policy = (
+        rows["source_temporal_weighting_policy"].iloc[0]
+        if "source_temporal_weighting_policy" in rows
+        else method.temporal_weighting_policy or "uniform"
+    )
+    identity = {
+        "family": method.family,
+        "model_name": method.model_name,
+        "feature_group": method.feature_group,
+        "temporal_weighting_policy": method.temporal_weighting_policy or "uniform",
+        "artifact_path": source_path,
+    }
+    static_contract_source = (
+        checkpoint == "after_fp3"
+        and method.family == "ablation"
+        and method.model_name == "random_forest"
+        and (method.feature_group or "") == "base_plus_relative"
+        and (method.temporal_weighting_policy or "uniform") == "uniform"
+    )
+    verified = (
+        bool(str(source_path).endswith("ablation_uniform_predictions.parquet"))
+        and str(source_policy) == "uniform"
+        if static_contract_source
+        else pd.NA
+    )
+    return {
+        "source_contract_verified": verified,
+        "source_artifact_identity": json.dumps(identity, sort_keys=True),
+    }
 
 
 def _best_candidate_by_checkpoint(

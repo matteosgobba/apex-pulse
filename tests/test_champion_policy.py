@@ -31,6 +31,7 @@ from f1_prediction.modeling.champion_policy import (
     build_champion_metrics_payload,
     compare_prior_evidence,
     is_practice_baseline_method,
+    load_champion_candidates,
     resolve_static_champion_policy,
     run_champion_backtest,
     select_nested_method,
@@ -935,6 +936,45 @@ def test_champion_backtest_skips_when_dataset_is_too_small(tmp_path: Path) -> No
     assert metrics["status"] == "skipped"
 
 
+def test_static_source_contract_requires_uniform_ablation_snapshot(tmp_path: Path) -> None:
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    dataset = _dataset(6)
+    folds = build_backtest_folds(dataset, BacktestStrategy.walk_forward, min_train_events=3)
+    _write_prediction_artifacts(metrics_dir, dataset, folds)
+    (metrics_dir / "ablation_uniform_predictions.parquet").unlink()
+
+    with pytest.raises(FileNotFoundError, match="ablation_uniform_predictions.parquet"):
+        load_champion_candidates(metrics_dir, folds)
+
+
+def test_static_source_contract_does_not_substitute_weighted_latest_artifact(
+    tmp_path: Path,
+) -> None:
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    dataset = _dataset(6)
+    folds = build_backtest_folds(dataset, BacktestStrategy.walk_forward, min_train_events=3)
+    _write_prediction_artifacts(metrics_dir, dataset, folds)
+    latest = pd.read_parquet(metrics_dir / "ablation_predictions.parquet")
+    latest["temporal_weighting_policy"] = "current_season_only_with_prior"
+    latest["predicted_quali_gap_to_pole_sec"] = latest["quali_gap_to_pole_sec"] + 9.0
+    latest.to_parquet(metrics_dir / "ablation_predictions.parquet", index=False)
+
+    candidates = load_champion_candidates(metrics_dir, folds)
+    rows = candidates[
+        candidates["candidate_family"].eq("ablation")
+        & candidates["model_name"].eq("random_forest")
+        & candidates["feature_group"].eq("base_plus_relative")
+        & candidates["checkpoint"].eq("after_fp3")
+    ]
+
+    assert not rows.empty
+    assert rows["temporal_weighting_policy"].eq("uniform").all()
+    assert rows["source_artifact_path"].str.endswith("ablation_uniform_predictions.parquet").all()
+    assert rows["predicted_quali_gap_to_pole_sec"].sub(rows["quali_gap_to_pole_sec"]).mean() < 1.0
+
+
 def _candidate_rows(
     fold_id: int,
     event: str,
@@ -1195,6 +1235,7 @@ def _write_prediction_artifacts(
     ablation["predicted_quali_position"] = ablation["quali_position"]
     ablation["predicted_reached_q3"] = 1
     ablation.to_parquet(metrics_dir / "ablation_predictions.parquet", index=False)
+    ablation.to_parquet(metrics_dir / "ablation_uniform_predictions.parquet", index=False)
 
 
 def _config(project_root: Path) -> DataConfig:
