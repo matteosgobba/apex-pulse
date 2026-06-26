@@ -38,3 +38,9 @@ reports/metrics/*
 !reports/figures/.gitkeep
 !reports/metrics/.gitkeep
 .matplotlib-cache/
+
+# Private/local project documentation
+/README.md
+/AGENTS.md
+/PROJECT_HANDOFF.md
+/reports/model_card.md
