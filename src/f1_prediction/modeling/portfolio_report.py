@@ -360,6 +360,8 @@ def build_portfolio_summary_payload(
     season_aware_policy_forensics = artifacts["season_aware_policy_forensics_summary"] or {}
     champion_source_lineage = artifacts["champion_source_lineage_manifest"] or {}
     season_aware_rebuild = artifacts["season_aware_rebuild_summary"] or {}
+    prospective_policy = artifacts["prospective_policy_summary"] or {}
+    prospective_replay = artifacts["prospective_replay_summary"] or {}
     missing_artifacts = artifacts["missing_artifacts"]
     modes_available = [mode for mode in CHAMPION_MODES if mode in champion_metrics]
     best_by_checkpoint = _best_champion_mode_by_checkpoint(champion_metrics, backtest_report)
@@ -385,11 +387,12 @@ def build_portfolio_summary_payload(
             season_aware_candidate_audit,
             season_aware_policy_forensics,
             champion_source_lineage,
+            prospective_replay,
         ),
         "limitations": _limitations(),
         "recommended_next_milestone": (
-            "Milestone 29: review verified season-aware FP3 results conservatively and decide "
-            "whether any candidate should enter broader prospective champion evaluation."
+            "Milestone 31: use retrain-based prospective replay results conservatively and "
+            "decide whether more seasons, stress tests, or promotion-governance checks are needed."
         ),
         "temporal_weighting_if_available": _temporal_weighting_portfolio_summary(
             temporal_weighting_summary
@@ -411,6 +414,12 @@ def build_portfolio_summary_payload(
         ),
         "season_aware_rebuild_if_available": _season_aware_rebuild_portfolio_summary(
             season_aware_rebuild
+        ),
+        "prospective_policy_evaluation_if_available": _prospective_policy_portfolio_summary(
+            prospective_policy
+        ),
+        "prospective_replay_if_available": _prospective_replay_portfolio_summary(
+            prospective_replay
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -574,6 +583,12 @@ def build_model_card(
         "## Reproducibility rebuild",
         _season_aware_rebuild_card_text(summary.get("season_aware_rebuild_if_available")),
         "",
+        "## Prospective policy evaluation",
+        _prospective_policy_card_text(summary.get("prospective_policy_evaluation_if_available")),
+        "",
+        "## Prospective policy replay",
+        _prospective_replay_card_text(summary.get("prospective_replay_if_available")),
+        "",
         "## Baselines",
         "The report compares champion policies against practice-lap baselines, including robust "
         "baselines that fall back from weak or extreme latest-session signals.",
@@ -650,6 +665,12 @@ def _load_artifacts(metrics_dir: Path) -> dict[str, Any]:
         ),
         "season_aware_rebuild_summary": _read_json_if_exists(
             metrics_dir / "season_aware_rebuild_summary.json"
+        ),
+        "prospective_policy_summary": _read_json_if_exists(
+            metrics_dir / "prospective_policy_summary.json"
+        ),
+        "prospective_replay_summary": _read_json_if_exists(
+            metrics_dir / "prospective_replay_summary.json"
         ),
         "event_error_summary": _read_parquet_if_exists(metrics_dir / "event_error_summary.parquet"),
         "driver_error_summary": _read_parquet_if_exists(
@@ -831,6 +852,7 @@ def _main_takeaways(
     season_aware_candidate_audit: dict[str, Any] | None = None,
     season_aware_policy_forensics: dict[str, Any] | None = None,
     champion_source_lineage: dict[str, Any] | None = None,
+    prospective_replay: dict[str, Any] | None = None,
 ) -> list[str]:
     takeaways: list[str] = []
     static = champion_metrics.get("static", {})
@@ -890,6 +912,12 @@ def _main_takeaways(
                 "Static FP3 source lineage is not verified; source-level conclusions are "
                 "diagnostic until artifacts are rebuilt and rechecked."
             )
+    if prospective_replay:
+        recommendation = prospective_replay.get("recommendation", "retain_static_policy")
+        takeaways.append(
+            "True retrain-based prospective replay is evaluated separately from artifact-driven "
+            f"prospective validation; recommendation `{recommendation}`."
+        )
     if not takeaways:
         takeaways.append(
             "Portfolio outputs are partial because key champion artifacts are missing."
@@ -1031,6 +1059,38 @@ def _season_aware_rebuild_portfolio_summary(
             "season_aware_weighted_source_verified"
         ),
         "forensics_counterfactual_valid": summary.get("forensics_counterfactual_valid"),
+    }
+
+
+def _prospective_policy_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "prospective_policy_evaluation_available": bool(summary.get("splits")),
+        "splits": summary.get("prospective_splits_available", []),
+        "leakage_audit_result": summary.get("leakage_audit_result", {}),
+        "recommendation": summary.get(
+            "recommendation",
+            "season_aware_candidate_requires_more_evidence",
+        ),
+        "main_findings": summary.get("main_findings", []),
+    }
+
+
+def _prospective_replay_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "prospective_replay_available": bool(summary.get("splits")),
+        "evaluation_type": summary.get("evaluation_type"),
+        "splits": summary.get("prospective_replay_splits_available", []),
+        "leakage_audit_result": summary.get("leakage_audit_result", {}),
+        "recommendation": summary.get("recommendation", "retain_static_policy"),
+        "main_findings": summary.get("main_findings", []),
     }
 
 
@@ -1303,6 +1363,48 @@ def _season_aware_rebuild_card_text(value: object) -> str:
         + f"{value.get('static_source_verified')}; static/uniform match rate: "
         + f"{_format_metric(value.get('static_uniform_prediction_match_rate'))}. "
         + "The static champion is not replaced automatically."
+    )
+
+
+def _prospective_policy_card_text(value: object) -> str:
+    intro = (
+        "Prospective policy evaluation scores frozen champion-policy profiles on held-out "
+        "seasons, separating retrospective walk-forward results from future-season governance."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No prospective season-held-out report was available."
+    splits = value.get("splits", [])
+    recommendation = value.get(
+        "recommendation",
+        "season_aware_candidate_requires_more_evidence",
+    )
+    leakage = value.get("leakage_audit_result", {})
+    valid = leakage.get("all_splits_valid") if isinstance(leakage, dict) else None
+    return (
+        intro
+        + f" Splits available: {splits}; leakage audit valid: {valid}; "
+        + f"recommendation: `{recommendation}`. Simulated or frozen profiles do not change "
+        + "the deployed static champion automatically."
+    )
+
+
+def _prospective_replay_card_text(value: object) -> str:
+    intro = (
+        "True prospective policy replay retrains required FP3 candidates from scratch for each "
+        "held-out event using only legal historical rows, then applies frozen policy profiles "
+        "without tuning on held-out outcomes."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No retrain-based prospective replay report was available."
+    splits = value.get("splits", [])
+    recommendation = value.get("recommendation", "retain_static_policy")
+    leakage = value.get("leakage_audit_result", {})
+    valid = leakage.get("all_splits_valid") if isinstance(leakage, dict) else None
+    return (
+        intro
+        + f" Splits available: {splits}; leakage audit valid: {valid}; "
+        + f"recommendation: `{recommendation}`. Replay results are governance evidence only "
+        + "and do not change champion defaults."
     )
 
 

@@ -64,6 +64,16 @@ from f1_prediction.modeling.policy_simulation import (
 )
 from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
 from f1_prediction.modeling.portfolio_report import create_portfolio_report as run_portfolio_report
+from f1_prediction.modeling.prospective_policy_evaluation import (
+    ProspectivePolicyEvaluationSummary,
+)
+from f1_prediction.modeling.prospective_policy_evaluation import (
+    create_prospective_policy_evaluation_report as run_prospective_policy_evaluation_report,
+)
+from f1_prediction.modeling.prospective_replay import ProspectiveReplaySummary
+from f1_prediction.modeling.prospective_replay import (
+    create_prospective_policy_replay_report as run_prospective_policy_replay_report,
+)
 from f1_prediction.modeling.season_aware_candidate_audit import (
     SeasonAwareCandidateAuditSummary,
 )
@@ -1070,6 +1080,166 @@ def season_aware_policy_forensics_command(
     _print_season_aware_policy_forensics_summary(summary, data_config.project_root)
 
 
+@app.command("prospective-policy-evaluation")
+def prospective_policy_evaluation_command(
+    train_seasons: Annotated[
+        list[int],
+        typer.Option(
+            "--train-seasons",
+            "--train-season",
+            min=1950,
+            help="Frozen-policy training seasons allowed before the held-out test season.",
+        ),
+    ],
+    test_season: Annotated[
+        int,
+        typer.Option("--test-season", min=1950, help="Held-out season to evaluate."),
+    ],
+    policy_profiles: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--policy-profiles",
+            "--policy-profile",
+            help=(
+                "Frozen profiles to score: static_baseline, guarded_baseline, season_aware_frozen."
+            ),
+        ),
+    ] = None,
+    uncertainty: Annotated[
+        ChampionUncertaintyMethod,
+        typer.Option("--uncertainty", help="Uncertainty method metadata for frozen profiles."),
+    ] = ChampionUncertaintyMethod.conformal_predicted_gap_bucket,
+    min_events: Annotated[
+        int,
+        typer.Option(min=2, help="Minimum events setting recorded for the prospective run."),
+    ] = 10,
+    min_train_events: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum train events setting recorded for the prospective run."),
+    ] = 5,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Evaluate frozen champion policies on a prospective held-out season."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_prospective_policy_evaluation_report(
+            data_config,
+            model_config,
+            train_seasons=tuple(train_seasons),
+            test_season=test_season,
+            policy_profiles=tuple(
+                policy_profiles or ["static_baseline", "guarded_baseline", "season_aware_frozen"]
+            ),
+            uncertainty=uncertainty.value,
+            min_events=min_events,
+            min_train_events=min_train_events,
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_policy_evaluation_summary(summary, data_config.project_root)
+
+
+@app.command("prospective-policy-replay")
+def prospective_policy_replay_command(
+    train_seasons: Annotated[
+        list[int],
+        typer.Option(
+            "--train-seasons",
+            "--train-season",
+            min=1950,
+            help="Completed historical seasons allowed before the held-out test season.",
+        ),
+    ],
+    test_season: Annotated[
+        int,
+        typer.Option("--test-season", min=1950, help="Held-out season to replay."),
+    ],
+    policy_profiles: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--policy-profiles",
+            "--policy-profile",
+            help=(
+                "Frozen profiles to replay: static_baseline, guarded_baseline, season_aware_frozen."
+            ),
+        ),
+    ] = None,
+    uncertainty: Annotated[
+        ChampionUncertaintyMethod,
+        typer.Option("--uncertainty", help="Uncertainty method metadata for replay profiles."),
+    ] = ChampionUncertaintyMethod.conformal_predicted_gap_bucket,
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional combined modeling dataset path."),
+    ] = None,
+    min_events: Annotated[
+        int,
+        typer.Option(min=2, help="Minimum unique events required in the dataset."),
+    ] = 10,
+    min_train_events: Annotated[
+        int,
+        typer.Option(min=1, help="Minimum legal historical events before fitting."),
+    ] = 5,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Retrain and replay frozen champion policies event by event."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_prospective_policy_replay_report(
+            data_config,
+            model_config,
+            feature_config,
+            train_seasons=tuple(train_seasons),
+            test_season=test_season,
+            policy_profiles=tuple(
+                policy_profiles or ["static_baseline", "guarded_baseline", "season_aware_frozen"]
+            ),
+            uncertainty=uncertainty.value,
+            dataset_path=dataset_path,
+            min_events=min_events,
+            min_train_events=min_train_events,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_policy_replay_summary(summary, data_config.project_root)
+
+
 @app.command("champion-source-lineage")
 def champion_source_lineage_command(
     config_path: Annotated[
@@ -1560,6 +1730,34 @@ def _print_season_aware_policy_forensics_summary(
     typer.echo(f"Figures: {len(summary.figure_paths)}")
     if summary.missing_inputs:
         typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_prospective_policy_evaluation_summary(
+    summary: ProspectivePolicyEvaluationSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Prospective policy evaluation complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_prospective_policy_replay_summary(
+    summary: ProspectiveReplaySummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Prospective policy replay complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
     if summary.generation_issues:
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
 

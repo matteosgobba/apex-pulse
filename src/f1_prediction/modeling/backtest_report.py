@@ -47,6 +47,8 @@ def create_backtest_report(
     season_aware_policy_forensics_summary_path: Path | None = None,
     champion_source_lineage_summary_path: Path | None = None,
     season_aware_rebuild_summary_path: Path | None = None,
+    prospective_policy_summary_path: Path | None = None,
+    prospective_replay_summary_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -120,6 +122,16 @@ def create_backtest_report(
         or config.metrics_output_dir / "season_aware_rebuild_summary.json",
         config.project_root,
     )
+    prospective_policy_path = _resolve_path(
+        prospective_policy_summary_path
+        or config.metrics_output_dir / "prospective_policy_summary.json",
+        config.project_root,
+    )
+    prospective_replay_path = _resolve_path(
+        prospective_replay_summary_path
+        or config.metrics_output_dir / "prospective_replay_summary.json",
+        config.project_root,
+    )
     champion_mode_metrics = _read_champion_mode_metrics(config.metrics_output_dir)
     dataset = pd.read_parquet(source_path)
     quality = (
@@ -159,6 +171,12 @@ def create_backtest_report(
     season_aware_rebuild_summary = (
         _read_json(season_aware_rebuild_path) if season_aware_rebuild_path.is_file() else None
     )
+    prospective_policy_summary = (
+        _read_json(prospective_policy_path) if prospective_policy_path.is_file() else None
+    )
+    prospective_replay_summary = (
+        _read_json(prospective_replay_path) if prospective_replay_path.is_file() else None
+    )
     if champion_metrics is not None:
         mode = str(champion_metrics.get("selection_mode", ""))
         if mode:
@@ -180,6 +198,8 @@ def create_backtest_report(
         season_aware_policy_forensics_summary=season_aware_policy_forensics_summary,
         champion_source_lineage_summary=champion_source_lineage_summary,
         season_aware_rebuild_summary=season_aware_rebuild_summary,
+        prospective_policy_summary=prospective_policy_summary,
+        prospective_replay_summary=prospective_replay_summary,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -214,6 +234,8 @@ def build_backtest_report_payload(
     season_aware_policy_forensics_summary: dict[str, Any] | None = None,
     champion_source_lineage_summary: dict[str, Any] | None = None,
     season_aware_rebuild_summary: dict[str, Any] | None = None,
+    prospective_policy_summary: dict[str, Any] | None = None,
+    prospective_replay_summary: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -244,6 +266,8 @@ def build_backtest_report_payload(
         )
         payload.update(_champion_source_lineage_summary(champion_source_lineage_summary))
         payload.update(_season_aware_rebuild_summary(season_aware_rebuild_summary))
+        payload.update(_prospective_policy_summary(prospective_policy_summary))
+        payload.update(_prospective_replay_summary(prospective_replay_summary))
         return payload
 
     training_status = (
@@ -298,6 +322,8 @@ def build_backtest_report_payload(
     payload.update(_season_aware_policy_forensics_summary(season_aware_policy_forensics_summary))
     payload.update(_champion_source_lineage_summary(champion_source_lineage_summary))
     payload.update(_season_aware_rebuild_summary(season_aware_rebuild_summary))
+    payload.update(_prospective_policy_summary(prospective_policy_summary))
+    payload.update(_prospective_replay_summary(prospective_replay_summary))
     return payload
 
 
@@ -801,6 +827,93 @@ def _season_aware_rebuild_summary(summary: dict[str, Any] | None) -> dict[str, o
             "guarded_static_prediction_match_rate"
         ),
         "season_aware_rebuild_warning": warning,
+    }
+
+
+def _prospective_policy_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "prospective_policy_evaluation_available": False,
+            "prospective_policy_splits_available": [],
+            "prospective_policy_leakage_audit_result": {},
+            "prospective_policy_recommendation": "season_aware_candidate_requires_more_evidence",
+            "prospective_policy_fp3_summary": [],
+        }
+    fp3_rows: list[dict[str, object]] = []
+    for split in summary.get("splits", []):
+        if not isinstance(split, dict):
+            continue
+        for row in split.get("fp3_summary", []):
+            if isinstance(row, dict):
+                fp3_rows.append(
+                    {
+                        "prospective_split": split.get("prospective_split"),
+                        "test_season": split.get("test_season"),
+                        "policy_profile": row.get("policy_profile"),
+                        "mae_gap_sec": row.get("mae_gap_sec"),
+                        "fp3_delta_vs_static_baseline_sec": row.get(
+                            "fp3_delta_vs_static_baseline_sec"
+                        ),
+                        "fp3_delta_vs_guarded_baseline_sec": row.get(
+                            "fp3_delta_vs_guarded_baseline_sec"
+                        ),
+                    }
+                )
+    return {
+        "prospective_policy_evaluation_available": bool(summary.get("splits")),
+        "prospective_policy_splits_available": summary.get("prospective_splits_available", []),
+        "prospective_policy_leakage_audit_result": summary.get("leakage_audit_result", {}),
+        "prospective_policy_recommendation": summary.get(
+            "recommendation",
+            "season_aware_candidate_requires_more_evidence",
+        ),
+        "prospective_policy_fp3_summary": fp3_rows,
+        "prospective_policy_validation_label": "prospective_season_holdout",
+    }
+
+
+def _prospective_replay_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "prospective_replay_available": False,
+            "prospective_replay_splits_available": [],
+            "prospective_replay_leakage_audit_result": {},
+            "prospective_replay_recommendation": "season_aware_candidate_requires_more_evidence",
+            "prospective_replay_fp3_summary": [],
+        }
+    fp3_rows: list[dict[str, object]] = []
+    for split in summary.get("splits", []):
+        if not isinstance(split, dict):
+            continue
+        for row in split.get("fp3_summary", []):
+            if isinstance(row, dict):
+                fp3_rows.append(
+                    {
+                        "prospective_split": split.get("prospective_split"),
+                        "test_season": split.get("test_season"),
+                        "policy_profile": row.get("policy_profile"),
+                        "mae_gap_sec": row.get("mae_gap_sec"),
+                        "fp3_delta_vs_static_baseline_sec": row.get(
+                            "fp3_delta_vs_static_baseline_sec"
+                        ),
+                        "fp3_delta_vs_guarded_baseline_sec": row.get(
+                            "fp3_delta_vs_guarded_baseline_sec"
+                        ),
+                    }
+                )
+    return {
+        "prospective_replay_available": bool(summary.get("splits")),
+        "prospective_replay_splits_available": summary.get(
+            "prospective_replay_splits_available",
+            [],
+        ),
+        "prospective_replay_leakage_audit_result": summary.get("leakage_audit_result", {}),
+        "prospective_replay_recommendation": summary.get(
+            "recommendation",
+            "season_aware_candidate_requires_more_evidence",
+        ),
+        "prospective_replay_fp3_summary": fp3_rows,
+        "prospective_replay_validation_label": "true_prospective_replay",
     }
 
 
