@@ -362,6 +362,7 @@ def build_portfolio_summary_payload(
     season_aware_rebuild = artifacts["season_aware_rebuild_summary"] or {}
     prospective_policy = artifacts["prospective_policy_summary"] or {}
     prospective_replay = artifacts["prospective_replay_summary"] or {}
+    prospective_replay_eligibility = artifacts["prospective_replay_eligibility_audit_summary"] or {}
     missing_artifacts = artifacts["missing_artifacts"]
     modes_available = [mode for mode in CHAMPION_MODES if mode in champion_metrics]
     best_by_checkpoint = _best_champion_mode_by_checkpoint(champion_metrics, backtest_report)
@@ -388,6 +389,7 @@ def build_portfolio_summary_payload(
             season_aware_policy_forensics,
             champion_source_lineage,
             prospective_replay,
+            prospective_replay_eligibility,
         ),
         "limitations": _limitations(),
         "recommended_next_milestone": (
@@ -420,6 +422,9 @@ def build_portfolio_summary_payload(
         ),
         "prospective_replay_if_available": _prospective_replay_portfolio_summary(
             prospective_replay
+        ),
+        "prospective_replay_eligibility_audit_if_available": (
+            _prospective_replay_eligibility_portfolio_summary(prospective_replay_eligibility)
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -589,6 +594,11 @@ def build_model_card(
         "## Prospective policy replay",
         _prospective_replay_card_text(summary.get("prospective_replay_if_available")),
         "",
+        "## Prospective replay eligibility audit",
+        _prospective_replay_eligibility_card_text(
+            summary.get("prospective_replay_eligibility_audit_if_available")
+        ),
+        "",
         "## Baselines",
         "The report compares champion policies against practice-lap baselines, including robust "
         "baselines that fall back from weak or extreme latest-session signals.",
@@ -671,6 +681,9 @@ def _load_artifacts(metrics_dir: Path) -> dict[str, Any]:
         ),
         "prospective_replay_summary": _read_json_if_exists(
             metrics_dir / "prospective_replay_summary.json"
+        ),
+        "prospective_replay_eligibility_audit_summary": _read_json_if_exists(
+            metrics_dir / "prospective_replay_eligibility_audit_summary.json"
         ),
         "event_error_summary": _read_parquet_if_exists(metrics_dir / "event_error_summary.parquet"),
         "driver_error_summary": _read_parquet_if_exists(
@@ -853,6 +866,7 @@ def _main_takeaways(
     season_aware_policy_forensics: dict[str, Any] | None = None,
     champion_source_lineage: dict[str, Any] | None = None,
     prospective_replay: dict[str, Any] | None = None,
+    prospective_replay_eligibility: dict[str, Any] | None = None,
 ) -> list[str]:
     takeaways: list[str] = []
     static = champion_metrics.get("static", {})
@@ -917,6 +931,15 @@ def _main_takeaways(
         takeaways.append(
             "True retrain-based prospective replay is evaluated separately from artifact-driven "
             f"prospective validation; recommendation `{recommendation}`."
+        )
+    if prospective_replay_eligibility:
+        retention = prospective_replay_eligibility.get(
+            "candidate_evidence_retention_status",
+            "unknown",
+        )
+        takeaways.append(
+            "True replay eligibility audit separates candidate generation, retention, and "
+            f"selection; evidence retention status `{retention}`."
         )
     if not takeaways:
         takeaways.append(
@@ -1091,6 +1114,39 @@ def _prospective_replay_portfolio_summary(
         "leakage_audit_result": summary.get("leakage_audit_result", {}),
         "recommendation": summary.get("recommendation", "retain_static_policy"),
         "main_findings": summary.get("main_findings", []),
+    }
+
+
+def _prospective_replay_eligibility_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "prospective_replay_eligibility_audit_available": summary.get("status") != "missing_inputs",
+        "status": summary.get("status"),
+        "candidate_evidence_retention_status": summary.get("candidate_evidence_retention_status"),
+        "candidate_prediction_availability_status": summary.get(
+            "candidate_prediction_availability_status"
+        ),
+        "primary_explanation_for_zero_selection": summary.get(
+            "primary_explanation_for_zero_selection"
+        ),
+        "candidate_evidence_pipeline_recommendation": summary.get(
+            "candidate_evidence_pipeline_recommendation"
+        ),
+        "policy_recommendation": summary.get(
+            "policy_recommendation",
+            "retain_static_policy",
+        ),
+        "future_history_violation_detected": summary.get("future_history_violation_detected"),
+        "current_event_history_violation_detected": summary.get(
+            "current_event_history_violation_detected"
+        ),
+        "true_replay_gate_feasibility_summary": summary.get(
+            "true_replay_gate_feasibility_summary",
+            [],
+        ),
     }
 
 
@@ -1405,6 +1461,26 @@ def _prospective_replay_card_text(value: object) -> str:
         + f" Splits available: {splits}; leakage audit valid: {valid}; "
         + f"recommendation: `{recommendation}`. Replay results are governance evidence only "
         + "and do not change champion defaults."
+    )
+
+
+def _prospective_replay_eligibility_card_text(value: object) -> str:
+    intro = (
+        "The true replay eligibility audit reconstructs the FP3 evidence ledger before each "
+        "season-aware frozen decision and separates candidate training, persisted prediction "
+        "availability, prior evidence alignment, and final policy selection."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No replay eligibility audit was available."
+    retention = value.get("candidate_evidence_retention_status")
+    explanation = value.get("primary_explanation_for_zero_selection")
+    pipeline = value.get("candidate_evidence_pipeline_recommendation")
+    policy = value.get("policy_recommendation", "retain_static_policy")
+    return (
+        intro
+        + f" Retention status: `{retention}`. Primary zero-selection explanation: "
+        + f"{explanation}. Pipeline recommendation: `{pipeline}`; policy recommendation: "
+        + f"`{policy}`. No thresholds or champion defaults are changed by this audit."
     )
 
 

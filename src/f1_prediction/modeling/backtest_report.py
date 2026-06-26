@@ -49,6 +49,7 @@ def create_backtest_report(
     season_aware_rebuild_summary_path: Path | None = None,
     prospective_policy_summary_path: Path | None = None,
     prospective_replay_summary_path: Path | None = None,
+    prospective_replay_eligibility_summary_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -132,6 +133,11 @@ def create_backtest_report(
         or config.metrics_output_dir / "prospective_replay_summary.json",
         config.project_root,
     )
+    prospective_replay_eligibility_path = _resolve_path(
+        prospective_replay_eligibility_summary_path
+        or config.metrics_output_dir / "prospective_replay_eligibility_audit_summary.json",
+        config.project_root,
+    )
     champion_mode_metrics = _read_champion_mode_metrics(config.metrics_output_dir)
     dataset = pd.read_parquet(source_path)
     quality = (
@@ -177,6 +183,11 @@ def create_backtest_report(
     prospective_replay_summary = (
         _read_json(prospective_replay_path) if prospective_replay_path.is_file() else None
     )
+    prospective_replay_eligibility_summary = (
+        _read_json(prospective_replay_eligibility_path)
+        if prospective_replay_eligibility_path.is_file()
+        else None
+    )
     if champion_metrics is not None:
         mode = str(champion_metrics.get("selection_mode", ""))
         if mode:
@@ -200,6 +211,7 @@ def create_backtest_report(
         season_aware_rebuild_summary=season_aware_rebuild_summary,
         prospective_policy_summary=prospective_policy_summary,
         prospective_replay_summary=prospective_replay_summary,
+        prospective_replay_eligibility_summary=prospective_replay_eligibility_summary,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -236,6 +248,7 @@ def build_backtest_report_payload(
     season_aware_rebuild_summary: dict[str, Any] | None = None,
     prospective_policy_summary: dict[str, Any] | None = None,
     prospective_replay_summary: dict[str, Any] | None = None,
+    prospective_replay_eligibility_summary: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -268,6 +281,9 @@ def build_backtest_report_payload(
         payload.update(_season_aware_rebuild_summary(season_aware_rebuild_summary))
         payload.update(_prospective_policy_summary(prospective_policy_summary))
         payload.update(_prospective_replay_summary(prospective_replay_summary))
+        payload.update(
+            _prospective_replay_eligibility_summary(prospective_replay_eligibility_summary)
+        )
         return payload
 
     training_status = (
@@ -324,6 +340,7 @@ def build_backtest_report_payload(
     payload.update(_season_aware_rebuild_summary(season_aware_rebuild_summary))
     payload.update(_prospective_policy_summary(prospective_policy_summary))
     payload.update(_prospective_replay_summary(prospective_replay_summary))
+    payload.update(_prospective_replay_eligibility_summary(prospective_replay_eligibility_summary))
     return payload
 
 
@@ -914,6 +931,40 @@ def _prospective_replay_summary(summary: dict[str, Any] | None) -> dict[str, obj
         ),
         "prospective_replay_fp3_summary": fp3_rows,
         "prospective_replay_validation_label": "true_prospective_replay",
+    }
+
+
+def _prospective_replay_eligibility_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object]:
+    if not summary:
+        return {
+            "prospective_replay_eligibility_audit_available": False,
+            "prospective_replay_eligibility_status": "missing",
+            "prospective_replay_primary_zero_selection_explanation": None,
+            "prospective_replay_candidate_evidence_retention_status": None,
+            "prospective_replay_gate_feasibility_summary": [],
+            "prospective_replay_policy_recommendation": (
+                "season_aware_candidate_requires_more_evidence"
+            ),
+        }
+    return {
+        "prospective_replay_eligibility_audit_available": True,
+        "prospective_replay_eligibility_status": summary.get("status"),
+        "prospective_replay_primary_zero_selection_explanation": summary.get(
+            "primary_explanation_for_zero_selection"
+        ),
+        "prospective_replay_candidate_evidence_retention_status": summary.get(
+            "candidate_evidence_retention_status"
+        ),
+        "prospective_replay_gate_feasibility_summary": summary.get(
+            "true_replay_gate_feasibility_summary",
+            [],
+        ),
+        "prospective_replay_policy_recommendation": summary.get(
+            "policy_recommendation",
+            "season_aware_candidate_requires_more_evidence",
+        ),
     }
 
 

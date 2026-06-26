@@ -74,6 +74,10 @@ from f1_prediction.modeling.prospective_replay import ProspectiveReplaySummary
 from f1_prediction.modeling.prospective_replay import (
     create_prospective_policy_replay_report as run_prospective_policy_replay_report,
 )
+from f1_prediction.modeling.prospective_replay_eligibility_audit import (
+    ProspectiveReplayEligibilityAuditSummary,
+    create_prospective_replay_eligibility_audit_report,
+)
 from f1_prediction.modeling.season_aware_candidate_audit import (
     SeasonAwareCandidateAuditSummary,
 )
@@ -1240,6 +1244,33 @@ def prospective_policy_replay_command(
     _print_prospective_policy_replay_summary(summary, data_config.project_root)
 
 
+@app.command("prospective-replay-eligibility-audit")
+def prospective_replay_eligibility_audit_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Audit why true replay season-aware candidate gates did or did not pass."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = create_prospective_replay_eligibility_audit_report(data_config, model_config)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_replay_eligibility_audit_summary(summary, data_config.project_root)
+
+
 @app.command("champion-source-lineage")
 def champion_source_lineage_command(
     config_path: Annotated[
@@ -1758,6 +1789,21 @@ def _print_prospective_policy_replay_summary(
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Tables: {len(summary.table_paths)}")
     typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_prospective_replay_eligibility_audit_summary(
+    summary: ProspectiveReplayEligibilityAuditSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Prospective replay eligibility audit complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
     if summary.generation_issues:
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
 
