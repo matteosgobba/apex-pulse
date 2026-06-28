@@ -138,8 +138,8 @@ reports/                    # Generated metrics and diagnostics
 ## Quick start
 
 ```bash
-git clone git@github.com:matteosgobba/f1_project.git
-cd f1_project
+git clone git@github.com:matteosgobba/apex-pulse.git
+cd apex-pulse
 python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
