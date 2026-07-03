@@ -16,6 +16,8 @@ from f1_prediction.modeling.prospective_replay import (
     add_replay_intervals,
     align_candidate_default,
     apply_profiles_for_event,
+    build_shadow_candidate_rows,
+    build_shadow_vs_live_selection,
     compare_replay_to_artifact_driven,
     fit_source_candidate,
     leakage_row,
@@ -23,6 +25,7 @@ from f1_prediction.modeling.prospective_replay import (
     replay_bootstrap_summary,
     replay_split_id,
     season_aware_decision,
+    shadow_rows_for_role,
     training_manifest_row,
 )
 from f1_prediction.modeling.temporal_weighting import TemporalWeightingPolicy
@@ -192,6 +195,172 @@ def test_static_guarded_and_season_aware_profiles_run_on_synthetic_sources() -> 
     }
     assert set(predictions["checkpoint"]) == {"after_fp1", "after_fp2", "after_fp3"}
     assert len(selections) == 9
+
+
+def test_shadow_artifact_rows_include_non_selected_uniform_and_weighted_candidates() -> None:
+    source = {
+        "event_key": "2025/b",
+        "test": _prediction_source("after_fp3", [0.0, 1.0]),
+        "static": _prediction_source("after_fp3", [0.0, 1.0]),
+        "weighted": _prediction_source("after_fp3", [0.0, 0.8]),
+        "manifest": [
+            _manifest_row("2025/b", "static_baseline", "uniform"),
+            _manifest_row(
+                "2025/b",
+                "season_aware_frozen",
+                "current_season_only_with_prior",
+            ),
+        ],
+        "leakage": [
+            _leakage_row("2025/b", "static_baseline"),
+            _leakage_row("2025/b", "season_aware_frozen"),
+        ],
+    }
+
+    shadow = build_shadow_candidate_rows(
+        source=source,
+        train_seasons=(2024,),
+        test_season=2025,
+        event_order=["2024/a", "2025/a", "2025/b"],
+    )
+
+    assert set(shadow["shadow_role"]) == {
+        "uniform_default",
+        "season_aware_weighted_candidate",
+    }
+    assert shadow["diagnostic_only"].all()
+    assert shadow["prediction_available"].all()
+    assert shadow["shadow_eligible_for_prior_evidence"].all()
+    weighted = shadow[shadow["shadow_role"].eq("season_aware_weighted_candidate")]
+    assert weighted["temporal_weighting_policy"].eq("current_season_only_with_prior").all()
+
+
+def test_shadow_persistence_does_not_change_live_profile_predictions() -> None:
+    profiles = build_frozen_policy_profiles(
+        load_model_config(),
+        profile_names=("season_aware_frozen",),
+        uncertainty="conformal_predicted_gap_bucket",
+    )
+    source = {
+        "event_key": "2025/b",
+        "test": _prediction_source("after_fp3", [0.0, 1.0]),
+        "static": _prediction_source("after_fp3", [0.0, 1.0]),
+        "weighted": _prediction_source("after_fp3", [0.0, 0.5]),
+        "baseline": pd.concat(
+            [
+                _baseline_source("after_fp1", "robust_best_push_lap", [0.0, 1.2]),
+                _baseline_source("after_fp2", "robust_theoretical_best_lap", [0.0, 1.1]),
+            ],
+            ignore_index=True,
+        ),
+        "manifest": [
+            _manifest_row("2025/b", "static_baseline", "uniform"),
+            _manifest_row(
+                "2025/b",
+                "season_aware_frozen",
+                "current_season_only_with_prior",
+            ),
+        ],
+        "leakage": [
+            _leakage_row("2025/b", "static_baseline"),
+            _leakage_row("2025/b", "season_aware_frozen"),
+        ],
+    }
+
+    live_before, selections = apply_profiles_for_event(
+        source=source,
+        profiles=profiles,
+        history=pd.DataFrame(),
+        train_seasons=(2024,),
+        test_season=2025,
+        uncertainty="conformal_predicted_gap_bucket",
+    )
+    shadow = build_shadow_candidate_rows(
+        source=source,
+        train_seasons=(2024,),
+        test_season=2025,
+        event_order=["2024/a", "2025/a", "2025/b"],
+    )
+    live_after, _ = apply_profiles_for_event(
+        source=source,
+        profiles=profiles,
+        history=pd.DataFrame(),
+        train_seasons=(2024,),
+        test_season=2025,
+        uncertainty="conformal_predicted_gap_bucket",
+    )
+
+    pd.testing.assert_frame_equal(
+        live_before.reset_index(drop=True),
+        live_after.reset_index(drop=True),
+    )
+    fp3 = live_after[live_after["checkpoint"].eq("after_fp3")]
+    assert fp3["source_temporal_weighting_policy"].eq("uniform").all()
+    assert shadow["shadow_role"].eq("season_aware_weighted_candidate").any()
+    assert selections[2]["candidate_selection_reason"] == "season_aware_cold_start"
+
+
+def test_missing_shadow_prediction_output_is_explicitly_unavailable() -> None:
+    source = {
+        "event_key": "2025/b",
+        "test": _prediction_source("after_fp3", [0.0, 1.0]),
+        "weighted": pd.DataFrame(),
+    }
+    manifest = pd.DataFrame(
+        [_manifest_row("2025/b", "season_aware_frozen", "current_season_only_with_prior")]
+    )
+    leakage = pd.DataFrame([_leakage_row("2025/b", "season_aware_frozen")])
+
+    shadow = shadow_rows_for_role(
+        source=source,
+        event_key="2025/b",
+        train_seasons=(2024,),
+        test_season=2025,
+        event_order=["2024/a", "2025/a", "2025/b"],
+        manifest=manifest,
+        leakage=leakage,
+        shadow_role="season_aware_weighted_candidate",
+        temporal_policy="current_season_only_with_prior",
+        prediction_key="weighted",
+        policy_profile="season_aware_frozen",
+    )
+
+    assert not shadow["prediction_available"].any()
+    assert shadow["missing_reason"].eq("prediction_unavailable").all()
+    assert not shadow["shadow_eligible_for_prior_evidence"].any()
+
+
+def test_shadow_vs_live_selection_marks_live_behavior_unchanged() -> None:
+    shadow = pd.concat(
+        [
+            _shadow_rows("uniform_default", "uniform", "2025/a", 1),
+            _shadow_rows(
+                "season_aware_weighted_candidate",
+                "current_season_only_with_prior",
+                "2025/a",
+                1,
+            ),
+        ],
+        ignore_index=True,
+    )
+    selection = pd.DataFrame(
+        {
+            "prospective_split": ["prospective_replay_train_2024_test_2025"],
+            "policy_profile": ["season_aware_frozen"],
+            "season": [2025],
+            "event": ["A"],
+            "event_slug": ["a"],
+            "checkpoint": ["after_fp3"],
+            "candidate_selected": [False],
+            "candidate_selection_reason": ["insufficient_candidate_history"],
+        }
+    )
+
+    comparison = build_shadow_vs_live_selection(shadow, selection)
+
+    assert not comparison["selection_behavior_changed"].any()
+    assert comparison["shadow_uniform_available"].all()
+    assert comparison["shadow_weighted_available"].all()
 
 
 def test_season_aware_decision_uses_prior_history_only_and_margin() -> None:
@@ -469,3 +638,100 @@ def _config(project_root: Path) -> DataConfig:
         modeling_output_dir=project_root / "modeling",
         metrics_output_dir=project_root / "metrics",
     )
+
+
+def _manifest_row(event_key: str, profile: str, policy: str) -> dict[str, object]:
+    return {
+        "evaluation_type": "true_prospective_replay",
+        "test_event": event_key,
+        "test_season": int(event_key.split("/", maxsplit=1)[0]),
+        "checkpoint": "after_fp3",
+        "policy_profile": profile,
+        "training_seasons_used": "[2024, 2025]",
+        "training_event_keys_used": '["2024/a", "2025/a"]',
+        "training_max_event_key": "2025/a",
+        "same_test_season_prior_events_used": '["2025/a"]',
+        "future_test_season_events_used": "[]",
+        "feature_columns_signature": "features",
+        "model_configuration_signature": "model",
+        "temporal_weighting_policy": policy,
+        "sample_weight_summary": '{"effective_sample_size": 40.0}',
+        "training_row_count": 40,
+        "training_event_count": 2,
+        "random_state": 42,
+        "fit_timestamp": "2026-01-01T00:00:00Z",
+        "current_event_in_training": False,
+        "target_leakage_columns_used": "[]",
+    }
+
+
+def _leakage_row(event_key: str, profile: str) -> dict[str, object]:
+    return {
+        "test_season": int(event_key.split("/", maxsplit=1)[0]),
+        "test_event": event_key,
+        "checkpoint": "after_fp3",
+        "policy_profile": profile,
+        "future_test_season_event_used": False,
+        "future_event_used_anywhere": False,
+        "current_event_used": False,
+        "history_scope_valid": True,
+        "leakage_status": "valid",
+        "leakage_reason": "valid",
+    }
+
+
+def _shadow_rows(
+    role: str,
+    policy: str,
+    event_key: str,
+    event_order: int,
+    *,
+    prediction_offset: float = 0.0,
+) -> pd.DataFrame:
+    season_text, slug = event_key.split("/", maxsplit=1)
+    rows = _history_rows(
+        policy,
+        event_key,
+        event_order,
+        [0.0 + prediction_offset, 1.0 + prediction_offset],
+    )
+    rows = rows.rename(
+        columns={
+            "predicted_quali_gap_to_pole_sec": "prediction_gap_sec",
+            "quali_gap_to_pole_sec": "actual_gap_sec",
+        }
+    )
+    rows["split_name"] = "prospective_replay_train_2024_test_2025"
+    rows["train_seasons"] = "2024"
+    rows["test_season"] = 2025
+    rows["event_order"] = event_order
+    rows["shadow_role"] = role
+    rows["diagnostic_only"] = True
+    rows["prediction_available"] = True
+    rows["absolute_error_sec"] = (rows["prediction_gap_sec"] - rows["actual_gap_sec"]).abs()
+    rows["family"] = "ablation"
+    rows["model_name"] = "random_forest"
+    rows["feature_group"] = "base_plus_relative"
+    rows["temporal_weighting_policy"] = policy
+    rows["source_identity"] = "{}"
+    rows["source_lineage_valid"] = True
+    rows["training_completed"] = True
+    rows["training_row_count"] = 40
+    rows["training_event_count"] = 2
+    rows["training_event_keys"] = "[]"
+    rows["training_seasons"] = "[]"
+    rows["training_temporal_weighting_policy"] = policy
+    rows["training_weight_summary"] = "{}"
+    rows["training_effective_sample_size"] = 40.0
+    rows["training_current_season_prior_event_count"] = 1
+    rows["current_event_excluded_from_training"] = True
+    rows["future_test_season_events_excluded_from_training"] = True
+    rows["future_seasons_excluded_from_training"] = True
+    rows["shadow_eligible_for_prior_evidence"] = True
+    rows["shadow_persistence_status"] = "persisted"
+    rows["missing_reason"] = ""
+    rows["season"] = int(season_text)
+    rows["event_slug"] = slug
+    rows["team"] = "Team"
+    rows["team_key"] = "team"
+    return rows

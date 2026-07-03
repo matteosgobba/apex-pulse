@@ -897,7 +897,26 @@ def _prospective_replay_summary(summary: dict[str, Any] | None) -> dict[str, obj
             "prospective_replay_leakage_audit_result": {},
             "prospective_replay_recommendation": "season_aware_candidate_requires_more_evidence",
             "prospective_replay_fp3_summary": [],
+            "prospective_replay_shadow_candidates_available": False,
+            "prospective_replay_shadow_persistence_status": "missing",
+            "prospective_replay_shadow_gate_feasibility_summary": [],
+            "prospective_replay_shadow_candidate_eligibility_summary": {},
+            "prospective_replay_shadow_vs_live_selection_summary": {},
+            "prospective_replay_shadow_policy_recommendation": (
+                "season_aware_candidate_requires_more_evidence"
+            ),
         }
+    shadow_blocks = [
+        split.get("shadow_candidate_persistence", {})
+        for split in summary.get("splits", [])
+        if isinstance(split, dict) and isinstance(split.get("shadow_candidate_persistence"), dict)
+    ]
+    shadow_gate = [
+        row
+        for block in shadow_blocks
+        for row in block.get("shadow_gate_feasibility_summary", [])
+        if isinstance(row, dict)
+    ]
     fp3_rows: list[dict[str, object]] = []
     for split in summary.get("splits", []):
         if not isinstance(split, dict):
@@ -931,6 +950,21 @@ def _prospective_replay_summary(summary: dict[str, Any] | None) -> dict[str, obj
         ),
         "prospective_replay_fp3_summary": fp3_rows,
         "prospective_replay_validation_label": "true_prospective_replay",
+        "prospective_replay_shadow_candidates_available": bool(shadow_blocks),
+        "prospective_replay_shadow_persistence_status": summary.get(
+            "shadow_candidate_persistence_status",
+            "missing",
+        ),
+        "prospective_replay_shadow_gate_feasibility_summary": shadow_gate,
+        "prospective_replay_shadow_candidate_eligibility_summary": {},
+        "prospective_replay_shadow_vs_live_selection_summary": {
+            "live_selection_behavior_changed": False,
+            "diagnostic_only": True,
+        },
+        "prospective_replay_shadow_policy_recommendation": summary.get(
+            "recommendation",
+            "retain_static_policy",
+        ),
     }
 
 
@@ -944,6 +978,9 @@ def _prospective_replay_eligibility_summary(
             "prospective_replay_primary_zero_selection_explanation": None,
             "prospective_replay_candidate_evidence_retention_status": None,
             "prospective_replay_gate_feasibility_summary": [],
+            "prospective_replay_shadow_gate_feasibility_summary": [],
+            "prospective_replay_shadow_candidate_eligibility_summary": {},
+            "prospective_replay_shadow_vs_live_selection_summary": {},
             "prospective_replay_policy_recommendation": (
                 "season_aware_candidate_requires_more_evidence"
             ),
@@ -960,6 +997,18 @@ def _prospective_replay_eligibility_summary(
         "prospective_replay_gate_feasibility_summary": summary.get(
             "true_replay_gate_feasibility_summary",
             [],
+        ),
+        "prospective_replay_shadow_gate_feasibility_summary": summary.get(
+            "shadow_gate_feasibility_summary",
+            [],
+        ),
+        "prospective_replay_shadow_candidate_eligibility_summary": summary.get(
+            "shadow_candidate_eligibility_summary",
+            {},
+        ),
+        "prospective_replay_shadow_vs_live_selection_summary": summary.get(
+            "shadow_vs_live_selection_summary",
+            {},
         ),
         "prospective_replay_policy_recommendation": summary.get(
             "policy_recommendation",

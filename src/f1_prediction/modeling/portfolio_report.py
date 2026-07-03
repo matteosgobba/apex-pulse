@@ -363,6 +363,7 @@ def build_portfolio_summary_payload(
     prospective_policy = artifacts["prospective_policy_summary"] or {}
     prospective_replay = artifacts["prospective_replay_summary"] or {}
     prospective_replay_eligibility = artifacts["prospective_replay_eligibility_audit_summary"] or {}
+    prospective_replay_shadow = artifacts["prospective_replay_shadow_candidate_summary"] or {}
     missing_artifacts = artifacts["missing_artifacts"]
     modes_available = [mode for mode in CHAMPION_MODES if mode in champion_metrics]
     best_by_checkpoint = _best_champion_mode_by_checkpoint(champion_metrics, backtest_report)
@@ -390,6 +391,7 @@ def build_portfolio_summary_payload(
             champion_source_lineage,
             prospective_replay,
             prospective_replay_eligibility,
+            prospective_replay_shadow,
         ),
         "limitations": _limitations(),
         "recommended_next_milestone": (
@@ -425,6 +427,9 @@ def build_portfolio_summary_payload(
         ),
         "prospective_replay_eligibility_audit_if_available": (
             _prospective_replay_eligibility_portfolio_summary(prospective_replay_eligibility)
+        ),
+        "prospective_replay_shadow_if_available": _prospective_replay_shadow_portfolio_summary(
+            prospective_replay_shadow
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -599,6 +604,9 @@ def build_model_card(
             summary.get("prospective_replay_eligibility_audit_if_available")
         ),
         "",
+        "## Prospective replay shadow candidates",
+        _prospective_replay_shadow_card_text(summary.get("prospective_replay_shadow_if_available")),
+        "",
         "## Baselines",
         "The report compares champion policies against practice-lap baselines, including robust "
         "baselines that fall back from weak or extreme latest-session signals.",
@@ -684,6 +692,9 @@ def _load_artifacts(metrics_dir: Path) -> dict[str, Any]:
         ),
         "prospective_replay_eligibility_audit_summary": _read_json_if_exists(
             metrics_dir / "prospective_replay_eligibility_audit_summary.json"
+        ),
+        "prospective_replay_shadow_candidate_summary": _read_json_if_exists(
+            metrics_dir / "prospective_replay_shadow_candidate_summary.json"
         ),
         "event_error_summary": _read_parquet_if_exists(metrics_dir / "event_error_summary.parquet"),
         "driver_error_summary": _read_parquet_if_exists(
@@ -867,6 +878,7 @@ def _main_takeaways(
     champion_source_lineage: dict[str, Any] | None = None,
     prospective_replay: dict[str, Any] | None = None,
     prospective_replay_eligibility: dict[str, Any] | None = None,
+    prospective_replay_shadow: dict[str, Any] | None = None,
 ) -> list[str]:
     takeaways: list[str] = []
     static = champion_metrics.get("static", {})
@@ -940,6 +952,15 @@ def _main_takeaways(
         takeaways.append(
             "True replay eligibility audit separates candidate generation, retention, and "
             f"selection; evidence retention status `{retention}`."
+        )
+    if prospective_replay_shadow:
+        status = prospective_replay_shadow.get(
+            "shadow_candidate_persistence_status",
+            "unknown",
+        )
+        takeaways.append(
+            "True replay persists diagnostic-only FP3 shadow candidates separately from live "
+            f"policy outputs; shadow persistence status `{status}`."
         )
     if not takeaways:
         takeaways.append(
@@ -1147,6 +1168,40 @@ def _prospective_replay_eligibility_portfolio_summary(
             "true_replay_gate_feasibility_summary",
             [],
         ),
+        "shadow_gate_feasibility_summary": summary.get("shadow_gate_feasibility_summary", []),
+        "shadow_candidate_eligibility_summary": summary.get(
+            "shadow_candidate_eligibility_summary",
+            {},
+        ),
+        "shadow_vs_live_selection_summary": summary.get(
+            "shadow_vs_live_selection_summary",
+            {},
+        ),
+    }
+
+
+def _prospective_replay_shadow_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "prospective_replay_shadow_candidates_available": summary.get("status") != "missing_inputs",
+        "shadow_candidate_persistence_status": summary.get("shadow_candidate_persistence_status"),
+        "shadow_gate_feasibility_summary": summary.get("shadow_gate_feasibility_summary", []),
+        "shadow_candidate_eligibility_summary": summary.get(
+            "shadow_candidate_eligibility_summary",
+            {},
+        ),
+        "shadow_vs_live_selection_summary": summary.get(
+            "shadow_vs_live_selection_summary",
+            {},
+        ),
+        "shadow_policy_recommendation": summary.get(
+            "policy_recommendation",
+            "retain_static_policy",
+        ),
+        "diagnostic_only": True,
     }
 
 
@@ -1481,6 +1536,24 @@ def _prospective_replay_eligibility_card_text(value: object) -> str:
         + f" Retention status: `{retention}`. Primary zero-selection explanation: "
         + f"{explanation}. Pipeline recommendation: `{pipeline}`; policy recommendation: "
         + f"`{policy}`. No thresholds or champion defaults are changed by this audit."
+    )
+
+
+def _prospective_replay_shadow_card_text(value: object) -> str:
+    intro = (
+        "True replay persists diagnostic-only FP3 shadow predictions for the uniform default and "
+        "season-aware weighted candidate, while live replay policy outputs and primary metrics "
+        "remain selected-policy outputs only."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No shadow-candidate artifact was available."
+    status = value.get("shadow_candidate_persistence_status")
+    recommendation = value.get("shadow_policy_recommendation", "retain_static_policy")
+    return (
+        intro
+        + f" Persistence status: `{status}`. Shadow history is prior-only and excludes current "
+        + "or future events; shadow eligibility is a frozen-gate diagnostic, not a deployed "
+        + f"selection policy. Policy recommendation: `{recommendation}`."
     )
 
 

@@ -167,6 +167,74 @@ def test_feasibility_timeline_identifies_first_gate_event(tmp_path: Path) -> Non
     assert not feasibility["min_prior_candidate_folds_feasible"].iloc[0]
 
 
+def test_shadow_history_reaches_gates_and_excludes_current_event(tmp_path: Path) -> None:
+    artifacts = _synthetic_artifacts(tmp_path)
+    artifacts["shadow"] = _shadow_artifact(events=["a", "b", "c", "d", "e", "f"])
+    profiles = build_frozen_policy_profiles(
+        load_model_config(),
+        profile_names=("season_aware_frozen",),
+        uncertainty="conformal_predicted_gap_bucket",
+    )
+
+    ledger = build_candidate_evidence_ledger(artifacts, profiles)
+    season_aware = ledger[ledger["policy_profile"].eq("season_aware_frozen")]
+    row = season_aware[season_aware["event_slug"].eq("f")].iloc[0]
+
+    assert row["shadow_current_event_excluded"]
+    assert row["shadow_future_test_season_events_excluded"]
+    assert row["prior_shadow_candidate_default_aligned_rows"] == 10
+    assert not row["shadow_candidate_prediction_history_gate_passed"]
+
+
+def test_shadow_counterfactual_selection_differs_from_live_when_gates_pass(
+    tmp_path: Path,
+) -> None:
+    artifacts = _synthetic_artifacts(tmp_path)
+    artifacts["shadow"] = _shadow_artifact(events=["a", "b", "c", "d", "e", "f"], rows_per_event=20)
+    profiles = build_frozen_policy_profiles(
+        load_model_config(),
+        profile_names=("season_aware_frozen",),
+        uncertainty="conformal_predicted_gap_bucket",
+    )
+
+    ledger = build_candidate_evidence_ledger(artifacts, profiles)
+    row = ledger[
+        ledger["policy_profile"].eq("season_aware_frozen") & ledger["event_slug"].eq("f")
+    ].iloc[0]
+
+    assert row["shadow_candidate_prediction_history_gate_passed"]
+    assert row["shadow_candidate_fold_history_gate_passed"]
+    assert row["shadow_season_aware_candidate_eligible_under_frozen_gates"]
+    assert row["shadow_history_counterfactual_selection"] == "season_aware_weighted_candidate"
+    assert row["live_vs_shadow_selection_disagreement"]
+    assert not row["season_aware_selected"]
+
+
+def test_shadow_margin_failure_prevents_counterfactual_selection(tmp_path: Path) -> None:
+    artifacts = _synthetic_artifacts(tmp_path)
+    artifacts["shadow"] = _shadow_artifact(
+        events=["a", "b", "c", "d", "e", "f"],
+        rows_per_event=20,
+        weighted_offset=0.4,
+        default_offset=0.1,
+    )
+    profiles = build_frozen_policy_profiles(
+        load_model_config(),
+        profile_names=("season_aware_frozen",),
+        uncertainty="conformal_predicted_gap_bucket",
+    )
+
+    ledger = build_candidate_evidence_ledger(artifacts, profiles)
+    row = ledger[
+        ledger["policy_profile"].eq("season_aware_frozen") & ledger["event_slug"].eq("f")
+    ].iloc[0]
+
+    assert row["shadow_candidate_prior_metric_available"]
+    assert not row["shadow_season_aware_candidate_eligible_under_frozen_gates"]
+    assert row["shadow_history_counterfactual_selection"] == "uniform_default"
+    assert "margin_requirement_not_met" in row["shadow_all_blocking_reasons"]
+
+
 def test_live_selection_consistency_detects_mismatch(tmp_path: Path) -> None:
     artifacts = _synthetic_artifacts(tmp_path)
     profiles = build_frozen_policy_profiles(
@@ -211,6 +279,10 @@ def test_future_rows_make_history_scope_invalid() -> None:
 def test_create_audit_report_writes_outputs_and_figures(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_synthetic_artifacts(config.metrics_output_dir)
+    _shadow_artifact(events=["a", "b", "c", "d", "e", "f"]).to_parquet(
+        config.metrics_output_dir / "prospective_replay_shadow_candidates.parquet",
+        index=False,
+    )
 
     summary = create_prospective_replay_eligibility_audit_report(config, load_model_config())
 
@@ -219,6 +291,9 @@ def test_create_audit_report_writes_outputs_and_figures(tmp_path: Path) -> None:
         config.metrics_output_dir / "prospective_replay_eligibility_audit_summary.json"
     ).is_file()
     assert len(summary.figure_paths) >= 1
+    summary_path = config.metrics_output_dir / "prospective_replay_eligibility_audit_summary.json"
+    payload = json.loads(summary_path.read_text())
+    assert payload["shadow_candidate_persistence_enabled"]
 
 
 def test_existing_champion_modes_unchanged() -> None:
@@ -393,6 +468,101 @@ def _prediction_rows(
             "selected_model_name": ["random_forest", "random_forest"],
             "selected_feature_group": ["base_plus_relative", "base_plus_relative"],
             "season_aware_selected": [False, False],
+        }
+    )
+
+
+def _shadow_artifact(
+    *,
+    events: list[str],
+    rows_per_event: int = 2,
+    weighted_offset: float = 0.0,
+    default_offset: float = 0.4,
+) -> pd.DataFrame:
+    frames = []
+    split = "prospective_replay_train_2024_test_2025"
+    for order, slug in enumerate(events):
+        event_key = f"2025/{slug}"
+        frames.append(
+            _shadow_rows(
+                split,
+                "uniform_default",
+                "uniform",
+                event_key,
+                order,
+                rows_per_event,
+                default_offset,
+            )
+        )
+        frames.append(
+            _shadow_rows(
+                split,
+                "season_aware_weighted_candidate",
+                "current_season_only_with_prior",
+                event_key,
+                order,
+                rows_per_event,
+                weighted_offset,
+            )
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
+def _shadow_rows(
+    split: str,
+    role: str,
+    policy: str,
+    event_key: str,
+    event_order: int,
+    rows_per_event: int,
+    offset: float,
+) -> pd.DataFrame:
+    season_text, slug = event_key.split("/", maxsplit=1)
+    actuals = [float(index) / 10.0 for index in range(rows_per_event)]
+    drivers = [f"D{index:02d}" for index in range(rows_per_event)]
+    predictions = [value + offset for value in actuals]
+    return pd.DataFrame(
+        {
+            "split_name": [split] * rows_per_event,
+            "train_seasons": ["2024"] * rows_per_event,
+            "test_season": [2025] * rows_per_event,
+            "fold_id": [event_order + 1] * rows_per_event,
+            "event_order": [event_order] * rows_per_event,
+            "season": [int(season_text)] * rows_per_event,
+            "event": [slug.upper()] * rows_per_event,
+            "event_slug": [slug] * rows_per_event,
+            "checkpoint": ["after_fp3"] * rows_per_event,
+            "driver": drivers,
+            "driver_key": drivers,
+            "team": ["Team"] * rows_per_event,
+            "team_key": ["team"] * rows_per_event,
+            "shadow_role": [role] * rows_per_event,
+            "diagnostic_only": [True] * rows_per_event,
+            "prediction_available": [True] * rows_per_event,
+            "prediction_gap_sec": predictions,
+            "actual_gap_sec": actuals,
+            "absolute_error_sec": [abs(offset)] * rows_per_event,
+            "family": ["ablation"] * rows_per_event,
+            "model_name": ["random_forest"] * rows_per_event,
+            "feature_group": ["base_plus_relative"] * rows_per_event,
+            "temporal_weighting_policy": [policy] * rows_per_event,
+            "source_identity": ["{}"] * rows_per_event,
+            "source_lineage_valid": [True] * rows_per_event,
+            "training_completed": [True] * rows_per_event,
+            "training_row_count": [40] * rows_per_event,
+            "training_event_count": [2] * rows_per_event,
+            "training_event_keys": ["[]"] * rows_per_event,
+            "training_seasons": ["[]"] * rows_per_event,
+            "training_temporal_weighting_policy": [policy] * rows_per_event,
+            "training_weight_summary": ["{}"] * rows_per_event,
+            "training_effective_sample_size": [40.0] * rows_per_event,
+            "training_current_season_prior_event_count": [event_order] * rows_per_event,
+            "current_event_excluded_from_training": [True] * rows_per_event,
+            "future_test_season_events_excluded_from_training": [True] * rows_per_event,
+            "future_seasons_excluded_from_training": [True] * rows_per_event,
+            "shadow_eligible_for_prior_evidence": [True] * rows_per_event,
+            "shadow_persistence_status": ["persisted"] * rows_per_event,
+            "missing_reason": [""] * rows_per_event,
         }
     )
 

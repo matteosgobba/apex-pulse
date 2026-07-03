@@ -136,6 +136,9 @@ def load_replay_eligibility_artifacts(metrics_dir: Path) -> dict[str, Any]:
         "prospective_policy_selection_log.csv": (
             metrics_dir / "prospective_policy_selection_log.csv"
         ),
+        "prospective_replay_shadow_candidates.parquet": (
+            metrics_dir / "prospective_replay_shadow_candidates.parquet"
+        ),
     }
     missing = [name for name, path in required_files.items() if not path.is_file()]
     replay_summary = _read_json_if_exists(required_files["prospective_replay_summary.json"]) or {}
@@ -157,6 +160,9 @@ def load_replay_eligibility_artifacts(metrics_dir: Path) -> dict[str, Any]:
         or {},
         "artifact_selection": _read_csv_if_exists(
             optional_files["prospective_policy_selection_log.csv"]
+        ),
+        "shadow": _read_parquet_if_exists(
+            optional_files["prospective_replay_shadow_candidates.parquet"]
         ),
         "predictions": predictions,
         "prediction_paths": prediction_paths,
@@ -202,6 +208,7 @@ def build_candidate_evidence_ledger(
     manifest = artifacts["manifest"]
     leakage = artifacts["leakage"]
     predictions = artifacts["predictions"]
+    shadow = artifacts["shadow"]
     columns = _ledger_columns()
     if selection.empty:
         return pd.DataFrame(columns=columns)
@@ -214,6 +221,9 @@ def build_candidate_evidence_ledger(
             .astype(str)
             .eq(str(split_name))
         ].copy()
+        split_shadow = shadow[
+            shadow.get("split_name", pd.Series(dtype=str)).astype(str).eq(str(split_name))
+        ].copy()
         split_manifest = manifest_for_split(manifest, split_rows)
         split_leakage = leakage_for_split(leakage, split_manifest)
         for _, selection_row in split_rows.iterrows():
@@ -224,6 +234,7 @@ def build_candidate_evidence_ledger(
                     selection_row=selection_row,
                     event_order=event_order,
                     predictions=split_predictions,
+                    shadow=split_shadow,
                     manifest=split_manifest,
                     leakage=split_leakage,
                     profile=profiles.get(str(selection_row.get("policy_profile"))),
@@ -237,6 +248,7 @@ def ledger_row_for_selection(
     selection_row: pd.Series,
     event_order: list[str],
     predictions: pd.DataFrame,
+    shadow: pd.DataFrame,
     manifest: pd.DataFrame,
     leakage: pd.DataFrame,
     profile: Any,
@@ -267,6 +279,23 @@ def ledger_row_for_selection(
         if not candidate_prior.empty and not default_prior.empty
         else pd.DataFrame()
     )
+    shadow_current_candidate = current_shadow_rows(
+        shadow,
+        selection_row,
+        "season_aware_weighted_candidate",
+    )
+    shadow_current_default = current_shadow_rows(shadow, selection_row, "uniform_default")
+    shadow_current_order = current_shadow_event_order(
+        shadow_current_candidate,
+        shadow_current_default,
+    )
+    shadow_candidate_prior = prior_shadow_rows(
+        shadow,
+        shadow_current_order,
+        "season_aware_weighted_candidate",
+    )
+    shadow_default_prior = prior_shadow_rows(shadow, shadow_current_order, "uniform_default")
+    shadow_aligned = align_shadow_history(shadow_candidate_prior, shadow_default_prior)
     current_candidate_persisted = current_source_rows(
         current_predictions,
         profile_name,
@@ -282,6 +311,7 @@ def ledger_row_for_selection(
     candidate_leakage = leakage_for_event(leakage, event_key, "season_aware_frozen")
     default_leakage = leakage_for_event(leakage, event_key, "static_baseline")
     candidate_mae, default_mae, improvement = prior_metrics(aligned)
+    shadow_candidate_mae, shadow_default_mae, shadow_improvement = prior_metrics(shadow_aligned)
     settings = profile_settings(profile)
     cold_start_passed = (
         int(selection_row.get("current_test_season_prior_event_count", 0))
@@ -307,6 +337,41 @@ def ledger_row_for_selection(
         and metric_available
         and margin_passed
     )
+    shadow_scope = shadow_history_scope_checks(
+        shadow_candidate_prior,
+        shadow_default_prior,
+        event_key,
+        shadow_current_order,
+        int(selection_row.get("season")),
+    )
+    shadow_cold_start = cold_start_passed
+    shadow_fold_gate = (
+        shadow_aligned["fold_id"].nunique() >= settings["min_prior_candidate_folds_required"]
+        if not shadow_aligned.empty
+        else False
+    )
+    shadow_prediction_gate = (
+        len(shadow_aligned) >= settings["min_prior_candidate_predictions_required"]
+    )
+    shadow_alignment_gate = not shadow_aligned.empty
+    shadow_metric_available = shadow_improvement is not None
+    shadow_margin_passed = (
+        shadow_improvement is not None
+        and shadow_improvement >= settings["improvement_margin_sec_required"]
+    )
+    shadow_eligible = bool(
+        profile_name == "season_aware_frozen"
+        and shadow_scope["shadow_history_scope_valid"]
+        and shadow_cold_start
+        and shadow_fold_gate
+        and shadow_prediction_gate
+        and shadow_alignment_gate
+        and shadow_metric_available
+        and shadow_margin_passed
+    )
+    shadow_counterfactual = (
+        "season_aware_weighted_candidate" if shadow_eligible else "uniform_default"
+    )
     selected = bool(selection_row.get("candidate_selected", False))
     blocking = blocking_reasons(
         profile_name=profile_name,
@@ -321,6 +386,19 @@ def ledger_row_for_selection(
         margin_passed=margin_passed,
         eligible=eligible,
         selected=selected,
+    )
+    shadow_blocking = shadow_blocking_reasons(
+        candidate_training_completed=candidate_training_completed,
+        candidate_available=not shadow_current_candidate.empty
+        and bool(shadow_current_candidate["prediction_available"].astype(bool).any()),
+        cold_start_passed=shadow_cold_start,
+        fold_gate=shadow_fold_gate,
+        prediction_gate=shadow_prediction_gate,
+        alignment_gate=shadow_alignment_gate,
+        metric_available=shadow_metric_available,
+        margin_passed=shadow_margin_passed,
+        eligible=shadow_eligible,
+        live_selected=selected,
     )
     return {
         "split_name": split_name,
@@ -416,6 +494,48 @@ def ledger_row_for_selection(
         "season_aware_selection_reason": selection_row.get("candidate_selection_reason"),
         "primary_blocking_reason": blocking[0] if blocking else "candidate_selected",
         "all_blocking_reasons": ";".join(blocking),
+        "shadow_candidate_prediction_available_for_current_event": bool(
+            not shadow_current_candidate.empty
+            and shadow_current_candidate["prediction_available"].astype(bool).any()
+        ),
+        "shadow_default_prediction_available_for_current_event": bool(
+            not shadow_current_default.empty
+            and shadow_current_default["prediction_available"].astype(bool).any()
+        ),
+        "prior_shadow_candidate_events_available": int(
+            shadow_candidate_prior["event_slug"].nunique()
+        )
+        if not shadow_candidate_prior.empty
+        else 0,
+        "prior_shadow_candidate_prediction_rows_available": int(len(shadow_candidate_prior)),
+        "prior_shadow_default_events_available": int(shadow_default_prior["event_slug"].nunique())
+        if not shadow_default_prior.empty
+        else 0,
+        "prior_shadow_default_prediction_rows_available": int(len(shadow_default_prior)),
+        "prior_shadow_candidate_default_aligned_events": int(shadow_aligned["event_slug"].nunique())
+        if not shadow_aligned.empty
+        else 0,
+        "prior_shadow_candidate_default_aligned_rows": int(len(shadow_aligned)),
+        **shadow_scope,
+        "shadow_cold_start_gate_passed": bool(shadow_cold_start),
+        "shadow_candidate_fold_history_gate_passed": bool(shadow_fold_gate),
+        "shadow_candidate_prediction_history_gate_passed": bool(shadow_prediction_gate),
+        "shadow_candidate_default_alignment_gate_passed": bool(shadow_alignment_gate),
+        "shadow_candidate_prior_metric_available": bool(shadow_metric_available),
+        "shadow_candidate_prior_mae": shadow_candidate_mae,
+        "shadow_default_prior_mae": shadow_default_mae,
+        "shadow_prior_improvement_sec": shadow_improvement,
+        "shadow_season_aware_candidate_eligible_under_frozen_gates": shadow_eligible,
+        "shadow_history_counterfactual_selection": shadow_counterfactual,
+        "shadow_primary_blocking_reason": shadow_blocking[0]
+        if shadow_blocking
+        else "all_gates_passed_candidate_eligible",
+        "shadow_all_blocking_reasons": ";".join(shadow_blocking),
+        "live_vs_shadow_eligibility_disagreement": bool(eligible != shadow_eligible),
+        "live_vs_shadow_selection_disagreement": bool(
+            ("season_aware_weighted_candidate" if selected else "uniform_default")
+            != shadow_counterfactual
+        ),
     }
 
 
@@ -450,6 +570,30 @@ def build_gate_feasibility(ledger: pd.DataFrame) -> pd.DataFrame:
         "number_of_events_with_unexpected_live_policy_disagreement",
         "min_prior_candidate_folds_feasible",
         "min_prior_candidate_predictions_feasible",
+        "first_event_with_shadow_candidate_prediction_available",
+        "first_event_with_shadow_default_prediction_available",
+        "first_event_with_shadow_cold_start_gate_passed",
+        "first_event_with_shadow_candidate_fold_history_gate_passed",
+        "first_event_with_shadow_candidate_prediction_history_gate_passed",
+        "first_event_with_shadow_candidate_default_alignment_gate_passed",
+        "first_event_with_shadow_prior_metric_available",
+        "first_event_with_shadow_all_non_margin_gates_passed",
+        "first_event_with_shadow_margin_passed",
+        "first_event_shadow_candidate_eligible",
+        "first_event_shadow_counterfactual_selected",
+        "maximum_prior_shadow_candidate_folds_observed",
+        "maximum_prior_shadow_candidate_prediction_rows_observed",
+        "maximum_prior_shadow_aligned_rows_observed",
+        "number_of_events_with_shadow_candidate_available",
+        "number_of_events_with_usable_shadow_prior_evidence",
+        "number_of_events_shadow_blocked_by_cold_start",
+        "number_of_events_shadow_blocked_by_insufficient_history",
+        "number_of_events_shadow_blocked_by_alignment",
+        "number_of_events_shadow_blocked_by_margin",
+        "number_of_events_shadow_candidate_eligible",
+        "number_of_events_shadow_counterfactually_selected",
+        "shadow_min_prior_candidate_folds_feasible",
+        "shadow_min_prior_candidate_predictions_feasible",
     ]
     if ledger.empty:
         return pd.DataFrame(columns=columns)
@@ -468,9 +612,29 @@ def build_gate_feasibility(ledger: pd.DataFrame) -> pd.DataFrame:
             group["season_aware_candidate_eligible_under_frozen_gates"].astype(bool)
             != group["season_aware_selected"].astype(bool)
         ]
+        shadow_non_margin = (
+            group["shadow_cold_start_gate_passed"].astype(bool)
+            & group["shadow_candidate_fold_history_gate_passed"].astype(bool)
+            & group["shadow_candidate_prediction_history_gate_passed"].astype(bool)
+            & group["shadow_candidate_default_alignment_gate_passed"].astype(bool)
+            & group["shadow_candidate_prior_metric_available"].astype(bool)
+        )
+        shadow_selected = (
+            group["shadow_history_counterfactual_selection"]
+            .astype(str)
+            .eq("season_aware_weighted_candidate")
+        )
         max_folds = int(group["prior_candidate_default_aligned_events"].max()) if len(group) else 0
         max_rows = (
             int(group["prior_candidate_prediction_rows_available"].max()) if len(group) else 0
+        )
+        shadow_max_folds = (
+            int(group["prior_shadow_candidate_default_aligned_events"].max()) if len(group) else 0
+        )
+        shadow_max_rows = (
+            int(group["prior_shadow_candidate_prediction_rows_available"].max())
+            if len(group)
+            else 0
         )
         rows.append(
             {
@@ -530,6 +694,100 @@ def build_gate_feasibility(ledger: pd.DataFrame) -> pd.DataFrame:
                 ),
                 "min_prior_candidate_predictions_feasible": bool(
                     max_rows >= int(group["min_prior_candidate_predictions_required"].max())
+                ),
+                "first_event_with_shadow_candidate_prediction_available": first_event(
+                    group,
+                    "shadow_candidate_prediction_available_for_current_event",
+                ),
+                "first_event_with_shadow_default_prediction_available": first_event(
+                    group,
+                    "shadow_default_prediction_available_for_current_event",
+                ),
+                "first_event_with_shadow_cold_start_gate_passed": first_event(
+                    group,
+                    "shadow_cold_start_gate_passed",
+                ),
+                "first_event_with_shadow_candidate_fold_history_gate_passed": first_event(
+                    group,
+                    "shadow_candidate_fold_history_gate_passed",
+                ),
+                "first_event_with_shadow_candidate_prediction_history_gate_passed": first_event(
+                    group,
+                    "shadow_candidate_prediction_history_gate_passed",
+                ),
+                "first_event_with_shadow_candidate_default_alignment_gate_passed": first_event(
+                    group,
+                    "shadow_candidate_default_alignment_gate_passed",
+                ),
+                "first_event_with_shadow_prior_metric_available": first_event(
+                    group,
+                    "shadow_candidate_prior_metric_available",
+                ),
+                "first_event_with_shadow_all_non_margin_gates_passed": first_event_from_mask(
+                    group,
+                    shadow_non_margin,
+                ),
+                "first_event_with_shadow_margin_passed": first_event_from_mask(
+                    group,
+                    pd.to_numeric(
+                        group["shadow_prior_improvement_sec"],
+                        errors="coerce",
+                    ).fillna(float("-inf"))
+                    >= pd.to_numeric(
+                        group["improvement_margin_sec_required"],
+                        errors="coerce",
+                    ),
+                ),
+                "first_event_shadow_candidate_eligible": first_event(
+                    group,
+                    "shadow_season_aware_candidate_eligible_under_frozen_gates",
+                ),
+                "first_event_shadow_counterfactual_selected": first_event_from_mask(
+                    group,
+                    shadow_selected,
+                ),
+                "maximum_prior_shadow_candidate_folds_observed": shadow_max_folds,
+                "maximum_prior_shadow_candidate_prediction_rows_observed": shadow_max_rows,
+                "maximum_prior_shadow_aligned_rows_observed": int(
+                    group["prior_shadow_candidate_default_aligned_rows"].max()
+                )
+                if len(group)
+                else 0,
+                "number_of_events_with_shadow_candidate_available": int(
+                    group["shadow_candidate_prediction_available_for_current_event"]
+                    .astype(bool)
+                    .sum()
+                ),
+                "number_of_events_with_usable_shadow_prior_evidence": int(
+                    group["shadow_candidate_prior_metric_available"].astype(bool).sum()
+                ),
+                "number_of_events_shadow_blocked_by_cold_start": contains_shadow_reason(
+                    group,
+                    "cold_start_gate_failed",
+                ),
+                "number_of_events_shadow_blocked_by_insufficient_history": contains_shadow_reason(
+                    group,
+                    "insufficient_prior_shadow",
+                ),
+                "number_of_events_shadow_blocked_by_alignment": contains_shadow_reason(
+                    group,
+                    "insufficient_candidate_default_alignment",
+                ),
+                "number_of_events_shadow_blocked_by_margin": contains_shadow_reason(
+                    group,
+                    "margin_requirement_not_met",
+                ),
+                "number_of_events_shadow_candidate_eligible": int(
+                    group["shadow_season_aware_candidate_eligible_under_frozen_gates"]
+                    .astype(bool)
+                    .sum()
+                ),
+                "number_of_events_shadow_counterfactually_selected": int(shadow_selected.sum()),
+                "shadow_min_prior_candidate_folds_feasible": bool(
+                    shadow_max_folds >= int(group["min_prior_candidate_folds_required"].max())
+                ),
+                "shadow_min_prior_candidate_predictions_feasible": bool(
+                    shadow_max_rows >= int(group["min_prior_candidate_predictions_required"].max())
                 ),
             }
         )
@@ -776,7 +1034,19 @@ def build_eligibility_summary_payload(
         if not season_aware.empty
         else False
     )
+    shadow_future_violation = (
+        bool(season_aware["shadow_future_test_season_events_excluded"].eq(False).any())
+        if not season_aware.empty and "shadow_future_test_season_events_excluded" in season_aware
+        else False
+    )
+    shadow_current_violation = (
+        bool(season_aware["shadow_current_event_excluded"].eq(False).any())
+        if not season_aware.empty and "shadow_current_event_excluded" in season_aware
+        else False
+    )
     primary = primary_zero_selection_explanation(season_aware, retention_status)
+    shadow_available = artifacts.get("shadow", pd.DataFrame())
+    shadow_summary = shadow_candidate_summary(season_aware, feasibility)
     return {
         "status": "complete" if not ledger.empty else "missing_inputs",
         "inputs_available": artifacts["inputs_available"],
@@ -792,15 +1062,38 @@ def build_eligibility_summary_payload(
         "live_selection_consistency_status": "consistent" if consistency_ok else "mismatch",
         "future_history_violation_detected": future_violation,
         "current_event_history_violation_detected": current_violation,
+        "shadow_candidate_persistence_enabled": not shadow_available.empty,
+        "shadow_candidate_persistence_status": (
+            "complete"
+            if not shadow_available.empty
+            and season_aware["shadow_candidate_prediction_available_for_current_event"]
+            .astype(bool)
+            .all()
+            else "partial"
+            if not shadow_available.empty
+            else "missing"
+        ),
+        "shadow_candidate_persistence_complete_by_split": shadow_persistence_by_split(season_aware),
+        "shadow_history_valid": not shadow_future_violation and not shadow_current_violation,
+        "shadow_history_future_violation_detected": shadow_future_violation,
+        "shadow_history_current_event_violation_detected": shadow_current_violation,
+        "shadow_gate_feasibility_summary": records_for_json(feasibility),
+        "shadow_candidate_eligibility_summary": shadow_summary["eligibility"],
+        "shadow_candidate_quality_summary": shadow_summary["quality"],
+        "shadow_vs_live_selection_summary": shadow_summary["vs_live"],
         "primary_explanation_for_zero_selection": primary,
         "secondary_explanations": secondary_explanations(season_aware, artifact_comparison),
+        "primary_explanation_after_shadow_persistence": shadow_summary["primary_explanation"],
+        "secondary_explanations_after_shadow_persistence": shadow_summary["secondary_explanations"],
         "true_replay_gate_feasibility_summary": records_for_json(feasibility),
         "artifact_driven_vs_true_replay_summary": artifact_comparison_summary(artifact_comparison),
         "candidate_evidence_pipeline_recommendation": pipeline_recommendation(
             retention_status,
             season_aware,
-            future_violation,
-            current_violation,
+            future_violation or shadow_future_violation,
+            current_violation or shadow_current_violation,
+            shadow_available=not shadow_available.empty,
+            shadow_valid=not shadow_future_violation and not shadow_current_violation,
         ),
         "policy_recommendation": "retain_static_policy",
         "known_limitations": [
@@ -976,6 +1269,103 @@ def current_source_rows(
     return prior_source_rows(predictions, profile_name, temporal_policy)
 
 
+def current_shadow_rows(
+    shadow: pd.DataFrame,
+    selection_row: pd.Series,
+    shadow_role: str,
+) -> pd.DataFrame:
+    if shadow.empty:
+        return shadow
+    mask = (
+        shadow["shadow_role"].astype(str).eq(shadow_role)
+        & shadow["checkpoint"].astype(str).eq(FP3_CHECKPOINT)
+        & shadow["season"].astype(int).eq(int(selection_row.get("season")))
+        & shadow["event_slug"].astype(str).eq(str(selection_row.get("event_slug")))
+    )
+    return shadow[mask].copy()
+
+
+def current_shadow_event_order(candidate: pd.DataFrame, default: pd.DataFrame) -> int | None:
+    frame = pd.concat([candidate, default], ignore_index=True, sort=False)
+    if frame.empty or "event_order" not in frame:
+        return None
+    values = pd.to_numeric(frame["event_order"], errors="coerce").dropna()
+    return int(values.min()) if not values.empty else None
+
+
+def prior_shadow_rows(
+    shadow: pd.DataFrame,
+    current_event_order: int | None,
+    shadow_role: str,
+) -> pd.DataFrame:
+    if shadow.empty or current_event_order is None:
+        return shadow
+    frame = shadow[
+        shadow["shadow_role"].astype(str).eq(shadow_role)
+        & shadow["checkpoint"].astype(str).eq(FP3_CHECKPOINT)
+        & shadow["prediction_available"].astype(bool)
+        & shadow["shadow_eligible_for_prior_evidence"].astype(bool)
+    ].copy()
+    if frame.empty:
+        return frame
+    order = pd.to_numeric(frame["event_order"], errors="coerce")
+    return frame[order.lt(current_event_order)].copy()
+
+
+def align_shadow_history(candidate: pd.DataFrame, default: pd.DataFrame) -> pd.DataFrame:
+    if candidate.empty or default.empty:
+        return pd.DataFrame()
+    left = candidate.rename(
+        columns={
+            "prediction_gap_sec": "predicted_quali_gap_to_pole_sec",
+            "actual_gap_sec": "quali_gap_to_pole_sec",
+        }
+    )
+    right = default.rename(columns={"prediction_gap_sec": "predicted_quali_gap_to_pole_sec"})
+    return align_candidate_default(left, right)
+
+
+def shadow_history_scope_checks(
+    candidate: pd.DataFrame,
+    default: pd.DataFrame,
+    event_key: str,
+    current_event_order: int | None,
+    current_season: int,
+) -> dict[str, bool]:
+    combined = pd.concat([candidate, default], ignore_index=True, sort=False)
+    current_excluded = event_key not in event_keys_from_predictions(combined)
+    future_same_season_excluded = no_future_same_season_by_shadow_order(
+        combined,
+        current_event_order,
+        current_season,
+    )
+    future_seasons_excluded = no_future_season(combined, current_season)
+    return {
+        "shadow_history_scope_valid": bool(
+            current_excluded and future_same_season_excluded and future_seasons_excluded
+        ),
+        "shadow_current_event_excluded": bool(current_excluded),
+        "shadow_future_test_season_events_excluded": bool(future_same_season_excluded),
+        "shadow_future_seasons_excluded": bool(future_seasons_excluded),
+    }
+
+
+def no_future_same_season_by_shadow_order(
+    frame: pd.DataFrame,
+    current_event_order: int | None,
+    current_season: int,
+) -> bool:
+    if frame.empty:
+        return True
+    if current_event_order is None or "event_order" not in frame:
+        return False
+    same_season = frame[frame["season"].astype(int).eq(current_season)]
+    if same_season.empty:
+        return True
+    order = pd.to_numeric(same_season["event_order"], errors="coerce")
+    return bool(order.lt(current_event_order).all())
+
+
 def leakage_for_event(leakage: pd.DataFrame, event_key: str, policy_profile: str) -> pd.DataFrame:
     if leakage.empty:
         return leakage
@@ -1071,6 +1461,46 @@ def blocking_reasons(
     return list(dict.fromkeys(reasons))
 
 
+def shadow_blocking_reasons(
+    *,
+    candidate_training_completed: bool,
+    candidate_available: bool,
+    cold_start_passed: bool,
+    fold_gate: bool,
+    prediction_gate: bool,
+    alignment_gate: bool,
+    metric_available: bool,
+    margin_passed: bool,
+    eligible: bool,
+    live_selected: bool,
+) -> list[str]:
+    if eligible:
+        if not live_selected:
+            return [
+                "all_gates_passed_candidate_eligible",
+                "eligible_under_shadow_history_but_not_selected_live_replay",
+            ]
+        return ["all_gates_passed_candidate_eligible"]
+    reasons: list[str] = []
+    if not candidate_training_completed:
+        reasons.append("candidate_training_failed")
+    if candidate_training_completed and not candidate_available:
+        reasons.append("candidate_shadow_prediction_unavailable")
+    if not cold_start_passed:
+        reasons.append("cold_start_gate_failed")
+    if not fold_gate:
+        reasons.append("insufficient_prior_shadow_fold_history")
+    if not prediction_gate:
+        reasons.append("insufficient_prior_shadow_prediction_rows")
+    if not alignment_gate:
+        reasons.append("insufficient_candidate_default_alignment")
+    if not metric_available:
+        reasons.append("shadow_candidate_prior_metric_unavailable")
+    if metric_available and not margin_passed:
+        reasons.append("margin_requirement_not_met")
+    return list(dict.fromkeys(reasons))
+
+
 def history_scope_valid(candidate: pd.DataFrame, event_key: str, event_order: list[str]) -> bool:
     if candidate.empty:
         return True
@@ -1143,6 +1573,12 @@ def first_event_from_mask(group: pd.DataFrame, mask: pd.Series) -> str | None:
 
 def contains_reason(group: pd.DataFrame, reason: str) -> int:
     return int(group["all_blocking_reasons"].astype(str).str.contains(reason, regex=False).sum())
+
+
+def contains_shadow_reason(group: pd.DataFrame, reason: str) -> int:
+    return int(
+        group["shadow_all_blocking_reasons"].astype(str).str.contains(reason, regex=False).sum()
+    )
 
 
 def artifact_split_name(replay_split: object) -> str:
@@ -1260,9 +1696,14 @@ def pipeline_recommendation(
     ledger: pd.DataFrame,
     future_violation: bool,
     current_violation: bool,
+    *,
+    shadow_available: bool = False,
+    shadow_valid: bool = False,
 ) -> str:
     if future_violation or current_violation:
         return "replay_candidate_history_pipeline_fix_required"
+    if shadow_available and shadow_valid:
+        return "no_pipeline_change_needed"
     if retention_status == "trained_but_not_persisted_for_non_selected_events":
         return "diagnostic_evidence_persistence_needed"
     if ledger.empty:
@@ -1272,6 +1713,81 @@ def pipeline_recommendation(
     if ledger["prior_candidate_prediction_rows_available"].max() == 0:
         return "insufficient_prospective_history_requires_more_seasons"
     return "no_pipeline_change_needed"
+
+
+def shadow_persistence_by_split(ledger: pd.DataFrame) -> dict[str, bool]:
+    if ledger.empty or "shadow_candidate_prediction_available_for_current_event" not in ledger:
+        return {}
+    return {
+        str(split): bool(group["shadow_candidate_prediction_available_for_current_event"].all())
+        for split, group in ledger.groupby("split_name", sort=False)
+    }
+
+
+def shadow_candidate_summary(
+    ledger: pd.DataFrame,
+    feasibility: pd.DataFrame,
+) -> dict[str, object]:
+    if ledger.empty or "shadow_candidate_prediction_available_for_current_event" not in ledger:
+        return {
+            "eligibility": {"available": False},
+            "quality": {"available": False},
+            "vs_live": {"available": False},
+            "primary_explanation": "shadow candidate artifacts were unavailable",
+            "secondary_explanations": [],
+        }
+    eligible = ledger["shadow_season_aware_candidate_eligible_under_frozen_gates"].astype(bool)
+    counterfactual = (
+        ledger["shadow_history_counterfactual_selection"]
+        .astype(str)
+        .eq("season_aware_weighted_candidate")
+    )
+    quality = {
+        "available": bool(ledger["shadow_candidate_prior_metric_available"].astype(bool).any()),
+        "mean_shadow_candidate_prior_mae": _number_or_none(
+            pd.to_numeric(ledger["shadow_candidate_prior_mae"], errors="coerce").mean()
+        ),
+        "mean_shadow_default_prior_mae": _number_or_none(
+            pd.to_numeric(ledger["shadow_default_prior_mae"], errors="coerce").mean()
+        ),
+        "mean_shadow_prior_improvement_sec": _number_or_none(
+            pd.to_numeric(ledger["shadow_prior_improvement_sec"], errors="coerce").mean()
+        ),
+    }
+    explanation = "shadow history exists but frozen gates did not select the candidate"
+    if eligible.any():
+        explanation = (
+            "candidate is eligible under shadow history for at least one event; this is a "
+            "counterfactual frozen-gate diagnostic, not live replay selection"
+        )
+    elif not ledger["shadow_candidate_prediction_available_for_current_event"].astype(bool).any():
+        explanation = "shadow candidate predictions are unavailable"
+    elif contains_shadow_reason(ledger, "margin_requirement_not_met"):
+        explanation = "shadow history reaches metric comparison but margin requirement is not met"
+    elif contains_shadow_reason(ledger, "insufficient_prior_shadow"):
+        explanation = "shadow history is available but still below frozen history-length gates"
+    return {
+        "eligibility": {
+            "events": int(len(ledger)),
+            "events_shadow_candidate_eligible": int(eligible.sum()),
+            "events_shadow_counterfactually_selected": int(counterfactual.sum()),
+            "feasibility_by_split": records_for_json(feasibility),
+        },
+        "quality": quality,
+        "vs_live": {
+            "eligibility_disagreements": int(
+                ledger["live_vs_shadow_eligibility_disagreement"].astype(bool).sum()
+            ),
+            "selection_disagreements": int(
+                ledger["live_vs_shadow_selection_disagreement"].astype(bool).sum()
+            ),
+        },
+        "primary_explanation": explanation,
+        "secondary_explanations": [
+            "Shadow-history eligibility uses only completed prior replay events.",
+            "Original live replay selection remains recorded separately and unchanged.",
+        ],
+    }
 
 
 def plot_gate_pass_rate(plt: Any, ledger: pd.DataFrame, path: Path) -> bool:
@@ -1471,6 +1987,32 @@ def _ledger_columns() -> list[str]:
         "season_aware_selection_reason",
         "primary_blocking_reason",
         "all_blocking_reasons",
+        "shadow_candidate_prediction_available_for_current_event",
+        "shadow_default_prediction_available_for_current_event",
+        "prior_shadow_candidate_events_available",
+        "prior_shadow_candidate_prediction_rows_available",
+        "prior_shadow_default_events_available",
+        "prior_shadow_default_prediction_rows_available",
+        "prior_shadow_candidate_default_aligned_events",
+        "prior_shadow_candidate_default_aligned_rows",
+        "shadow_history_scope_valid",
+        "shadow_current_event_excluded",
+        "shadow_future_test_season_events_excluded",
+        "shadow_future_seasons_excluded",
+        "shadow_cold_start_gate_passed",
+        "shadow_candidate_fold_history_gate_passed",
+        "shadow_candidate_prediction_history_gate_passed",
+        "shadow_candidate_default_alignment_gate_passed",
+        "shadow_candidate_prior_metric_available",
+        "shadow_candidate_prior_mae",
+        "shadow_default_prior_mae",
+        "shadow_prior_improvement_sec",
+        "shadow_season_aware_candidate_eligible_under_frozen_gates",
+        "shadow_history_counterfactual_selection",
+        "shadow_primary_blocking_reason",
+        "shadow_all_blocking_reasons",
+        "live_vs_shadow_eligibility_disagreement",
+        "live_vs_shadow_selection_disagreement",
     ]
 
 
@@ -1526,6 +2068,10 @@ def _json_clean(value: Any) -> Any:
 
 def _read_csv_if_exists(path: Path) -> pd.DataFrame:
     return pd.read_csv(path) if path.is_file() else pd.DataFrame()
+
+
+def _read_parquet_if_exists(path: Path) -> pd.DataFrame:
+    return pd.read_parquet(path) if path.is_file() else pd.DataFrame()
 
 
 def _read_json_if_exists(path: Path) -> dict[str, Any] | None:

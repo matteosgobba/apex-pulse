@@ -113,6 +113,7 @@ def create_prospective_policy_replay_report(
     selection = replay["selection"]
     manifest = replay["manifest"]
     leakage = replay["leakage"]
+    shadow = replay["shadow"]
     checkpoint = add_selection_rates(build_replay_checkpoint_comparison(predictions), selection)
     event = build_event_comparison(predictions, selection)
     cold_start = build_cold_start_comparison(event)
@@ -120,6 +121,7 @@ def create_prospective_policy_replay_report(
 
     prediction_path = metrics_dir / f"{split_id}_predictions.parquet"
     predictions.to_parquet(prediction_path, index=False)
+    shadow_path = metrics_dir / "prospective_replay_shadow_candidates.parquet"
     split_summary_path = metrics_dir / f"{split_id}_summary.json"
     table_paths = (
         metrics_dir / "prospective_replay_checkpoint_comparison.csv",
@@ -143,6 +145,15 @@ def create_prospective_policy_replay_report(
     )
     for path, frame in zip(table_paths, combined_tables, strict=True):
         frame.to_csv(path, index=False)
+    shadow_tables = write_shadow_candidate_artifacts(
+        metrics_dir=metrics_dir,
+        figures_dir=figures_dir,
+        split_id=split_id,
+        shadow=shadow,
+        selection=selection,
+        manifest=manifest,
+        leakage=leakage,
+    )
 
     figure_paths, generation_issues = generate_replay_figures(
         figures_dir=figures_dir,
@@ -153,6 +164,8 @@ def create_prospective_policy_replay_report(
         cold_start=combined_tables[5],
         comparison=combined_tables[6],
     )
+    figure_paths = [*figure_paths, *shadow_tables["figure_paths"]]
+    generation_issues.extend(shadow_tables["generation_issues"])
     split_summary = build_replay_summary_payload(
         split_id=split_id,
         train_seasons=train_seasons,
@@ -166,6 +179,7 @@ def create_prospective_policy_replay_report(
         cold_start=cold_start,
         comparison=comparison,
         prediction_path=prediction_path,
+        shadow_summary=shadow_tables["summary"],
         generation_issues=generation_issues,
     )
     write_json(split_summary_path, split_summary)
@@ -175,7 +189,13 @@ def create_prospective_policy_replay_report(
     return ProspectiveReplaySummary(
         status=str(summary_payload.get("status", "complete")),
         summary_path=summary_path,
-        table_paths=(*table_paths, split_summary_path, prediction_path),
+        table_paths=(
+            *table_paths,
+            *shadow_tables["table_paths"],
+            split_summary_path,
+            prediction_path,
+            shadow_path,
+        ),
         figure_paths=tuple(figure_paths),
         generation_issues=tuple(generation_issues),
     )
@@ -201,6 +221,7 @@ def run_true_replay(
     selection_rows: list[dict[str, object]] = []
     manifest_rows: list[dict[str, object]] = []
     leakage_rows: list[dict[str, object]] = []
+    shadow_rows: list[pd.DataFrame] = []
     evidence_events = [
         key
         for key in event_order
@@ -226,6 +247,14 @@ def run_true_replay(
         )
         manifest_rows.extend(source["manifest"])
         leakage_rows.extend(source["leakage"])
+        shadow_rows.append(
+            build_shadow_candidate_rows(
+                source=source,
+                train_seasons=train_seasons,
+                test_season=test_season,
+                event_order=event_order,
+            )
+        )
         profile_predictions, profile_selection = apply_profiles_for_event(
             source=source,
             profiles=profiles,
@@ -249,6 +278,7 @@ def run_true_replay(
         "selection": selection,
         "manifest": pd.DataFrame(manifest_rows),
         "leakage": pd.DataFrame(leakage_rows),
+        "shadow": concat_replay_history(shadow_rows),
     }
 
 
@@ -467,6 +497,267 @@ def apply_profiles_for_event(
             )
         rows.append(pd.concat(profile_frames, ignore_index=True, sort=False))
     return pd.concat(rows, ignore_index=True, sort=False), selection_rows
+
+
+def build_shadow_candidate_rows(
+    *,
+    source: dict[str, Any],
+    train_seasons: tuple[int, ...],
+    test_season: int,
+    event_order: list[str],
+) -> pd.DataFrame:
+    """Return diagnostic-only FP3 candidate rows for one completed replay event."""
+    event_key = str(source["event_key"])
+    manifest = pd.DataFrame(source.get("manifest", []))
+    leakage = pd.DataFrame(source.get("leakage", []))
+    frames = [
+        shadow_rows_for_role(
+            source=source,
+            event_key=event_key,
+            train_seasons=train_seasons,
+            test_season=test_season,
+            event_order=event_order,
+            manifest=manifest,
+            leakage=leakage,
+            shadow_role="uniform_default",
+            temporal_policy="uniform",
+            prediction_key="static",
+            policy_profile="static_baseline",
+        ),
+        shadow_rows_for_role(
+            source=source,
+            event_key=event_key,
+            train_seasons=train_seasons,
+            test_season=test_season,
+            event_order=event_order,
+            manifest=manifest,
+            leakage=leakage,
+            shadow_role="season_aware_weighted_candidate",
+            temporal_policy="current_season_only_with_prior",
+            prediction_key="weighted",
+            policy_profile="season_aware_frozen",
+        ),
+    ]
+    return pd.concat(frames, ignore_index=True, sort=False)
+
+
+def shadow_rows_for_role(
+    *,
+    source: dict[str, Any],
+    event_key: str,
+    train_seasons: tuple[int, ...],
+    test_season: int,
+    event_order: list[str],
+    manifest: pd.DataFrame,
+    leakage: pd.DataFrame,
+    shadow_role: str,
+    temporal_policy: str,
+    prediction_key: str,
+    policy_profile: str,
+) -> pd.DataFrame:
+    """Build one role's diagnostic shadow rows, including unavailable prediction records."""
+    season, slug = parse_event_key(event_key)
+    current_manifest = manifest[
+        manifest.get("policy_profile", pd.Series(dtype=str)).astype(str).eq(policy_profile)
+    ].copy()
+    current_leakage = leakage[
+        leakage.get("policy_profile", pd.Series(dtype=str)).astype(str).eq(policy_profile)
+    ].copy()
+    predictions = source.get(prediction_key, pd.DataFrame())
+    prediction_available = isinstance(predictions, pd.DataFrame) and not predictions.empty
+    if prediction_available:
+        frame = predictions.copy()
+    else:
+        frame = source["test"][source["test"]["checkpoint"].eq(FP3_CHECKPOINT)].copy()
+        frame["predicted_quali_gap_to_pole_sec"] = pd.NA
+        frame["predicted_quali_position"] = pd.NA
+    if frame.empty:
+        frame = pd.DataFrame(
+            {
+                "season": [season],
+                "event": [slug],
+                "event_slug": [slug],
+                "checkpoint": [FP3_CHECKPOINT],
+                "driver": [pd.NA],
+                "driver_key": [pd.NA],
+                "team": [pd.NA],
+                "team_key": [pd.NA],
+                "quali_gap_to_pole_sec": [pd.NA],
+                "predicted_quali_gap_to_pole_sec": [pd.NA],
+            }
+        )
+    result = frame.copy()
+    result["split_name"] = replay_split_id(train_seasons, test_season)
+    result["train_seasons"] = ",".join(str(value) for value in train_seasons)
+    result["test_season"] = test_season
+    result["fold_id"] = event_index_from_key(event_key)
+    result["event_order"] = event_order.index(event_key) if event_key in event_order else pd.NA
+    result["season"] = season
+    result["event"] = result.get("event", slug)
+    result["event_slug"] = slug
+    result["checkpoint"] = FP3_CHECKPOINT
+    result["driver_key"] = result["driver"] if "driver_key" not in result else result["driver_key"]
+    result["team"] = result["team"] if "team" in result else pd.NA
+    result["team_key"] = result["team_key"] if "team_key" in result else result["team"]
+    result["shadow_role"] = shadow_role
+    result["diagnostic_only"] = True
+    result["prediction_available"] = bool(prediction_available)
+    result["prediction_gap_sec"] = result["predicted_quali_gap_to_pole_sec"]
+    result["actual_gap_sec"] = result["quali_gap_to_pole_sec"]
+    result["absolute_error_sec"] = (
+        pd.to_numeric(result["prediction_gap_sec"], errors="coerce")
+        - pd.to_numeric(result["actual_gap_sec"], errors="coerce")
+    ).abs()
+    result["family"] = "ablation"
+    result["model_name"] = "random_forest"
+    result["feature_group"] = "base_plus_relative"
+    result["temporal_weighting_policy"] = temporal_policy
+    result["source_identity"] = result.get(
+        "prediction_source_identity",
+        source_identity_for_shadow(event_key, temporal_policy),
+    )
+    result["source_lineage_valid"] = True
+    result["training_completed"] = not current_manifest.empty
+    result["training_row_count"] = manifest_number(current_manifest, "training_row_count")
+    result["training_event_count"] = manifest_number(current_manifest, "training_event_count")
+    result["training_event_keys"] = manifest_value(
+        current_manifest,
+        "training_event_keys_used",
+        "[]",
+    )
+    result["training_seasons"] = manifest_value(current_manifest, "training_seasons_used", "[]")
+    result["training_temporal_weighting_policy"] = temporal_policy
+    result["training_weight_summary"] = manifest_value(
+        current_manifest,
+        "sample_weight_summary",
+        "{}",
+    )
+    result["training_effective_sample_size"] = weight_summary_value(
+        result["training_weight_summary"].iloc[0],
+        "effective_sample_size",
+    )
+    same_season_prior_events = manifest_value(
+        current_manifest,
+        "same_test_season_prior_events_used",
+        "[]",
+    )
+    result["training_current_season_prior_event_count"] = len(
+        json.loads(str(same_season_prior_events.iloc[0]))
+    )
+    current_event_in_training = (
+        current_manifest.get(
+            "current_event_in_training",
+            pd.Series([False]),
+        )
+        .astype(bool)
+        .any()
+    )
+    result["current_event_excluded_from_training"] = not bool(current_event_in_training)
+    result["future_test_season_events_excluded_from_training"] = not bool(
+        current_leakage.get("future_test_season_event_used", pd.Series([False])).astype(bool).any()
+    )
+    result["future_seasons_excluded_from_training"] = not bool(
+        current_leakage.get("future_event_used_anywhere", pd.Series([False])).astype(bool).any()
+    )
+    result["shadow_eligible_for_prior_evidence"] = (
+        result["prediction_available"].astype(bool)
+        & result["training_completed"].astype(bool)
+        & result["current_event_excluded_from_training"].astype(bool)
+        & result["future_test_season_events_excluded_from_training"].astype(bool)
+        & result["future_seasons_excluded_from_training"].astype(bool)
+    )
+    result["shadow_persistence_status"] = "persisted"
+    result["missing_reason"] = ""
+    result.loc[~result["training_completed"].astype(bool), "missing_reason"] = "training_failed"
+    result.loc[
+        result["training_completed"].astype(bool) & ~result["prediction_available"].astype(bool),
+        "missing_reason",
+    ] = "prediction_unavailable"
+    return result.loc[:, shadow_candidate_columns()]
+
+
+def source_identity_for_shadow(event_key: str, temporal_policy: str) -> str:
+    return json.dumps(
+        {
+            "family": "ablation",
+            "model_name": "random_forest",
+            "feature_group": "base_plus_relative",
+            "temporal_weighting_policy": temporal_policy,
+            "event_key": event_key,
+            "source": "true_prospective_replay_shadow",
+        },
+        sort_keys=True,
+    )
+
+
+def manifest_number(manifest: pd.DataFrame, column: str) -> int | None:
+    if manifest.empty or column not in manifest:
+        return None
+    values = pd.to_numeric(manifest[column], errors="coerce").dropna()
+    return int(values.iloc[0]) if not values.empty else None
+
+
+def manifest_value(manifest: pd.DataFrame, column: str, default: object) -> pd.Series:
+    if manifest.empty or column not in manifest:
+        return pd.Series([default])
+    values = manifest[column].dropna()
+    return pd.Series([values.iloc[0] if not values.empty else default])
+
+
+def weight_summary_value(payload: object, key: str) -> float | None:
+    try:
+        values = json.loads(str(payload))
+    except json.JSONDecodeError:
+        return None
+    value = values.get(key) if isinstance(values, dict) else None
+    if value is None or pd.isna(value):
+        return None
+    return float(value)
+
+
+def shadow_candidate_columns() -> list[str]:
+    return [
+        "split_name",
+        "train_seasons",
+        "test_season",
+        "fold_id",
+        "event_order",
+        "season",
+        "event",
+        "event_slug",
+        "checkpoint",
+        "driver",
+        "driver_key",
+        "team",
+        "team_key",
+        "shadow_role",
+        "diagnostic_only",
+        "prediction_available",
+        "prediction_gap_sec",
+        "actual_gap_sec",
+        "absolute_error_sec",
+        "family",
+        "model_name",
+        "feature_group",
+        "temporal_weighting_policy",
+        "source_identity",
+        "source_lineage_valid",
+        "training_completed",
+        "training_row_count",
+        "training_event_count",
+        "training_event_keys",
+        "training_seasons",
+        "training_temporal_weighting_policy",
+        "training_weight_summary",
+        "training_effective_sample_size",
+        "training_current_season_prior_event_count",
+        "current_event_excluded_from_training",
+        "future_test_season_events_excluded_from_training",
+        "future_seasons_excluded_from_training",
+        "shadow_eligible_for_prior_evidence",
+        "shadow_persistence_status",
+        "missing_reason",
+    ]
 
 
 def season_aware_decision(
@@ -831,6 +1122,613 @@ def merge_replay_tables(
     return tuple(merged)
 
 
+def write_shadow_candidate_artifacts(
+    *,
+    metrics_dir: Path,
+    figures_dir: Path,
+    split_id: str,
+    shadow: pd.DataFrame,
+    selection: pd.DataFrame,
+    manifest: pd.DataFrame,
+    leakage: pd.DataFrame,
+) -> dict[str, Any]:
+    """Persist diagnostic-only shadow candidate artifacts without changing live outputs."""
+    shadow_path = metrics_dir / "prospective_replay_shadow_candidates.parquet"
+    existing_shadow = (
+        pd.read_parquet(shadow_path)
+        if shadow_path.is_file()
+        else pd.DataFrame(columns=shadow_candidate_columns())
+    )
+    if not existing_shadow.empty and "split_name" in existing_shadow:
+        existing_shadow = existing_shadow[existing_shadow["split_name"].astype(str).ne(split_id)]
+    combined_shadow = pd.concat([existing_shadow, shadow], ignore_index=True, sort=False)
+    combined_shadow = combined_shadow.loc[:, shadow_candidate_columns()]
+    combined_shadow.to_parquet(shadow_path, index=False)
+    selection_path = metrics_dir / "prospective_replay_selection_log.csv"
+    manifest_path = metrics_dir / "prospective_replay_training_manifest.csv"
+    leakage_path = metrics_dir / "prospective_replay_leakage_audit.csv"
+    combined_selection = pd.read_csv(selection_path) if selection_path.is_file() else selection
+    combined_manifest = pd.read_csv(manifest_path) if manifest_path.is_file() else manifest
+    combined_leakage = pd.read_csv(leakage_path) if leakage_path.is_file() else leakage
+
+    availability = build_shadow_candidate_availability(combined_shadow)
+    training_manifest = build_shadow_candidate_training_manifest(combined_shadow, combined_manifest)
+    leakage_audit = build_shadow_candidate_leakage_audit(combined_shadow, combined_leakage)
+    vs_live = build_shadow_vs_live_selection(combined_shadow, combined_selection)
+    event_comparison = build_shadow_event_comparison(combined_shadow)
+    gate_feasibility = build_shadow_gate_feasibility(combined_shadow, combined_selection)
+    summary = build_shadow_candidate_summary(
+        combined_shadow,
+        availability,
+        leakage_audit,
+        gate_feasibility,
+    )
+    table_frames = {
+        "prospective_replay_shadow_candidate_availability.csv": availability,
+        "prospective_replay_shadow_candidate_training_manifest.csv": training_manifest,
+        "prospective_replay_shadow_candidate_leakage_audit.csv": leakage_audit,
+        "prospective_replay_shadow_vs_live_selection.csv": vs_live,
+        "prospective_replay_shadow_gate_feasibility.csv": gate_feasibility,
+        "prospective_replay_shadow_event_comparison.csv": event_comparison,
+    }
+    table_paths = [shadow_path, metrics_dir / "prospective_replay_shadow_candidate_summary.json"]
+    for filename, frame in table_frames.items():
+        path = metrics_dir / filename
+        frame.to_csv(path, index=False)
+        table_paths.append(path)
+    write_json(metrics_dir / "prospective_replay_shadow_candidate_summary.json", summary)
+    figure_paths, generation_issues = generate_shadow_candidate_figures(
+        figures_dir=figures_dir,
+        availability=availability,
+        gate_feasibility=gate_feasibility,
+        event_comparison=event_comparison,
+        vs_live=vs_live,
+    )
+    return {
+        "summary": summary,
+        "table_paths": tuple(table_paths),
+        "figure_paths": figure_paths,
+        "generation_issues": generation_issues,
+    }
+
+
+def build_shadow_candidate_availability(shadow: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "split_name",
+        "shadow_role",
+        "events",
+        "prediction_available_events",
+        "prediction_available_rows",
+        "training_completed_events",
+        "diagnostic_only_rows",
+        "persistence_status",
+    ]
+    if shadow.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for keys, group in shadow.groupby(["split_name", "shadow_role"], sort=False):
+        split_name, shadow_role = keys
+        available = group[group["prediction_available"].astype(bool)]
+        rows.append(
+            {
+                "split_name": split_name,
+                "shadow_role": shadow_role,
+                "events": int(group["event_slug"].nunique()),
+                "prediction_available_events": int(available["event_slug"].nunique()),
+                "prediction_available_rows": int(len(available)),
+                "training_completed_events": int(
+                    group[group["training_completed"].astype(bool)]["event_slug"].nunique()
+                ),
+                "diagnostic_only_rows": int(group["diagnostic_only"].astype(bool).sum()),
+                "persistence_status": (
+                    "complete" if group["prediction_available"].astype(bool).all() else "partial"
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def build_shadow_candidate_training_manifest(
+    shadow: pd.DataFrame,
+    manifest: pd.DataFrame,
+) -> pd.DataFrame:
+    if shadow.empty:
+        return pd.DataFrame(
+            columns=[
+                "split_name",
+                "shadow_role",
+                "event_key",
+                "training_row_count",
+                "training_event_count",
+                "training_temporal_weighting_policy",
+                "training_effective_sample_size",
+            ]
+        )
+    frame = shadow.drop_duplicates(["split_name", "shadow_role", "season", "event_slug"]).copy()
+    result = frame[
+        [
+            "split_name",
+            "shadow_role",
+            "season",
+            "event_slug",
+            "training_row_count",
+            "training_event_count",
+            "training_temporal_weighting_policy",
+            "training_effective_sample_size",
+            "training_event_keys",
+            "training_seasons",
+            "training_weight_summary",
+            "training_current_season_prior_event_count",
+        ]
+    ].copy()
+    result["event_key"] = result["season"].astype(str) + "/" + result["event_slug"].astype(str)
+    result["source_manifest_rows"] = len(manifest)
+    return result
+
+
+def build_shadow_candidate_leakage_audit(
+    shadow: pd.DataFrame,
+    leakage: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = [
+        "split_name",
+        "shadow_role",
+        "season",
+        "event_slug",
+        "current_event_excluded_from_training",
+        "future_test_season_events_excluded_from_training",
+        "future_seasons_excluded_from_training",
+        "shadow_history_valid",
+        "leakage_status",
+        "source_leakage_rows",
+    ]
+    if shadow.empty:
+        return pd.DataFrame(columns=columns)
+    frame = shadow.drop_duplicates(["split_name", "shadow_role", "season", "event_slug"]).copy()
+    frame["shadow_history_valid"] = (
+        frame["current_event_excluded_from_training"].astype(bool)
+        & frame["future_test_season_events_excluded_from_training"].astype(bool)
+        & frame["future_seasons_excluded_from_training"].astype(bool)
+    )
+    frame["leakage_status"] = frame["shadow_history_valid"].map(
+        lambda value: "valid" if value else "invalid"
+    )
+    frame["source_leakage_rows"] = len(leakage)
+    return frame.loc[:, columns]
+
+
+def build_shadow_vs_live_selection(
+    shadow: pd.DataFrame,
+    selection: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = [
+        "split_name",
+        "season",
+        "event",
+        "event_slug",
+        "checkpoint",
+        "live_replay_selection",
+        "live_selection_reason",
+        "shadow_uniform_available",
+        "shadow_weighted_available",
+        "diagnostic_only",
+        "selection_behavior_changed",
+    ]
+    if shadow.empty or selection.empty:
+        return pd.DataFrame(columns=columns)
+    live = selection[
+        selection["policy_profile"].astype(str).eq("season_aware_frozen")
+        & selection["checkpoint"].astype(str).eq(FP3_CHECKPOINT)
+    ].copy()
+    availability = (
+        shadow.groupby(["split_name", "season", "event_slug", "shadow_role"], dropna=False)[
+            "prediction_available"
+        ]
+        .any()
+        .unstack("shadow_role", fill_value=False)
+        .reset_index()
+    )
+    merged = live.merge(
+        availability,
+        left_on=["prospective_split", "season", "event_slug"],
+        right_on=["split_name", "season", "event_slug"],
+        how="left",
+    )
+    return pd.DataFrame(
+        {
+            "split_name": merged["prospective_split"],
+            "season": merged["season"],
+            "event": merged["event"],
+            "event_slug": merged["event_slug"],
+            "checkpoint": merged["checkpoint"],
+            "live_replay_selection": merged["candidate_selected"].map(live_selection_label),
+            "live_selection_reason": merged["candidate_selection_reason"],
+            "shadow_uniform_available": merged.get("uniform_default", False).fillna(False),
+            "shadow_weighted_available": merged.get(
+                "season_aware_weighted_candidate",
+                False,
+            ).fillna(False),
+            "diagnostic_only": True,
+            "selection_behavior_changed": False,
+        },
+        columns=columns,
+    )
+
+
+def live_selection_label(value: object) -> str:
+    return "season_aware_weighted_candidate" if bool(value) else "uniform_default"
+
+
+def build_shadow_event_comparison(shadow: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "split_name",
+        "season",
+        "event",
+        "event_slug",
+        "checkpoint",
+        "shadow_role",
+        "rows",
+        "mae_gap_sec",
+        "prediction_available",
+        "diagnostic_only",
+    ]
+    if shadow.empty:
+        return pd.DataFrame(columns=columns)
+    frame = shadow[shadow["prediction_available"].astype(bool)].copy()
+    rows = []
+    for keys, group in frame.groupby(
+        ["split_name", "season", "event", "event_slug", "checkpoint", "shadow_role"],
+        sort=False,
+    ):
+        split_name, season, event, event_slug, checkpoint, shadow_role = keys
+        rows.append(
+            {
+                "split_name": split_name,
+                "season": season,
+                "event": event,
+                "event_slug": event_slug,
+                "checkpoint": checkpoint,
+                "shadow_role": shadow_role,
+                "rows": int(len(group)),
+                "mae_gap_sec": float(pd.to_numeric(group["absolute_error_sec"]).mean()),
+                "prediction_available": True,
+                "diagnostic_only": True,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def build_shadow_gate_feasibility(
+    shadow: pd.DataFrame,
+    selection: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = [
+        "split_name",
+        "first_event_with_shadow_candidate_prediction_available",
+        "first_event_with_shadow_default_prediction_available",
+        "maximum_prior_shadow_candidate_folds_observed",
+        "maximum_prior_shadow_candidate_prediction_rows_observed",
+        "maximum_prior_shadow_aligned_rows_observed",
+        "number_of_events_with_shadow_candidate_available",
+    ]
+    if shadow.empty or selection.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    live = selection[
+        selection["policy_profile"].astype(str).eq("season_aware_frozen")
+        & selection["checkpoint"].astype(str).eq(FP3_CHECKPOINT)
+    ].copy()
+    for split_name, group in live.groupby("prospective_split", sort=False):
+        split_shadow = shadow[shadow["split_name"].astype(str).eq(str(split_name))]
+        candidate = split_shadow[
+            split_shadow["shadow_role"].eq("season_aware_weighted_candidate")
+            & split_shadow["prediction_available"].astype(bool)
+        ]
+        default = split_shadow[
+            split_shadow["shadow_role"].eq("uniform_default")
+            & split_shadow["prediction_available"].astype(bool)
+        ]
+        prior_counts = []
+        for _, event in group.sort_values("current_test_season_prior_event_count").iterrows():
+            current_shadow = split_shadow[
+                split_shadow["season"].astype(int).eq(int(event["season"]))
+                & split_shadow["event_slug"].astype(str).eq(str(event["event_slug"]))
+            ]
+            if current_shadow.empty:
+                continue
+            current_order = int(
+                pd.to_numeric(current_shadow["event_order"], errors="coerce").dropna().min()
+            )
+            prior_candidate = candidate[
+                pd.to_numeric(candidate["event_order"], errors="coerce").lt(current_order)
+            ]
+            prior_default = default[
+                pd.to_numeric(default["event_order"], errors="coerce").lt(current_order)
+            ]
+            aligned = align_shadow_candidate_default(prior_candidate, prior_default)
+            prior_counts.append(
+                (
+                    prior_candidate["event_slug"].nunique(),
+                    len(prior_candidate),
+                    len(aligned),
+                )
+            )
+        rows.append(
+            {
+                "split_name": split_name,
+                "first_event_with_shadow_candidate_prediction_available": first_shadow_event(
+                    candidate
+                ),
+                "first_event_with_shadow_default_prediction_available": first_shadow_event(default),
+                "maximum_prior_shadow_candidate_folds_observed": max(
+                    [item[0] for item in prior_counts] or [0]
+                ),
+                "maximum_prior_shadow_candidate_prediction_rows_observed": max(
+                    [item[1] for item in prior_counts] or [0]
+                ),
+                "maximum_prior_shadow_aligned_rows_observed": max(
+                    [item[2] for item in prior_counts] or [0]
+                ),
+                "number_of_events_with_shadow_candidate_available": int(
+                    candidate["event_slug"].nunique()
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def first_shadow_event(frame: pd.DataFrame) -> str | None:
+    if frame.empty:
+        return None
+    row = frame.sort_values("event_order").iloc[0]
+    return f"{int(row['season'])}/{row['event_slug']}"
+
+
+def align_shadow_candidate_default(candidate: pd.DataFrame, default: pd.DataFrame) -> pd.DataFrame:
+    if candidate.empty or default.empty:
+        return pd.DataFrame()
+    left = candidate.rename(
+        columns={
+            "prediction_gap_sec": "predicted_quali_gap_to_pole_sec",
+            "actual_gap_sec": "quali_gap_to_pole_sec",
+        }
+    )
+    right = default.rename(columns={"prediction_gap_sec": "predicted_quali_gap_to_pole_sec"})
+    return align_candidate_default(left, right)
+
+
+def build_shadow_candidate_summary(
+    shadow: pd.DataFrame,
+    availability: pd.DataFrame,
+    leakage: pd.DataFrame,
+    gate_feasibility: pd.DataFrame,
+) -> dict[str, object]:
+    complete_by_split = {}
+    if not availability.empty:
+        for split, group in availability.groupby("split_name", sort=False):
+            complete_by_split[str(split)] = bool(group["persistence_status"].eq("complete").all())
+    future_violation = (
+        bool(leakage["future_seasons_excluded_from_training"].eq(False).any())
+        if not leakage.empty
+        else False
+    )
+    current_violation = (
+        bool(leakage["current_event_excluded_from_training"].eq(False).any())
+        if not leakage.empty
+        else False
+    )
+    return {
+        "status": "complete" if not shadow.empty else "missing_inputs",
+        "shadow_candidate_persistence_enabled": True,
+        "shadow_candidate_persistence_status": (
+            "complete" if complete_by_split and all(complete_by_split.values()) else "partial"
+        ),
+        "shadow_candidate_persistence_complete_by_split": complete_by_split,
+        "shadow_history_valid": not future_violation and not current_violation,
+        "shadow_history_future_violation_detected": future_violation,
+        "shadow_history_current_event_violation_detected": current_violation,
+        "shadow_gate_feasibility_summary": records_for_json(gate_feasibility),
+        "shadow_candidate_eligibility_summary": {},
+        "shadow_candidate_quality_summary": shadow_quality_summary(shadow),
+        "shadow_vs_live_selection_summary": {
+            "live_selection_behavior_changed": False,
+            "diagnostic_only": True,
+        },
+        "primary_explanation_after_shadow_persistence": (
+            "diagnostic shadow candidates persisted; eligibility must be interpreted through "
+            "prior-only shadow-history audit outputs"
+        ),
+        "secondary_explanations_after_shadow_persistence": [
+            "Live replay selected predictions and primary metrics are unchanged.",
+            "Shadow rows are diagnostic-only and excluded from live selection outputs.",
+        ],
+        "candidate_evidence_pipeline_recommendation": "no_pipeline_change_needed",
+        "policy_recommendation": "retain_static_policy",
+        "known_limitations": [
+            "Shadow rows support diagnostics only and are not selected policy outputs.",
+            "Gate feasibility depends on completed prior replay events only.",
+        ],
+        "generated_outputs": {
+            "metrics": [
+                "reports/metrics/prospective_replay_shadow_candidates.parquet",
+                "reports/metrics/prospective_replay_shadow_candidate_summary.json",
+                "reports/metrics/prospective_replay_shadow_candidate_availability.csv",
+                "reports/metrics/prospective_replay_shadow_candidate_training_manifest.csv",
+                "reports/metrics/prospective_replay_shadow_candidate_leakage_audit.csv",
+                "reports/metrics/prospective_replay_shadow_vs_live_selection.csv",
+                "reports/metrics/prospective_replay_shadow_gate_feasibility.csv",
+                "reports/metrics/prospective_replay_shadow_event_comparison.csv",
+            ]
+        },
+        "generated_at": utc_now(),
+    }
+
+
+def shadow_quality_summary(shadow: pd.DataFrame) -> dict[str, object]:
+    if shadow.empty:
+        return {"available": False}
+    rows = {}
+    available = shadow[shadow["prediction_available"].astype(bool)]
+    for role, group in available.groupby("shadow_role", sort=False):
+        rows[str(role)] = {
+            "rows": int(len(group)),
+            "mae_gap_sec": float(
+                pd.to_numeric(group["absolute_error_sec"], errors="coerce").mean()
+            ),
+        }
+    return {"available": True, "by_shadow_role": rows}
+
+
+def generate_shadow_candidate_figures(
+    *,
+    figures_dir: Path,
+    availability: pd.DataFrame,
+    gate_feasibility: pd.DataFrame,
+    event_comparison: pd.DataFrame,
+    vs_live: pd.DataFrame,
+) -> tuple[list[Path], list[str]]:
+    ensure_directory(figures_dir)
+    os.environ["MPLCONFIGDIR"] = str(figures_dir / ".matplotlib-cache")
+    os.environ["XDG_CACHE_HOME"] = str(figures_dir / ".matplotlib-cache")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    specs = [
+        (
+            "prospective_replay_shadow_candidate_availability.png",
+            lambda p: plot_shadow_availability(plt, availability, p),
+        ),
+        (
+            "prospective_replay_shadow_history_growth.png",
+            lambda p: plot_shadow_history_growth(plt, gate_feasibility, p),
+        ),
+        (
+            "prospective_replay_shadow_gate_feasibility_timeline.png",
+            lambda p: plot_shadow_gate_feasibility(plt, gate_feasibility, p),
+        ),
+        (
+            "prospective_replay_shadow_vs_live_eligibility.png",
+            lambda p: plot_shadow_vs_live(plt, vs_live, p),
+        ),
+        (
+            "prospective_replay_shadow_counterfactual_selection.png",
+            lambda p: plot_shadow_event_quality(plt, event_comparison, p),
+        ),
+    ]
+    paths: list[Path] = []
+    issues: list[str] = []
+    for filename, callback in specs:
+        path = figures_dir / filename
+        try:
+            if callback(path):
+                paths.append(path)
+            else:
+                issues.append(f"skipped figure {filename}: insufficient data")
+        except Exception as exc:  # pragma: no cover
+            issues.append(f"skipped figure {filename}: {exc}")
+        finally:
+            plt.close("all")
+    return paths, issues
+
+
+def plot_shadow_availability(plt: Any, availability: pd.DataFrame, path: Path) -> bool:
+    if availability.empty:
+        return False
+    pivot = availability.pivot_table(
+        index="split_name",
+        columns="shadow_role",
+        values="prediction_available_events",
+        aggfunc="sum",
+    )
+    ax = pivot.plot(kind="bar", figsize=(9, 4))
+    ax.set_title("Diagnostic-only shadow candidate availability")
+    ax.set_ylabel("Events with predictions")
+    ax.set_xlabel("")
+    plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
+    plt.savefig(path, dpi=160)
+    return True
+
+
+def plot_shadow_history_growth(plt: Any, gate_feasibility: pd.DataFrame, path: Path) -> bool:
+    if gate_feasibility.empty:
+        return False
+    frame = gate_feasibility.set_index("split_name")[
+        [
+            "maximum_prior_shadow_candidate_prediction_rows_observed",
+            "maximum_prior_shadow_aligned_rows_observed",
+        ]
+    ]
+    ax = frame.plot(kind="bar", figsize=(9, 4))
+    ax.set_title("Diagnostic shadow prior-history growth")
+    ax.set_ylabel("Prior rows")
+    ax.set_xlabel("")
+    plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
+    plt.savefig(path, dpi=160)
+    return True
+
+
+def plot_shadow_gate_feasibility(plt: Any, gate_feasibility: pd.DataFrame, path: Path) -> bool:
+    if gate_feasibility.empty:
+        return False
+    frame = gate_feasibility.set_index("split_name")[
+        [
+            "maximum_prior_shadow_candidate_folds_observed",
+            "maximum_prior_shadow_candidate_prediction_rows_observed",
+            "maximum_prior_shadow_aligned_rows_observed",
+        ]
+    ]
+    ax = frame.plot(kind="bar", figsize=(9, 4))
+    ax.set_title("Diagnostic shadow gate feasibility maxima")
+    ax.set_ylabel("Count")
+    ax.set_xlabel("")
+    plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
+    plt.savefig(path, dpi=160)
+    return True
+
+
+def plot_shadow_vs_live(plt: Any, vs_live: pd.DataFrame, path: Path) -> bool:
+    if vs_live.empty:
+        return False
+    frame = vs_live.copy()
+    frame["both_shadow_sources_available"] = frame["shadow_uniform_available"].astype(bool) & frame[
+        "shadow_weighted_available"
+    ].astype(bool)
+    counts = frame.groupby("split_name")["both_shadow_sources_available"].sum()
+    ax = counts.plot(kind="bar", figsize=(9, 4), color="#4b7c9b")
+    ax.set_title("Live selection with diagnostic shadow availability")
+    ax.set_ylabel("Events with both shadow sources")
+    ax.set_xlabel("")
+    plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
+    plt.savefig(path, dpi=160)
+    return True
+
+
+def plot_shadow_event_quality(plt: Any, event_comparison: pd.DataFrame, path: Path) -> bool:
+    frame = event_comparison[event_comparison["checkpoint"].eq(FP3_CHECKPOINT)].copy()
+    if frame.empty:
+        return False
+    pivot = frame.pivot_table(
+        index="split_name",
+        columns="shadow_role",
+        values="mae_gap_sec",
+        aggfunc="mean",
+    )
+    ax = pivot.plot(kind="bar", figsize=(9, 4))
+    ax.set_title("Diagnostic-only shadow FP3 MAE")
+    ax.set_ylabel("MAE (sec)")
+    ax.set_xlabel("")
+    plt.xticks(rotation=30, ha="right")
+    plt.tight_layout()
+    plt.savefig(path, dpi=160)
+    return True
+
+
 def build_replay_summary_payload(
     *,
     split_id: str,
@@ -845,6 +1743,7 @@ def build_replay_summary_payload(
     cold_start: pd.DataFrame,
     comparison: pd.DataFrame,
     prediction_path: Path,
+    shadow_summary: dict[str, object],
     generation_issues: list[str],
 ) -> dict[str, object]:
     bootstrap = replay_bootstrap_summary(event)
@@ -864,6 +1763,18 @@ def build_replay_summary_payload(
         "cold_start_summary": records_for_json(cold_start),
         "bootstrap_confidence_intervals": bootstrap,
         "artifact_driven_comparison": records_for_json(comparison),
+        "shadow_candidate_persistence": shadow_summary,
+        "shadow_candidate_persistence_enabled": shadow_summary.get(
+            "shadow_candidate_persistence_enabled",
+            False,
+        ),
+        "shadow_candidate_persistence_status": shadow_summary.get(
+            "shadow_candidate_persistence_status",
+        ),
+        "shadow_candidate_persistence_complete_by_split": shadow_summary.get(
+            "shadow_candidate_persistence_complete_by_split",
+            {},
+        ),
         "recommendation": recommendation,
         "main_findings": replay_findings(checkpoint, leakage, comparison, recommendation),
         "artifact_paths": {
@@ -873,6 +1784,8 @@ def build_replay_summary_payload(
             "selection_log": "reports/metrics/prospective_replay_selection_log.csv",
             "training_manifest": "reports/metrics/prospective_replay_training_manifest.csv",
             "leakage_audit": "reports/metrics/prospective_replay_leakage_audit.csv",
+            "shadow_candidates": "reports/metrics/prospective_replay_shadow_candidates.parquet",
+            "shadow_summary": "reports/metrics/prospective_replay_shadow_candidate_summary.json",
         },
         "generation_issues": generation_issues,
         "generated_at": utc_now(),
@@ -886,6 +1799,16 @@ def merge_replay_summary(summary_path: Path, split_summary: dict[str, object]) -
     splits = [item for item in splits if item.get("prospective_split") != split_id]
     splits.append(split_summary)
     recommendation = aggregate_replay_recommendation(splits)
+    shadow_blocks = [
+        item.get("shadow_candidate_persistence", {})
+        for item in splits
+        if isinstance(item.get("shadow_candidate_persistence"), dict)
+    ]
+    shadow_complete_by_split = {}
+    for block in shadow_blocks:
+        values = block.get("shadow_candidate_persistence_complete_by_split", {})
+        if isinstance(values, dict):
+            shadow_complete_by_split.update(values)
     return {
         "status": "complete" if splits else "partial",
         "evaluation_type": EVALUATION_TYPE,
@@ -897,6 +1820,28 @@ def merge_replay_summary(summary_path: Path, split_summary: dict[str, object]) -
                 item.get("leakage_audit_summary", {}).get("all_rows_valid") for item in splits
             ),
         },
+        "shadow_candidate_persistence_enabled": bool(shadow_blocks),
+        "shadow_candidate_persistence_status": (
+            "complete"
+            if shadow_complete_by_split and all(shadow_complete_by_split.values())
+            else "partial"
+            if shadow_blocks
+            else "disabled"
+        ),
+        "shadow_candidate_persistence_complete_by_split": shadow_complete_by_split,
+        "shadow_history_valid": all(
+            bool(block.get("shadow_history_valid", False)) for block in shadow_blocks
+        )
+        if shadow_blocks
+        else False,
+        "shadow_history_future_violation_detected": any(
+            bool(block.get("shadow_history_future_violation_detected", False))
+            for block in shadow_blocks
+        ),
+        "shadow_history_current_event_violation_detected": any(
+            bool(block.get("shadow_history_current_event_violation_detected", False))
+            for block in shadow_blocks
+        ),
         "recommendation": recommendation,
         "main_findings": [finding for item in splits for finding in item.get("main_findings", [])],
         "generated_at": utc_now(),
