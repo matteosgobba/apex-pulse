@@ -364,6 +364,7 @@ def build_portfolio_summary_payload(
     prospective_replay = artifacts["prospective_replay_summary"] or {}
     prospective_replay_eligibility = artifacts["prospective_replay_eligibility_audit_summary"] or {}
     prospective_replay_shadow = artifacts["prospective_replay_shadow_candidate_summary"] or {}
+    season_aware_governance = artifacts["season_aware_governance_summary"] or {}
     missing_artifacts = artifacts["missing_artifacts"]
     modes_available = [mode for mode in CHAMPION_MODES if mode in champion_metrics]
     best_by_checkpoint = _best_champion_mode_by_checkpoint(champion_metrics, backtest_report)
@@ -392,11 +393,12 @@ def build_portfolio_summary_payload(
             prospective_replay,
             prospective_replay_eligibility,
             prospective_replay_shadow,
+            season_aware_governance,
         ),
         "limitations": _limitations(),
         "recommended_next_milestone": (
-            "Milestone 31: use retrain-based prospective replay results conservatively and "
-            "decide whether more seasons, stress tests, or promotion-governance checks are needed."
+            "Milestone 34: collect more live-style prospective evidence or add a strictly "
+            "diagnostic stability analysis before considering any policy change."
         ),
         "temporal_weighting_if_available": _temporal_weighting_portfolio_summary(
             temporal_weighting_summary
@@ -430,6 +432,9 @@ def build_portfolio_summary_payload(
         ),
         "prospective_replay_shadow_if_available": _prospective_replay_shadow_portfolio_summary(
             prospective_replay_shadow
+        ),
+        "season_aware_governance_if_available": _season_aware_governance_portfolio_summary(
+            season_aware_governance
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -607,6 +612,9 @@ def build_model_card(
         "## Prospective replay shadow candidates",
         _prospective_replay_shadow_card_text(summary.get("prospective_replay_shadow_if_available")),
         "",
+        "## Season-aware governance",
+        _season_aware_governance_card_text(summary.get("season_aware_governance_if_available")),
+        "",
         "## Baselines",
         "The report compares champion policies against practice-lap baselines, including robust "
         "baselines that fall back from weak or extreme latest-session signals.",
@@ -695,6 +703,9 @@ def _load_artifacts(metrics_dir: Path) -> dict[str, Any]:
         ),
         "prospective_replay_shadow_candidate_summary": _read_json_if_exists(
             metrics_dir / "prospective_replay_shadow_candidate_summary.json"
+        ),
+        "season_aware_governance_summary": _read_json_if_exists(
+            metrics_dir / "season_aware_governance_summary.json"
         ),
         "event_error_summary": _read_parquet_if_exists(metrics_dir / "event_error_summary.parquet"),
         "driver_error_summary": _read_parquet_if_exists(
@@ -879,6 +890,7 @@ def _main_takeaways(
     prospective_replay: dict[str, Any] | None = None,
     prospective_replay_eligibility: dict[str, Any] | None = None,
     prospective_replay_shadow: dict[str, Any] | None = None,
+    season_aware_governance: dict[str, Any] | None = None,
 ) -> list[str]:
     takeaways: list[str] = []
     static = champion_metrics.get("static", {})
@@ -961,6 +973,16 @@ def _main_takeaways(
         takeaways.append(
             "True replay persists diagnostic-only FP3 shadow candidates separately from live "
             f"policy outputs; shadow persistence status `{status}`."
+        )
+    if season_aware_governance:
+        recommendation = season_aware_governance.get(
+            "final_recommendation",
+            "candidate_evidence_inconclusive",
+        )
+        takeaways.append(
+            "Season-aware governance synthesizes retrospective, prospective, live replay, and "
+            f"shadow-history diagnostics without changing policy behavior; final state "
+            f"`{recommendation}`."
         )
     if not takeaways:
         takeaways.append(
@@ -1202,6 +1224,28 @@ def _prospective_replay_shadow_portfolio_summary(
             "retain_static_policy",
         ),
         "diagnostic_only": True,
+    }
+
+
+def _season_aware_governance_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "season_aware_governance_available": True,
+        "season_aware_governance_status": summary.get("status"),
+        "season_aware_governance_final_recommendation": summary.get("final_recommendation"),
+        "season_aware_governance_primary_rationale": summary.get("primary_rationale"),
+        "season_aware_governance_live_replay_status": summary.get("live_replay_status", {}),
+        "season_aware_governance_shadow_history_status": summary.get(
+            "shadow_history_status",
+            {},
+        ),
+        "season_aware_governance_evidence_strength_summary": summary.get(
+            "evidence_strength_summary",
+            {},
+        ),
     }
 
 
@@ -1554,6 +1598,32 @@ def _prospective_replay_shadow_card_text(value: object) -> str:
         + f" Persistence status: `{status}`. Shadow history is prior-only and excludes current "
         + "or future events; shadow eligibility is a frozen-gate diagnostic, not a deployed "
         + f"selection policy. Policy recommendation: `{recommendation}`."
+    )
+
+
+def _season_aware_governance_card_text(value: object) -> str:
+    intro = (
+        "The season-aware governance report synthesizes retrospective aligned validation, "
+        "artifact-driven prospective evaluation, true retrain-based replay, shadow-history "
+        "counterfactual gate evaluation, eligibility audit, and source-lineage forensics."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No season-aware governance report was available."
+    recommendation = value.get(
+        "season_aware_governance_final_recommendation",
+        "candidate_evidence_inconclusive",
+    )
+    rationale = value.get("season_aware_governance_primary_rationale")
+    live = value.get("season_aware_governance_live_replay_status", {})
+    shadow = value.get("season_aware_governance_shadow_history_status", {})
+    live_status = live.get("interpretation") if isinstance(live, dict) else None
+    shadow_status = shadow.get("interpretation") if isinstance(shadow, dict) else None
+    return (
+        intro
+        + f" Live replay status: `{live_status}`; shadow-history status: `{shadow_status}`. "
+        + f"Final conservative state: `{recommendation}`. {rationale} No default policy, "
+        + "threshold, candidate identity, temporal-weighting policy, or model hyperparameter "
+        + "changed."
     )
 
 

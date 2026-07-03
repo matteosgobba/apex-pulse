@@ -84,6 +84,10 @@ from f1_prediction.modeling.season_aware_candidate_audit import (
 from f1_prediction.modeling.season_aware_candidate_audit import (
     create_season_aware_candidate_audit_report as run_season_aware_candidate_audit_report,
 )
+from f1_prediction.modeling.season_aware_governance import SeasonAwareGovernanceSummary
+from f1_prediction.modeling.season_aware_governance import (
+    create_season_aware_governance_report as run_season_aware_governance_report,
+)
 from f1_prediction.modeling.season_aware_policy_forensics import (
     SeasonAwarePolicyForensicsSummary,
 )
@@ -1271,6 +1275,25 @@ def prospective_replay_eligibility_audit_command(
     _print_prospective_replay_eligibility_audit_summary(summary, data_config.project_root)
 
 
+@app.command("season-aware-governance-report")
+def season_aware_governance_report_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Synthesize saved season-aware candidate evidence into a governance report."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_season_aware_governance_report(data_config)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_season_aware_governance_summary(summary, data_config.project_root)
+
+
 @app.command("champion-source-lineage")
 def champion_source_lineage_command(
     config_path: Annotated[
@@ -1798,6 +1821,21 @@ def _print_prospective_replay_eligibility_audit_summary(
     project_root: Path,
 ) -> None:
     typer.echo("Prospective replay eligibility audit complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_season_aware_governance_summary(
+    summary: SeasonAwareGovernanceSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Season-aware governance report complete")
     typer.echo(f"Status: {summary.status}")
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Tables: {len(summary.table_paths)}")

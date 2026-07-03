@@ -20,6 +20,7 @@ from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
 from f1_prediction.modeling.season_aware_candidate_audit import (
     SeasonAwareCandidateAuditSummary,
 )
+from f1_prediction.modeling.season_aware_governance import SeasonAwareGovernanceSummary
 from f1_prediction.modeling.season_aware_policy_forensics import (
     SeasonAwarePolicyForensicsSummary,
 )
@@ -954,6 +955,30 @@ def test_champion_source_lineage_command_is_registered(
 
     assert result.exit_code == 0
     assert "Champion source lineage complete" in result.output
+
+
+def test_season_aware_governance_report_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_season_aware_governance_report",
+        lambda data_config: SeasonAwareGovernanceSummary(
+            status="partial",
+            summary_path=tmp_path / "metrics/season_aware_governance_summary.json",
+            table_paths=(tmp_path / "metrics/season_aware_governance_matrix.csv",),
+            figure_paths=(tmp_path / "figures/season_aware_governance_evidence_pathway.png",),
+            missing_inputs=("prospective_replay_summary.json",),
+            generation_issues=(),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["season-aware-governance-report"])
+
+    assert result.exit_code == 0
+    assert "Season-aware governance report complete" in result.output
 
 
 def test_rebuild_season_aware_artifacts_command_is_registered(
