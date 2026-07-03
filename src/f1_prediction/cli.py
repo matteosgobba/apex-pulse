@@ -98,6 +98,10 @@ from f1_prediction.modeling.season_aware_rebuild import SeasonAwareRebuildSummar
 from f1_prediction.modeling.season_aware_rebuild import (
     create_season_aware_rebuild_report as run_season_aware_rebuild_report,
 )
+from f1_prediction.modeling.season_aware_stability import SeasonAwareStabilitySummary
+from f1_prediction.modeling.season_aware_stability import (
+    create_season_aware_stability_report as run_season_aware_stability_report,
+)
 from f1_prediction.modeling.season_aware_validation import SeasonAwareValidationSummary
 from f1_prediction.modeling.season_aware_validation import (
     create_season_aware_validation_report as run_season_aware_validation_report,
@@ -1294,6 +1298,36 @@ def season_aware_governance_report_command(
     _print_season_aware_governance_summary(summary, data_config.project_root)
 
 
+@app.command("season-aware-stability-report")
+def season_aware_stability_report_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Analyze artifact-driven stability of the season-aware FP3 candidate."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_season_aware_stability_report(
+            data_config,
+            tail_risk_threshold_sec=model_config.champion_diagnostics.harmful_switch_tolerance_sec,
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_season_aware_stability_summary(summary, data_config.project_root)
+
+
 @app.command("champion-source-lineage")
 def champion_source_lineage_command(
     config_path: Annotated[
@@ -1836,6 +1870,21 @@ def _print_season_aware_governance_summary(
     project_root: Path,
 ) -> None:
     typer.echo("Season-aware governance report complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_season_aware_stability_summary(
+    summary: SeasonAwareStabilitySummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Season-aware stability report complete")
     typer.echo(f"Status: {summary.status}")
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Tables: {len(summary.table_paths)}")

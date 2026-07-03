@@ -25,6 +25,7 @@ from f1_prediction.modeling.season_aware_policy_forensics import (
     SeasonAwarePolicyForensicsSummary,
 )
 from f1_prediction.modeling.season_aware_rebuild import SeasonAwareRebuildSummary
+from f1_prediction.modeling.season_aware_stability import SeasonAwareStabilitySummary
 from f1_prediction.modeling.season_aware_validation import SeasonAwareValidationSummary
 from f1_prediction.modeling.temporal_weighting_report import TemporalWeightingReportSummary
 
@@ -979,6 +980,42 @@ def test_season_aware_governance_report_command_is_registered(
 
     assert result.exit_code == 0
     assert "Season-aware governance report complete" in result.output
+
+
+def test_season_aware_stability_report_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    model_config = type(
+        "ModelConfigStub",
+        (),
+        {
+            "champion_diagnostics": type(
+                "DiagnosticsStub",
+                (),
+                {"harmful_switch_tolerance_sec": 0.05},
+            )()
+        },
+    )()
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: model_config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_season_aware_stability_report",
+        lambda data_config, tail_risk_threshold_sec: SeasonAwareStabilitySummary(
+            status="partial",
+            summary_path=tmp_path / "metrics/season_aware_stability_summary.json",
+            table_paths=(tmp_path / "metrics/season_aware_stability_by_event.csv",),
+            figure_paths=(tmp_path / "figures/season_aware_stability_delta_by_event_order.png",),
+            missing_inputs=("season_aware_event_level_comparison.csv",),
+            generation_issues=(),
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["season-aware-stability-report"])
+
+    assert result.exit_code == 0
+    assert "Season-aware stability report complete" in result.output
 
 
 def test_rebuild_season_aware_artifacts_command_is_registered(

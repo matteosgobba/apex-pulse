@@ -51,6 +51,7 @@ def create_backtest_report(
     prospective_replay_summary_path: Path | None = None,
     prospective_replay_eligibility_summary_path: Path | None = None,
     season_aware_governance_summary_path: Path | None = None,
+    season_aware_stability_summary_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -144,6 +145,11 @@ def create_backtest_report(
         or config.metrics_output_dir / "season_aware_governance_summary.json",
         config.project_root,
     )
+    season_aware_stability_path = _resolve_path(
+        season_aware_stability_summary_path
+        or config.metrics_output_dir / "season_aware_stability_summary.json",
+        config.project_root,
+    )
     champion_mode_metrics = _read_champion_mode_metrics(config.metrics_output_dir)
     dataset = pd.read_parquet(source_path)
     quality = (
@@ -197,6 +203,9 @@ def create_backtest_report(
     season_aware_governance_summary = (
         _read_json(season_aware_governance_path) if season_aware_governance_path.is_file() else None
     )
+    season_aware_stability_summary = (
+        _read_json(season_aware_stability_path) if season_aware_stability_path.is_file() else None
+    )
     if champion_metrics is not None:
         mode = str(champion_metrics.get("selection_mode", ""))
         if mode:
@@ -222,6 +231,7 @@ def create_backtest_report(
         prospective_replay_summary=prospective_replay_summary,
         prospective_replay_eligibility_summary=prospective_replay_eligibility_summary,
         season_aware_governance_summary=season_aware_governance_summary,
+        season_aware_stability_summary=season_aware_stability_summary,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -260,6 +270,7 @@ def build_backtest_report_payload(
     prospective_replay_summary: dict[str, Any] | None = None,
     prospective_replay_eligibility_summary: dict[str, Any] | None = None,
     season_aware_governance_summary: dict[str, Any] | None = None,
+    season_aware_stability_summary: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -296,6 +307,7 @@ def build_backtest_report_payload(
             _prospective_replay_eligibility_summary(prospective_replay_eligibility_summary)
         )
         payload.update(_season_aware_governance_summary(season_aware_governance_summary))
+        payload.update(_season_aware_stability_summary(season_aware_stability_summary))
         return payload
 
     training_status = (
@@ -354,6 +366,7 @@ def build_backtest_report_payload(
     payload.update(_prospective_replay_summary(prospective_replay_summary))
     payload.update(_prospective_replay_eligibility_summary(prospective_replay_eligibility_summary))
     payload.update(_season_aware_governance_summary(season_aware_governance_summary))
+    payload.update(_season_aware_stability_summary(season_aware_stability_summary))
     return payload
 
 
@@ -1054,6 +1067,29 @@ def _season_aware_governance_summary(summary: dict[str, Any] | None) -> dict[str
         "season_aware_governance_evidence_strength_summary": summary.get(
             "evidence_strength_summary",
             {},
+        ),
+    }
+
+
+def _season_aware_stability_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "season_aware_stability_available": False,
+            "season_aware_stability_status": "missing",
+            "season_aware_stability_classification": None,
+            "season_aware_stability_primary_caution": None,
+            "season_aware_stability_policy_recommendation": None,
+        }
+    cautionary = summary.get("primary_cautionary_evidence", [])
+    primary_caution = cautionary[0] if isinstance(cautionary, list) and cautionary else None
+    return {
+        "season_aware_stability_available": True,
+        "season_aware_stability_status": summary.get("status"),
+        "season_aware_stability_classification": summary.get("overall_stability_classification"),
+        "season_aware_stability_primary_caution": primary_caution,
+        "season_aware_stability_policy_recommendation": summary.get(
+            "policy_recommendation",
+            "season_aware_candidate_requires_more_evidence",
         ),
     }
 
