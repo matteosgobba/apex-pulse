@@ -373,6 +373,12 @@ def test_backtest_report_includes_monitoring_data_onboarding_summary() -> None:
             "forecastable_event_count": 1,
             "settleable_event_count": 0,
             "target_isolation_status": "valid",
+            "monitoring_target_coverage_status": "target_coverage_partial",
+            "monitoring_target_coverage_rate": 20 / 22,
+            "monitoring_evaluable_driver_count": 20,
+            "monitoring_non_evaluable_driver_count": 2,
+            "monitoring_partial_coverage_event_count": 1,
+            "monitoring_settlement_metric_status": "scorable",
         },
     )
 
@@ -381,6 +387,12 @@ def test_backtest_report_includes_monitoring_data_onboarding_summary() -> None:
     assert report["monitoring_data_onboarding_forecastable_event_count"] == 1
     assert report["monitoring_data_onboarding_settleable_event_count"] == 0
     assert report["monitoring_data_onboarding_target_isolation_status"] == "valid"
+    assert report["monitoring_target_coverage_status"] == "target_coverage_partial"
+    assert report["monitoring_target_coverage_rate"] == pytest.approx(20 / 22)
+    assert report["monitoring_evaluable_driver_count"] == 20
+    assert report["monitoring_non_evaluable_driver_count"] == 2
+    assert report["monitoring_partial_coverage_event_count"] == 1
+    assert report["monitoring_settlement_metric_status"] == "scorable"
 
 
 def _quality() -> dict[str, object]:

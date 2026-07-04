@@ -9,11 +9,15 @@ from f1_prediction.data.fastf1_loader import build_lap_output_path
 from f1_prediction.data.monitoring_onboarding import (
     FORBIDDEN_TARGET_COLUMNS,
     add_monitoring_targets,
+    artifact_fingerprint,
+    build_target_artifacts_with_coverage,
     create_monitoring_data_readiness_report,
     feature_artifact_path,
     prepare_monitoring_event,
     register_monitoring_event,
     target_artifact_path,
+    target_coverage_path,
+    validate_target_key_integrity,
 )
 from f1_prediction.modeling.prospective_monitoring import (
     create_prospective_monitoring_forecast,
@@ -70,6 +74,111 @@ def test_add_targets_writes_separate_artifact_without_mutating_features(tmp_path
     assert target_artifact_path(config, 2026, "Bahrain") != feature_path
     assert set(FORBIDDEN_TARGET_COLUMNS).issubset(targets.columns)
     assert "target_created_at_utc" in targets.columns
+
+
+def test_partial_target_coverage_writes_targets_and_coverage(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    drivers = tuple(f"D{i:02d}" for i in range(22))
+    target_drivers = drivers[:20]
+    _write_practice_raw(config, 2026, "Australia", drivers=drivers)
+    _write_q_raw(config, 2026, "Australia", drivers=target_drivers)
+    prepare_monitoring_event(config, _features(), season=2026, event="Australia")
+
+    summary = add_monitoring_targets(config, season=2026, event="Australia")
+    targets = pd.read_parquet(target_artifact_path(config, 2026, "Australia"))
+    coverage = pd.read_csv(target_coverage_path(config, 2026, "Australia"))
+    manifest = json.loads(summary.summary_path.read_text())
+
+    assert summary.status == "targets_added"
+    assert len(targets) == 20
+    assert len(coverage) == 22
+    assert manifest["target_coverage_status"] == "target_coverage_partial"
+    assert manifest["evaluable_driver_count"] == 20
+    assert manifest["non_evaluable_driver_count"] == 2
+    missing = coverage[~coverage["target_evaluable"].astype(bool)]
+    assert set(missing["driver"]) == {"D20", "D21"}
+    assert set(missing["target_missing_reason"]) == {"no_qualifying_lap_rows"}
+    assert not missing["included_in_settlement_metrics"].astype(bool).any()
+
+
+def test_extra_target_rows_still_fail_alignment(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_practice_raw(config, 2026, "Bahrain", drivers=("VER", "NOR"))
+    _write_q_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC"))
+    prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
+
+    with pytest.raises(ValueError, match="without matching feature"):
+        add_monitoring_targets(config, season=2026, event="Bahrain")
+
+
+def test_identifier_conflicts_still_fail() -> None:
+    features = pd.DataFrame(
+        {
+            "season": [2026],
+            "event": ["Australia"],
+            "event_slug": ["australia"],
+            "checkpoint": ["after_fp3"],
+            "driver": ["VER"],
+            "driver_key": ["ver"],
+            "team": ["Red Bull Racing"],
+            "team_key": ["red-bull-racing"],
+        }
+    )
+    targets = pd.DataFrame(
+        {
+            "season": [2026],
+            "event": ["Australia"],
+            "event_slug": ["australia"],
+            "driver": ["VER"],
+            "driver_key": ["ver"],
+            "team": ["Ferrari"],
+            "team_key": ["ferrari"],
+            "quali_gap_to_pole_sec": [0.0],
+            "quali_position": [1],
+            "quali_best_lap_time_sec": [80.0],
+            "reached_q2": [1],
+            "reached_q3": [1],
+        }
+    )
+
+    with pytest.raises(ValueError, match="identifier conflicts"):
+        build_target_artifacts_with_coverage(features, targets, season=2026, event="Australia")
+
+
+def test_duplicate_target_rows_still_fail() -> None:
+    targets = pd.DataFrame(
+        {
+            "season": [2026, 2026],
+            "event": ["Australia", "Australia"],
+            "event_slug": ["australia", "australia"],
+            "driver": ["VER", "VER"],
+            "driver_key": ["ver", "ver"],
+            "team": ["Red Bull Racing", "Red Bull Racing"],
+            "team_key": ["red-bull-racing", "red-bull-racing"],
+            "quali_gap_to_pole_sec": [0.0, 0.1],
+            "quali_position": [1, 2],
+            "quali_best_lap_time_sec": [80.0, 80.1],
+            "reached_q2": [1, 1],
+            "reached_q3": [1, 1],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Duplicate target rows"):
+        validate_target_key_integrity(targets)
+
+
+def test_zero_valid_target_rows_blocks_settlement_target_creation(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_practice_raw(config, 2026, "Bahrain")
+    _write_q_raw(config, 2026, "Bahrain", accurate=False)
+    prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
+
+    with pytest.raises(ValueError, match="No evaluable qualifying targets"):
+        add_monitoring_targets(config, season=2026, event="Bahrain")
+
+    coverage = pd.read_csv(target_coverage_path(config, 2026, "Bahrain"))
+    assert len(coverage) == 4
+    assert not coverage["target_evaluable"].astype(bool).any()
 
 
 def test_add_targets_requires_valid_prequalification_features(tmp_path: Path) -> None:
@@ -192,6 +301,74 @@ def test_forecast_and_settlement_use_separate_feature_and_target_artifacts(
     assert settlements["actual_gap_sec"].notna().all()
 
 
+def test_partial_coverage_settlement_preserves_forecast_rows_and_scores_evaluable_only(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_historical_dataset(config)
+    create_prospective_monitoring_protocol(
+        config,
+        load_model_config(),
+        protocol_name="season_2026_v1",
+        monitor_season=2026,
+        train_seasons=(2023,),
+        dataset_path=dataset_path,
+    )
+    _write_practice_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC", "HAM"))
+    _write_q_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC"))
+    prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
+    register_monitoring_event(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+        event_order=2,
+    )
+    create_prospective_monitoring_forecast(
+        config,
+        load_model_config(),
+        _features(),
+        protocol_name="season_2026_v1",
+        event="Bahrain",
+    )
+    forecast_path = config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    forecast_fingerprint = artifact_fingerprint(forecast_path)
+
+    add_monitoring_targets(config, season=2026, event="Bahrain")
+    create_prospective_monitoring_settlement(
+        config,
+        protocol_name="season_2026_v1",
+        event="Bahrain",
+    )
+    settlements = pd.read_parquet(
+        config.metrics_output_dir / "prospective_monitoring_settlements.parquet"
+    )
+    metrics = pd.read_csv(config.metrics_output_dir / "prospective_monitoring_event_metrics.csv")
+    ledger = pd.read_csv(
+        config.metrics_output_dir / "prospective_monitoring_shadow_evidence_ledger.csv"
+    )
+    registry = pd.read_csv(config.metrics_output_dir / "prospective_monitoring_event_registry.csv")
+
+    assert artifact_fingerprint(forecast_path) == forecast_fingerprint
+    assert len(settlements) == 12
+    assert settlements["forecast_row_preserved"].astype(bool).all()
+    assert int(settlements["settlement_evaluable"].astype(bool).sum()) == 9
+    assert int((~settlements["included_in_metrics"].astype(bool)).sum()) == 3
+    missing = settlements[settlements["driver"].eq("HAM")]
+    assert missing["settlement_exclusion_reason"].eq("no_qualifying_lap_rows").all()
+    assert missing["actual_gap_sec"].isna().all()
+    assert not missing["eligible_for_future_prior_evidence"].astype(bool).any()
+    assert set(metrics["scored_rows"]) == {3}
+    assert set(metrics["excluded_rows"]) == {1}
+    assert (
+        not ledger[ledger["driver"].eq("HAM")]["eligible_for_future_prior_evidence"]
+        .astype(bool)
+        .any()
+    )
+    assert registry.loc[0, "target_coverage_status"] == "target_coverage_partial"
+    assert registry.loc[0, "settlement_metric_status"] == "scorable"
+
+
 def test_readiness_report_handles_unavailable_monitored_season(tmp_path: Path) -> None:
     config = _config(tmp_path)
     dataset_path = _write_historical_dataset(config)
@@ -235,36 +412,52 @@ def _write_practice_raw(
     event: str,
     *,
     sessions: tuple[str, ...] = ("FP1", "FP2", "FP3"),
+    drivers: tuple[str, ...] = ("VER", "NOR", "LEC", "HAM"),
 ) -> None:
     for index, session in enumerate(sessions, start=1):
         path = build_lap_output_path(config.lap_output_dir, season, event, session)
-        _raw_laps(base_time=80.0 + index).to_parquet(path, index=False)
+        _raw_laps(base_time=80.0 + index, drivers=drivers).to_parquet(path, index=False)
 
 
-def _write_q_raw(config: DataConfig, season: int, event: str) -> None:
+def _write_q_raw(
+    config: DataConfig,
+    season: int,
+    event: str,
+    *,
+    drivers: tuple[str, ...] = ("VER", "NOR", "LEC", "HAM"),
+    accurate: bool = True,
+) -> None:
     path = build_lap_output_path(config.lap_output_dir, season, event, "Q")
-    _raw_laps(base_time=79.0).to_parquet(path, index=False)
+    _raw_laps(base_time=79.0, drivers=drivers, accurate=accurate).to_parquet(path, index=False)
 
 
-def _raw_laps(*, base_time: float) -> pd.DataFrame:
-    drivers = ("VER", "NOR", "LEC", "HAM")
-    teams = ("Red Bull Racing", "McLaren", "Ferrari", "Mercedes")
+def _raw_laps(
+    *,
+    base_time: float,
+    drivers: tuple[str, ...] = ("VER", "NOR", "LEC", "HAM"),
+    accurate: bool = True,
+) -> pd.DataFrame:
+    default_teams = ("Red Bull Racing", "McLaren", "Ferrari", "Mercedes")
+    teams = tuple(default_teams[index % len(default_teams)] for index, _ in enumerate(drivers))
     return pd.DataFrame(
         {
             "Driver": list(drivers),
             "Team": list(teams),
-            "LapNumber": [1.0] * 4,
-            "Stint": [1.0] * 4,
-            "Compound": ["SOFT"] * 4,
-            "TyreLife": [2.0] * 4,
-            "LapTime": pd.to_timedelta([base_time + i * 0.2 for i in range(4)], unit="s"),
-            "Sector1Time": pd.to_timedelta([25.0] * 4, unit="s"),
-            "Sector2Time": pd.to_timedelta([29.0] * 4, unit="s"),
-            "Sector3Time": pd.to_timedelta([25.0] * 4, unit="s"),
-            "IsAccurate": [True] * 4,
-            "Deleted": [False] * 4,
-            "PitOutTime": [pd.NaT] * 4,
-            "PitInTime": [pd.NaT] * 4,
+            "LapNumber": [1.0] * len(drivers),
+            "Stint": [1.0] * len(drivers),
+            "Compound": ["SOFT"] * len(drivers),
+            "TyreLife": [2.0] * len(drivers),
+            "LapTime": pd.to_timedelta(
+                [base_time + i * 0.2 for i in range(len(drivers))],
+                unit="s",
+            ),
+            "Sector1Time": pd.to_timedelta([25.0] * len(drivers), unit="s"),
+            "Sector2Time": pd.to_timedelta([29.0] * len(drivers), unit="s"),
+            "Sector3Time": pd.to_timedelta([25.0] * len(drivers), unit="s"),
+            "IsAccurate": [accurate] * len(drivers),
+            "Deleted": [False] * len(drivers),
+            "PitOutTime": [pd.NaT] * len(drivers),
+            "PitInTime": [pd.NaT] * len(drivers),
         }
     )
 

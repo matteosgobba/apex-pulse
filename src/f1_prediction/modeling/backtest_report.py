@@ -1134,6 +1134,12 @@ def _prospective_monitoring_summary(summary: dict[str, Any] | None) -> dict[str,
             "prospective_monitoring_policy_recommendation": (
                 "season_aware_candidate_requires_more_evidence"
             ),
+            "monitoring_target_coverage_status": "target_not_available",
+            "monitoring_target_coverage_rate": None,
+            "monitoring_evaluable_driver_count": 0,
+            "monitoring_non_evaluable_driver_count": 0,
+            "monitoring_partial_coverage_event_count": 0,
+            "monitoring_settlement_metric_status": "not_scorable",
         }
     return {
         "prospective_monitoring_available": True,
@@ -1146,6 +1152,18 @@ def _prospective_monitoring_summary(summary: dict[str, Any] | None) -> dict[str,
             "policy_recommendation",
             "season_aware_candidate_requires_more_evidence",
         ),
+        "monitoring_target_coverage_status": summary.get("monitoring_target_coverage_status"),
+        "monitoring_target_coverage_rate": summary.get("monitoring_target_coverage_rate"),
+        "monitoring_evaluable_driver_count": int(
+            summary.get("monitoring_evaluable_driver_count", 0) or 0
+        ),
+        "monitoring_non_evaluable_driver_count": int(
+            summary.get("monitoring_non_evaluable_driver_count", 0) or 0
+        ),
+        "monitoring_partial_coverage_event_count": int(
+            summary.get("monitoring_partial_coverage_event_count", 0) or 0
+        ),
+        "monitoring_settlement_metric_status": summary.get("monitoring_settlement_metric_status"),
     }
 
 
@@ -1157,6 +1175,12 @@ def _monitoring_data_readiness_summary(summary: dict[str, Any] | None) -> dict[s
             "monitoring_data_onboarding_forecastable_event_count": 0,
             "monitoring_data_onboarding_settleable_event_count": 0,
             "monitoring_data_onboarding_target_isolation_status": "missing",
+            "monitoring_target_coverage_status": "target_not_available",
+            "monitoring_target_coverage_rate": None,
+            "monitoring_evaluable_driver_count": 0,
+            "monitoring_non_evaluable_driver_count": 0,
+            "monitoring_partial_coverage_event_count": 0,
+            "monitoring_settlement_metric_status": "not_scorable",
         }
     return {
         "monitoring_data_onboarding_available": True,
@@ -1171,6 +1195,18 @@ def _monitoring_data_readiness_summary(summary: dict[str, Any] | None) -> dict[s
             "target_isolation_status",
             "unknown",
         ),
+        "monitoring_target_coverage_status": summary.get("monitoring_target_coverage_status"),
+        "monitoring_target_coverage_rate": summary.get("monitoring_target_coverage_rate"),
+        "monitoring_evaluable_driver_count": int(
+            summary.get("monitoring_evaluable_driver_count", 0) or 0
+        ),
+        "monitoring_non_evaluable_driver_count": int(
+            summary.get("monitoring_non_evaluable_driver_count", 0) or 0
+        ),
+        "monitoring_partial_coverage_event_count": int(
+            summary.get("monitoring_partial_coverage_event_count", 0) or 0
+        ),
+        "monitoring_settlement_metric_status": summary.get("monitoring_settlement_metric_status"),
     }
 
 

@@ -52,8 +52,41 @@ TARGET_ARTIFACT_COLUMNS: tuple[str, ...] = (
     "quali_best_lap_time_sec",
     "reached_q2",
     "reached_q3",
+    "target_evaluable",
+    "target_coverage_status",
     "target_source_status",
     "target_created_at_utc",
+)
+TARGET_COVERAGE_COLUMNS: tuple[str, ...] = (
+    "season",
+    "event",
+    "event_slug",
+    "checkpoint",
+    "driver",
+    "driver_key",
+    "team",
+    "team_key",
+    "feature_row_present",
+    "qualifying_target_present",
+    "target_evaluable",
+    "target_missing_reason",
+    "target_source_status",
+    "target_validation_status",
+    "included_in_settlement_metrics",
+    "excluded_from_settlement_metrics",
+    "settlement_exclusion_reason",
+)
+TARGET_COVERAGE_SUMMARY_FIELDS: tuple[str, ...] = (
+    "feature_driver_count",
+    "target_driver_count",
+    "evaluable_driver_count",
+    "non_evaluable_driver_count",
+    "feature_target_coverage_rate",
+    "extra_target_count",
+    "identifier_conflict_count",
+    "target_coverage_status",
+    "partial_target_coverage",
+    "settlement_metric_status",
 )
 REGISTRY_ONBOARDING_COLUMNS: tuple[str, ...] = (
     "feature_artifact_path",
@@ -67,6 +100,14 @@ REGISTRY_ONBOARDING_COLUMNS: tuple[str, ...] = (
     "settleable",
     "onboarding_status",
     "onboarding_blocking_reason",
+    "feature_driver_count",
+    "target_driver_count",
+    "evaluable_driver_count",
+    "non_evaluable_driver_count",
+    "target_coverage_rate",
+    "partial_target_coverage",
+    "target_coverage_status",
+    "settlement_metric_status",
 )
 
 
@@ -271,24 +312,46 @@ def add_monitoring_targets(
     q_path = build_lap_output_path(config.lap_output_dir, season, event, "Q")
     if not q_path.is_file():
         raise FileNotFoundError(f"Local qualifying lap artifact is missing: {q_path}")
+    forecast_path = config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    before_forecast_fingerprint = (
+        artifact_fingerprint(forecast_path) if forecast_path.is_file() else None
+    )
     raw_q = pd.read_parquet(q_path)
     targets = build_qualifying_targets(raw_q, season=season, event=event)
-    target_rows = build_target_artifact_rows(targets)
-    validate_feature_target_alignment(features, target_rows)
+    target_rows, coverage, coverage_summary = build_target_artifacts_with_coverage(
+        features,
+        targets,
+        season=season,
+        event=event,
+    )
+    if target_rows.empty:
+        write_target_coverage_artifact(config, season, event, coverage)
+        raise ValueError("No evaluable qualifying targets can be constructed for settlement")
     output_path = target_artifact_path(config, season, event)
+    coverage_path = target_coverage_path(config, season, event)
     ensure_directory(output_path.parent)
     target_rows.to_parquet(output_path, index=False)
+    coverage.to_csv(coverage_path, index=False)
     after_fingerprint = artifact_fingerprint(feature_artifact_path(config, season, event))
     if before_fingerprint != after_fingerprint:
         raise ValueError("Feature artifact mutated during target creation")
+    after_forecast_fingerprint = (
+        artifact_fingerprint(forecast_path) if forecast_path.is_file() else None
+    )
+    if before_forecast_fingerprint != after_forecast_fingerprint:
+        raise ValueError("Forecast artifact mutated during target creation")
     manifest.update(
         {
             "target_artifact_path": portable_path(output_path, config.project_root),
             "target_artifact_fingerprint": artifact_fingerprint(output_path),
+            "target_coverage_artifact_path": portable_path(coverage_path, config.project_root),
+            "target_coverage_artifact_fingerprint": artifact_fingerprint(coverage_path),
             "target_source_paths": {"Q": portable_path(q_path, config.project_root)},
             "target_availability_status": "available",
             "target_created_at_utc": utc_now(),
             "feature_unchanged_after_target_creation": True,
+            "forecast_artifact_unchanged_after_target_creation": True,
+            **coverage_summary,
         }
     )
     write_json(event_manifest_path(config, season, event), manifest)
@@ -297,7 +360,7 @@ def add_monitoring_targets(
     return MonitoringOnboardingSummary(
         status="targets_added",
         summary_path=event_manifest_path(config, season, event),
-        table_paths=(output_path, event_manifest_path(config, season, event)),
+        table_paths=(output_path, coverage_path, event_manifest_path(config, season, event)),
     )
 
 
@@ -329,6 +392,20 @@ def create_monitoring_data_readiness_report(config: DataConfig) -> MonitoringOnb
         else 0,
         "settleable_event_count": int(by_event["settleable"].sum()) if not by_event.empty else 0,
         "target_isolation_status": integrity.get("target_isolation_status", "unknown"),
+        "monitoring_target_coverage_status": aggregate_coverage_status(by_event),
+        "monitoring_target_coverage_rate": aggregate_coverage_rate(by_event),
+        "monitoring_evaluable_driver_count": int(by_event["evaluable_driver_count"].sum())
+        if "evaluable_driver_count" in by_event
+        else 0,
+        "monitoring_non_evaluable_driver_count": int(by_event["non_evaluable_driver_count"].sum())
+        if "non_evaluable_driver_count" in by_event
+        else 0,
+        "monitoring_partial_coverage_event_count": int(
+            by_event["partial_target_coverage"].astype(bool).sum()
+        )
+        if "partial_target_coverage" in by_event
+        else 0,
+        "monitoring_settlement_metric_status": aggregate_metric_status(by_event),
         "chronological_order_status": integrity.get("chronological_order_status", "unknown"),
         "integrity_status": integrity.get("status", "missing"),
         "available_next_actions": available_next_actions(by_event),
@@ -443,28 +520,279 @@ def validate_feature_grain(features: pd.DataFrame) -> None:
         raise ValueError("Monitoring features are not unique by season/event/checkpoint/driver")
 
 
-def build_target_artifact_rows(targets: pd.DataFrame) -> pd.DataFrame:
+def build_target_artifact_rows(targets: pd.DataFrame, coverage_status: str) -> pd.DataFrame:
     rows = targets.copy()
+    rows["target_evaluable"] = True
+    rows["target_coverage_status"] = coverage_status
     rows["target_source_status"] = "available"
     rows["target_created_at_utc"] = utc_now()
     return rows.reindex(columns=TARGET_ARTIFACT_COLUMNS)
 
 
+def build_target_artifacts_with_coverage(
+    features: pd.DataFrame,
+    targets: pd.DataFrame,
+    *,
+    season: int,
+    event: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, object]]:
+    """Build valid target rows plus a full feature-driver coverage ledger."""
+    validate_target_key_integrity(targets)
+    feature_keys = feature_key_frame(features)
+    target_keys = target_key_frame(targets)
+    extra = target_keys.merge(
+        feature_keys[["season", "event_slug", "checkpoint", "driver_key"]],
+        on=["season", "event_slug", "checkpoint", "driver_key"],
+        how="left",
+        indicator=True,
+    )
+    extra_count = int(extra["_merge"].eq("left_only").sum()) if not extra.empty else 0
+    if extra_count:
+        raise ValueError(f"Target rows without matching feature rows: {extra_count}")
+    conflicts = identifier_conflicts(feature_keys, target_keys)
+    if conflicts:
+        raise ValueError(f"Feature/target identifier conflicts: {conflicts}")
+
+    target_by_key = {
+        key: row
+        for key, row in target_keys.set_index(
+            ["season", "event_slug", "checkpoint", "driver_key"],
+            drop=False,
+        ).iterrows()
+    }
+    coverage_rows: list[dict[str, object]] = []
+    for _, feature in feature_keys.iterrows():
+        key = (
+            int(feature["season"]),
+            str(feature["event_slug"]),
+            str(feature["checkpoint"]),
+            str(feature["driver_key"]),
+        )
+        target = target_by_key.get(key)
+        target_present = target is not None
+        evaluable = bool(target_present and target.get("target_evaluable", False))
+        missing_reason = ""
+        if not target_present:
+            missing_reason = "no_qualifying_lap_rows"
+        elif not evaluable:
+            missing_reason = "no_valid_qualifying_lap"
+        exclusion_reason = "" if evaluable else missing_reason
+        coverage_rows.append(
+            {
+                "season": int(feature["season"]),
+                "event": feature.get("event", event),
+                "event_slug": feature["event_slug"],
+                "checkpoint": feature["checkpoint"],
+                "driver": feature["driver"],
+                "driver_key": feature["driver_key"],
+                "team": feature.get("team"),
+                "team_key": feature.get("team_key"),
+                "feature_row_present": True,
+                "qualifying_target_present": target_present,
+                "target_evaluable": evaluable,
+                "target_missing_reason": missing_reason,
+                "target_source_status": "available" if target_present else "missing",
+                "target_validation_status": "valid" if evaluable else "non_evaluable",
+                "included_in_settlement_metrics": evaluable,
+                "excluded_from_settlement_metrics": not evaluable,
+                "settlement_exclusion_reason": exclusion_reason,
+            }
+        )
+    coverage = pd.DataFrame(coverage_rows, columns=TARGET_COVERAGE_COLUMNS)
+    evaluable_count = int(coverage["target_evaluable"].astype(bool).sum())
+    feature_count = int(len(coverage))
+    target_driver_count = int(coverage["qualifying_target_present"].astype(bool).sum())
+    non_evaluable_count = feature_count - evaluable_count
+    coverage_rate = float(evaluable_count / feature_count) if feature_count else 0.0
+    status = target_coverage_status(
+        feature_driver_count=feature_count,
+        evaluable_driver_count=evaluable_count,
+        non_evaluable_driver_count=non_evaluable_count,
+        extra_target_count=extra_count,
+        identifier_conflict_count=len(conflicts),
+    )
+    target_rows = build_target_artifact_rows(
+        target_keys[target_keys["target_evaluable"].astype(bool)].copy(),
+        coverage_status=status,
+    )
+    summary = {
+        "feature_driver_count": feature_count,
+        "target_driver_count": target_driver_count,
+        "evaluable_driver_count": evaluable_count,
+        "non_evaluable_driver_count": non_evaluable_count,
+        "feature_target_coverage_rate": coverage_rate,
+        "extra_target_count": extra_count,
+        "identifier_conflict_count": len(conflicts),
+        "target_coverage_status": status,
+        "partial_target_coverage": status == "target_coverage_partial",
+        "settlement_metric_status": "scorable" if evaluable_count else "not_scorable",
+    }
+    return target_rows, coverage, summary
+
+
+def write_target_coverage_artifact(
+    config: DataConfig,
+    season: int,
+    event: str,
+    coverage: pd.DataFrame,
+) -> None:
+    path = target_coverage_path(config, season, event)
+    ensure_directory(path.parent)
+    coverage.to_csv(path, index=False)
+
+
+def target_coverage_status(
+    *,
+    feature_driver_count: int,
+    evaluable_driver_count: int,
+    non_evaluable_driver_count: int,
+    extra_target_count: int,
+    identifier_conflict_count: int,
+) -> str:
+    if extra_target_count or identifier_conflict_count:
+        return "target_coverage_invalid"
+    if feature_driver_count <= 0 or evaluable_driver_count <= 0:
+        return "target_coverage_empty"
+    if non_evaluable_driver_count > 0:
+        return "target_coverage_partial"
+    return "target_coverage_complete"
+
+
+def validate_target_key_integrity(targets: pd.DataFrame) -> None:
+    if targets.empty:
+        return
+    keys = ["season", "event_slug", "checkpoint", "driver_key"]
+    frame = target_key_frame(targets)
+    duplicates = frame.duplicated(keys)
+    if duplicates.any():
+        duplicate_keys = frame.loc[duplicates, keys].to_dict("records")
+        raise ValueError(f"Duplicate target rows for exact identifier: {duplicate_keys}")
+
+
+def feature_key_frame(features: pd.DataFrame) -> pd.DataFrame:
+    required = ["season", "event", "event_slug", "checkpoint", "driver", "driver_key"]
+    missing = sorted(set(required) - set(features.columns))
+    if missing:
+        raise ValueError(f"Feature artifact missing identifier columns: {', '.join(missing)}")
+    frame = features.copy()
+    frame["season"] = frame["season"].astype(int)
+    frame["event_slug"] = frame["event_slug"].astype(str)
+    frame["checkpoint"] = frame["checkpoint"].astype(str)
+    frame["driver_key"] = frame["driver_key"].astype(str)
+    frame["driver"] = frame["driver"].astype(str)
+    return frame.reindex(
+        columns=[
+            "season",
+            "event",
+            "event_slug",
+            "checkpoint",
+            "driver",
+            "driver_key",
+            "team",
+            "team_key",
+        ]
+    )
+
+
+def target_key_frame(targets: pd.DataFrame) -> pd.DataFrame:
+    frame = targets.copy()
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "season",
+                "event",
+                "event_slug",
+                "checkpoint",
+                "driver",
+                "driver_key",
+                "team",
+                "team_key",
+                "quali_gap_to_pole_sec",
+                "quali_position",
+                "quali_best_lap_time_sec",
+                "reached_q2",
+                "reached_q3",
+                "target_evaluable",
+            ]
+        )
+    frame["checkpoint"] = MONITORING_CHECKPOINT
+    frame["season"] = frame["season"].astype(int)
+    frame["event_slug"] = frame["event_slug"].astype(str)
+    frame["driver_key"] = frame["driver_key"].astype(str)
+    frame["driver"] = frame["driver"].astype(str)
+    frame["target_evaluable"] = (
+        frame[["quali_gap_to_pole_sec", "quali_best_lap_time_sec"]].notna().all(axis=1)
+    )
+    return frame.reindex(
+        columns=[
+            "season",
+            "event",
+            "event_slug",
+            "checkpoint",
+            "driver",
+            "driver_key",
+            "team",
+            "team_key",
+            "quali_gap_to_pole_sec",
+            "quali_position",
+            "quali_best_lap_time_sec",
+            "reached_q2",
+            "reached_q3",
+            "target_evaluable",
+        ]
+    )
+
+
+def identifier_conflicts(features: pd.DataFrame, targets: pd.DataFrame) -> list[dict[str, object]]:
+    if features.empty or targets.empty:
+        return []
+    merged = features.merge(
+        targets,
+        on=["season", "event_slug", "checkpoint", "driver_key"],
+        suffixes=("_feature", "_target"),
+        how="inner",
+    )
+    conflicts: list[dict[str, object]] = []
+    for _, row in merged.iterrows():
+        if str(row.get("driver_feature")) != str(row.get("driver_target")):
+            conflicts.append(
+                {
+                    "driver_key": row.get("driver_key"),
+                    "feature_driver": row.get("driver_feature"),
+                    "target_driver": row.get("driver_target"),
+                }
+            )
+        feature_team = row.get("team_key_feature")
+        target_team = row.get("team_key_target")
+        if (
+            pd.notna(feature_team)
+            and pd.notna(target_team)
+            and str(feature_team) != str(target_team)
+        ):
+            conflicts.append(
+                {
+                    "driver_key": row.get("driver_key"),
+                    "feature_team_key": feature_team,
+                    "target_team_key": target_team,
+                }
+            )
+    return conflicts
+
+
 def validate_feature_target_alignment(features: pd.DataFrame, targets: pd.DataFrame) -> None:
     feature_keys = feature_join_keys(features)
     target_keys = target_join_keys(targets)
-    if feature_keys != target_keys:
-        missing = sorted(feature_keys - target_keys)
-        extra = sorted(target_keys - feature_keys)
-        raise ValueError(
-            "Feature/target identifier alignment failed; "
-            f"missing_targets={missing}; extra_targets={extra}"
-        )
+    extra = sorted(target_keys - feature_keys)
+    if extra:
+        raise ValueError(f"Feature/target identifier alignment failed; extra_targets={extra}")
+    conflicts = identifier_conflicts(feature_key_frame(features), target_key_frame(targets))
+    if conflicts:
+        raise ValueError(f"Feature/target identifier conflicts: {conflicts}")
 
 
 def feature_join_keys(features: pd.DataFrame) -> set[tuple[object, ...]]:
     return set(
-        features[["season", "event_slug", "checkpoint", "driver"]]
+        features[["season", "event_slug", "checkpoint", "driver_key"]]
         .assign(season=lambda frame: frame["season"].astype(int))
         .itertuples(index=False, name=None)
     )
@@ -474,7 +802,7 @@ def target_join_keys(targets: pd.DataFrame) -> set[tuple[object, ...]]:
     frame = targets.copy()
     frame["checkpoint"] = MONITORING_CHECKPOINT
     return set(
-        frame[["season", "event_slug", "checkpoint", "driver"]]
+        frame[["season", "event_slug", "checkpoint", "driver_key"]]
         .assign(season=lambda data: data["season"].astype(int))
         .itertuples(index=False, name=None)
     )
@@ -517,6 +845,9 @@ def validate_target_artifact(
     manifest = read_json_if_exists(event_manifest_path(config, season, event)) or {}
     if manifest.get("target_artifact_fingerprint") != artifact_fingerprint(path):
         return False, "target_artifact_fingerprint_mismatch"
+    coverage_valid, coverage_reason = validate_target_coverage_artifact(config, season, event)
+    if not coverage_valid:
+        return False, coverage_reason
     features, feature_valid, reason = load_valid_feature_artifact(config, season, event)
     if not feature_valid:
         return False, reason
@@ -524,6 +855,38 @@ def validate_target_artifact(
         validate_feature_target_alignment(features, targets)
     except ValueError as exc:
         return False, str(exc)
+    if targets.empty:
+        return False, "target_coverage_empty"
+    return True, ""
+
+
+def validate_target_coverage_artifact(
+    config: DataConfig,
+    season: int,
+    event: str,
+) -> tuple[bool, str]:
+    path = target_coverage_path(config, season, event)
+    if not path.is_file():
+        return False, "target_coverage_artifact_missing"
+    coverage = pd.read_csv(path)
+    missing = sorted(set(TARGET_COVERAGE_COLUMNS) - set(coverage.columns))
+    if missing:
+        return False, "target_coverage_missing_columns"
+    manifest = read_json_if_exists(event_manifest_path(config, season, event)) or {}
+    if manifest.get("target_coverage_artifact_fingerprint") != artifact_fingerprint(path):
+        return False, "target_coverage_artifact_fingerprint_mismatch"
+    features, feature_valid, reason = load_valid_feature_artifact(config, season, event)
+    if not feature_valid:
+        return False, reason
+    if len(coverage) != len(features):
+        return False, "target_coverage_feature_row_count_mismatch"
+    if not coverage["feature_row_present"].astype(bool).all():
+        return False, "target_coverage_missing_feature_rows"
+    status = str(manifest.get("target_coverage_status", ""))
+    if status not in {"target_coverage_complete", "target_coverage_partial"}:
+        return False, status or "target_coverage_invalid"
+    if int(coverage["target_evaluable"].astype(bool).sum()) <= 0:
+        return False, "target_coverage_empty"
     return True, ""
 
 
@@ -540,11 +903,13 @@ def update_registered_target_state(config: DataConfig, season: int, event: str) 
         return
     target_path = target_artifact_path(config, season, event)
     target_valid, target_reason = validate_target_artifact(config, season, event)
+    coverage_summary = target_coverage_summary(config, season, event)
     registry.loc[mask, "target_artifact_path"] = portable_path(target_path, config.project_root)
     registry.loc[mask, "target_artifact_present"] = target_path.is_file()
     registry.loc[mask, "target_artifact_valid"] = target_valid
     registry.loc[mask, "settleable"] = target_valid
     registry.loc[mask, "settlement_status"] = "settleable" if target_valid else "targets_missing"
+    apply_coverage_summary_to_registry(registry, mask, coverage_summary)
     forecasts = read_parquet(config.metrics_output_dir / "prospective_monitoring_forecasts.parquet")
     settlements = read_parquet(
         config.metrics_output_dir / "prospective_monitoring_settlements.parquet"
@@ -576,6 +941,7 @@ def upsert_registry_row(
     season = int(manifest["season"])
     slug = str(manifest["event_slug"])
     target_path = Path(str(manifest.get("target_artifact_path") or ""))
+    coverage_summary = manifest_coverage_summary(manifest)
     row = {
         "protocol_name": protocol["protocol_name"],
         "monitor_season": season,
@@ -604,6 +970,23 @@ def upsert_registry_row(
         "forecastable": bool(feature_valid),
         "settleable": bool(target_valid),
         "onboarding_blocking_reason": "" if feature_valid else feature_blocker,
+        "feature_driver_count": coverage_summary.get(
+            "feature_driver_count",
+            int(features["driver"].nunique()) if feature_valid else 0,
+        ),
+        "target_driver_count": coverage_summary.get("target_driver_count", 0),
+        "evaluable_driver_count": coverage_summary.get("evaluable_driver_count", 0),
+        "non_evaluable_driver_count": coverage_summary.get("non_evaluable_driver_count", 0),
+        "target_coverage_rate": coverage_summary.get("target_coverage_rate", 0.0),
+        "partial_target_coverage": coverage_summary.get("partial_target_coverage", False),
+        "target_coverage_status": coverage_summary.get(
+            "target_coverage_status",
+            "target_not_available",
+        ),
+        "settlement_metric_status": coverage_summary.get(
+            "settlement_metric_status",
+            "not_scorable",
+        ),
     }
     temp = pd.DataFrame([row])
     row["onboarding_status"] = lifecycle_state(temp.iloc[0], forecasts, settlements)
@@ -637,6 +1020,63 @@ def lifecycle_state(row: pd.Series, forecasts: pd.DataFrame, settlements: pd.Dat
     return "registered_not_forecasted"
 
 
+def manifest_coverage_summary(manifest: dict[str, Any]) -> dict[str, object]:
+    rate = manifest.get("feature_target_coverage_rate", manifest.get("target_coverage_rate", 0.0))
+    return {
+        "feature_driver_count": int(manifest.get("feature_driver_count", 0) or 0),
+        "target_driver_count": int(manifest.get("target_driver_count", 0) or 0),
+        "evaluable_driver_count": int(manifest.get("evaluable_driver_count", 0) or 0),
+        "non_evaluable_driver_count": int(manifest.get("non_evaluable_driver_count", 0) or 0),
+        "target_coverage_rate": float(rate or 0.0),
+        "partial_target_coverage": bool(manifest.get("partial_target_coverage", False)),
+        "target_coverage_status": str(
+            manifest.get("target_coverage_status", "target_not_available")
+        ),
+        "settlement_metric_status": str(manifest.get("settlement_metric_status", "not_scorable")),
+    }
+
+
+def target_coverage_summary(config: DataConfig, season: int, event: str) -> dict[str, object]:
+    manifest = read_json_if_exists(event_manifest_path(config, season, event)) or {}
+    summary = manifest_coverage_summary(manifest)
+    coverage_path = target_coverage_path(config, season, event)
+    if not coverage_path.is_file():
+        return summary
+    coverage = pd.read_csv(coverage_path)
+    if coverage.empty:
+        return {**summary, "target_coverage_status": "target_coverage_empty"}
+    evaluable = int(coverage["target_evaluable"].astype(bool).sum())
+    feature_count = int(len(coverage))
+    target_count = int(coverage["qualifying_target_present"].astype(bool).sum())
+    non_evaluable = feature_count - evaluable
+    return {
+        "feature_driver_count": feature_count,
+        "target_driver_count": target_count,
+        "evaluable_driver_count": evaluable,
+        "non_evaluable_driver_count": non_evaluable,
+        "target_coverage_rate": float(evaluable / feature_count) if feature_count else 0.0,
+        "partial_target_coverage": non_evaluable > 0 and evaluable > 0,
+        "target_coverage_status": target_coverage_status(
+            feature_driver_count=feature_count,
+            evaluable_driver_count=evaluable,
+            non_evaluable_driver_count=non_evaluable,
+            extra_target_count=int(manifest.get("extra_target_count", 0) or 0),
+            identifier_conflict_count=int(manifest.get("identifier_conflict_count", 0) or 0),
+        ),
+        "settlement_metric_status": "scorable" if evaluable else "not_scorable",
+    }
+
+
+def apply_coverage_summary_to_registry(
+    registry: pd.DataFrame,
+    mask: pd.Series,
+    coverage_summary: dict[str, object],
+) -> None:
+    for column, value in coverage_summary.items():
+        if column in registry.columns:
+            registry.loc[mask, column] = value
+
+
 def artifact_has_event(frame: pd.DataFrame, protocol_name: str, event_slug: str) -> bool:
     return (
         not frame.empty
@@ -659,8 +1099,15 @@ def refresh_onboarding_integrity(config: DataConfig) -> dict[str, object]:
     manifests = discover_event_manifests(config)
     by_event = build_onboarding_integrity_by_event(config, protocol, registry, manifests)
     failures = build_onboarding_failures(by_event)
+    status = "invalid" if not failures.empty else "valid"
+    if (
+        failures.empty
+        and not by_event.empty
+        and by_event["integrity_status"].astype(str).eq("valid_with_partial_coverage").any()
+    ):
+        status = "valid_with_partial_coverage"
     summary = {
-        "status": "valid" if failures.empty else "invalid",
+        "status": status,
         "events_checked": int(len(by_event)),
         "failure_count": int(len(failures)),
         "target_isolation_status": target_isolation_status(by_event),
@@ -690,6 +1137,7 @@ def build_onboarding_integrity_by_event(
         slug = str(manifest.get("event_slug", slugify(event)))
         feature_path = feature_artifact_path(config, season, event)
         target_path = target_artifact_path(config, season, event)
+        coverage_path = target_coverage_path(config, season, event)
         features = pd.read_parquet(feature_path) if feature_path.is_file() else pd.DataFrame()
         targets = pd.read_parquet(target_path) if target_path.is_file() else pd.DataFrame()
         feature_valid, feature_reason = (
@@ -712,14 +1160,27 @@ def build_onboarding_integrity_by_event(
         target_fingerprint_valid = not target_path.is_file() or manifest.get(
             "target_artifact_fingerprint"
         ) == artifact_fingerprint(target_path)
+        coverage_fingerprint_valid = not coverage_path.is_file() or manifest.get(
+            "target_coverage_artifact_fingerprint"
+        ) == artifact_fingerprint(coverage_path)
         event_alignment = True
         driver_alignment = True
+        extra_targets_absent = True
         if target_path.is_file() and not features.empty and not targets.empty:
             try:
                 validate_feature_target_alignment(features, targets)
             except ValueError:
                 event_alignment = False
                 driver_alignment = False
+                extra_targets_absent = False
+        coverage_summary = target_coverage_summary(config, season, event)
+        partial_documented = (
+            not bool(coverage_summary.get("partial_target_coverage", False))
+            or coverage_path.is_file()
+        )
+        coverage_rate_recorded = (
+            not target_path.is_file() or coverage_summary.get("target_coverage_rate") is not None
+        )
         row = {
             "season": season,
             "event": event,
@@ -732,10 +1193,13 @@ def build_onboarding_integrity_by_event(
             ),
             "feature_artifact_fingerprint_valid": feature_fingerprint_valid,
             "target_artifact_fingerprint_valid": target_fingerprint_valid,
+            "target_coverage_artifact_fingerprint_valid": coverage_fingerprint_valid,
             "event_identifier_alignment_valid": event_alignment,
             "driver_identifier_alignment_valid": driver_alignment,
-            "chronological_event_order_valid": manifest.get("chronological_event_order_status")
-            == "valid",
+            "chronological_event_order_valid": (
+                manifest.get("chronological_event_order_status") == "valid"
+                or pd.notna(row_value(registered, "event_order", pd.NA))
+            ),
             "protocol_fingerprint_valid_when_registered": protocol_valid,
             "forecastable_without_target_access": feature_valid
             and not forbidden_target_columns(features),
@@ -745,12 +1209,39 @@ def build_onboarding_integrity_by_event(
             "feature_artifact_valid": feature_valid,
             "target_artifact_present": target_path.is_file(),
             "target_artifact_valid": target_valid,
+            "partial_target_coverage_documented": partial_documented,
+            "valid_target_rows_exactly_aligned": event_alignment and driver_alignment,
+            "extra_targets_absent_or_explained": extra_targets_absent,
+            "coverage_rate_recorded": coverage_rate_recorded,
+            "forecast_artifact_unchanged_after_target_creation": bool(
+                manifest.get("forecast_artifact_unchanged_after_target_creation", True)
+            ),
+            "target_coverage_status": coverage_summary.get(
+                "target_coverage_status",
+                "target_not_available",
+            ),
+            "target_coverage_rate": coverage_summary.get("target_coverage_rate", 0.0),
+            "evaluable_driver_count": coverage_summary.get("evaluable_driver_count", 0),
+            "non_evaluable_driver_count": coverage_summary.get("non_evaluable_driver_count", 0),
             "blocking_reason": feature_reason,
         }
         checks = [column for column in columns[3:-1] if column not in {"blocking_reason"}]
-        row["integrity_status"] = (
-            "valid" if all(bool(row.get(col)) for col in checks) else "invalid"
+        valid = all(
+            bool(row.get(col))
+            for col in checks
+            if col
+            not in {
+                "target_artifact_present",
+                "target_artifact_valid",
+                "target_coverage_rate",
+                "evaluable_driver_count",
+                "non_evaluable_driver_count",
+            }
         )
+        if valid and row["target_coverage_status"] == "target_coverage_partial":
+            row["integrity_status"] = "valid_with_partial_coverage"
+        else:
+            row["integrity_status"] = "valid" if valid else "invalid"
         rows.append(row)
     return pd.DataFrame(rows, columns=columns)
 
@@ -762,7 +1253,17 @@ def build_onboarding_failures(by_event: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=columns)
     checked = [column for column in onboarding_integrity_columns()[3:-2]]
     for _, row in by_event.iterrows():
+        if str(row.get("integrity_status")) == "valid_with_partial_coverage":
+            continue
         for column in checked:
+            if column in {
+                "target_artifact_present",
+                "target_artifact_valid",
+                "target_coverage_rate",
+                "evaluable_driver_count",
+                "non_evaluable_driver_count",
+            }:
+                continue
             if not bool(row.get(column, True)):
                 rows.append(
                     {
@@ -795,6 +1296,7 @@ def build_onboarding_readiness(by_event: pd.DataFrame) -> pd.DataFrame:
     for _, row in by_event.iterrows():
         prepared = bool(row["feature_artifact_valid"])
         target = bool(row["target_artifact_valid"])
+        integrity_status = str(row["integrity_status"])
         rows.append(
             {
                 "season": row["season"],
@@ -805,8 +1307,8 @@ def build_onboarding_readiness(by_event: pd.DataFrame) -> pd.DataFrame:
                 "forecastable": prepared and bool(row["chronological_event_order_valid"]),
                 "target_artifact_present": bool(row["target_artifact_present"]),
                 "settleable": prepared and target,
-                "integrity_status": row["integrity_status"],
-                "next_action": next_action(prepared, target, str(row["integrity_status"])),
+                "integrity_status": integrity_status,
+                "next_action": next_action(prepared, target, integrity_status),
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -831,6 +1333,14 @@ def build_readiness_by_event(
         "settleable",
         "onboarding_status",
         "readiness_blocking_reason",
+        "feature_driver_count",
+        "target_driver_count",
+        "evaluable_driver_count",
+        "non_evaluable_driver_count",
+        "target_coverage_rate",
+        "partial_target_coverage",
+        "target_coverage_status",
+        "settlement_metric_status",
     ]
     rows = []
     for manifest in manifests:
@@ -865,6 +1375,7 @@ def build_readiness_by_event(
                     "onboarding_blocking_reason",
                     ";".join(manifest.get("readiness_blockers", [])),
                 ),
+                **target_coverage_summary(config, season, event),
             }
         )
     if not rows and protocol:
@@ -882,6 +1393,14 @@ def build_readiness_by_event(
                 "settleable": False,
                 "onboarding_status": "no_prepared_events",
                 "readiness_blocking_reason": "monitor_season_event_rows",
+                "feature_driver_count": 0,
+                "target_driver_count": 0,
+                "evaluable_driver_count": 0,
+                "non_evaluable_driver_count": 0,
+                "target_coverage_rate": 0.0,
+                "partial_target_coverage": False,
+                "target_coverage_status": "target_not_available",
+                "settlement_metric_status": "not_scorable",
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -1073,6 +1592,10 @@ def feature_artifact_path(config: DataConfig, season: int, event: str) -> Path:
 
 def target_artifact_path(config: DataConfig, season: int, event: str) -> Path:
     return monitoring_event_dir(config, season, event) / "monitoring_qualifying_targets.parquet"
+
+
+def target_coverage_path(config: DataConfig, season: int, event: str) -> Path:
+    return monitoring_event_dir(config, season, event) / "monitoring_target_coverage.csv"
 
 
 def event_manifest_path(config: DataConfig, season: int, event: str) -> Path:
@@ -1300,11 +1823,54 @@ def next_action(prepared: bool, target_valid: bool, integrity_status: str) -> st
 def target_isolation_status(by_event: pd.DataFrame) -> str:
     if by_event.empty:
         return "not_evaluated"
+    if (
+        "target_coverage_status" in by_event
+        and by_event["target_coverage_status"].astype(str).eq("target_coverage_partial").any()
+    ):
+        return "valid_with_partial_coverage"
     ok = (
         by_event["forbidden_target_columns_absent"].astype(bool).all()
         and by_event["qualifying_target_artifact_separate"].astype(bool).all()
     )
     return "valid" if ok else "invalid"
+
+
+def aggregate_coverage_status(by_event: pd.DataFrame) -> str:
+    if by_event.empty or "target_coverage_status" not in by_event:
+        return "target_not_available"
+    statuses = set(by_event["target_coverage_status"].dropna().astype(str))
+    if "target_coverage_invalid" in statuses:
+        return "target_coverage_invalid"
+    if "target_coverage_partial" in statuses:
+        return "target_coverage_partial"
+    if "target_coverage_complete" in statuses:
+        return "target_coverage_complete"
+    if "target_coverage_empty" in statuses:
+        return "target_coverage_empty"
+    return "target_not_available"
+
+
+def aggregate_coverage_rate(by_event: pd.DataFrame) -> float | None:
+    if by_event.empty or "feature_driver_count" not in by_event:
+        return None
+    feature_count = pd.to_numeric(by_event["feature_driver_count"], errors="coerce").fillna(0).sum()
+    evaluable_count = (
+        pd.to_numeric(by_event["evaluable_driver_count"], errors="coerce").fillna(0).sum()
+        if "evaluable_driver_count" in by_event
+        else 0
+    )
+    if feature_count <= 0:
+        return None
+    return float(evaluable_count / feature_count)
+
+
+def aggregate_metric_status(by_event: pd.DataFrame) -> str:
+    if by_event.empty or "settlement_metric_status" not in by_event:
+        return "not_scorable"
+    statuses = set(by_event["settlement_metric_status"].dropna().astype(str))
+    if "scorable" in statuses:
+        return "scorable"
+    return "not_scorable"
 
 
 def chronological_order_status(by_event: pd.DataFrame) -> str:
@@ -1328,6 +1894,7 @@ def onboarding_integrity_columns() -> list[str]:
         "feature_artifact_unchanged_after_target_creation",
         "feature_artifact_fingerprint_valid",
         "target_artifact_fingerprint_valid",
+        "target_coverage_artifact_fingerprint_valid",
         "event_identifier_alignment_valid",
         "driver_identifier_alignment_valid",
         "chronological_event_order_valid",
@@ -1337,6 +1904,15 @@ def onboarding_integrity_columns() -> list[str]:
         "feature_artifact_valid",
         "target_artifact_present",
         "target_artifact_valid",
+        "partial_target_coverage_documented",
+        "valid_target_rows_exactly_aligned",
+        "extra_targets_absent_or_explained",
+        "coverage_rate_recorded",
+        "forecast_artifact_unchanged_after_target_creation",
+        "target_coverage_status",
+        "target_coverage_rate",
+        "evaluable_driver_count",
+        "non_evaluable_driver_count",
         "blocking_reason",
         "integrity_status",
     ]

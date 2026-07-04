@@ -18,6 +18,7 @@ from f1_prediction.data.monitoring_onboarding import (
     ensure_registry_columns,
     forbidden_target_columns,
     target_artifact_path,
+    target_coverage_path,
     validate_target_artifact,
 )
 from f1_prediction.data.monitoring_onboarding import (
@@ -328,17 +329,20 @@ def create_prospective_monitoring_settlement(
         raise ValueError(f"Forecast snapshot mutation detected for {event_slug}")
     validate_settlement_target_artifact(config, event_row)
     outcomes = monitoring_target_outcomes(config, event_row)
+    coverage = monitoring_target_coverage(config, event_row)
     if outcomes.empty:
         outcomes = event_outcomes(dataset, int(protocol["monitor_season"]), event_slug)
+        coverage = pd.DataFrame()
     if outcomes.empty:
         raise ValueError(f"Qualifying targets are unavailable for {event_slug}")
     settlements = build_settlement_rows(
         protocol=protocol,
         forecasts=event_forecasts,
         outcomes=outcomes,
+        coverage=coverage,
         mutation_detected=False,
     )
-    if settlements.empty:
+    if settlements.empty or not settlements["settlement_evaluable"].astype(bool).any():
         raise ValueError(f"No exact forecast/outcome driver matches for {event_slug}")
     settlement_path = metrics_dir / "prospective_monitoring_settlements.parquet"
     append_parquet(settlement_path, settlements)
@@ -658,6 +662,16 @@ def monitoring_target_outcomes(config: DataConfig, event_row: pd.Series) -> pd.D
     return targets
 
 
+def monitoring_target_coverage(config: DataConfig, event_row: pd.Series) -> pd.DataFrame:
+    """Read the per-driver target coverage ledger for an onboarded event."""
+    season = int(event_row["monitor_season"])
+    event = str(event_row.get("event", event_row["event_slug"]))
+    path = target_coverage_path(config, season, event)
+    if not path.is_file():
+        return pd.DataFrame()
+    return pd.read_csv(path)
+
+
 def train_monitoring_event_sources(
     *,
     dataset: pd.DataFrame,
@@ -774,7 +788,9 @@ def fit_monitoring_source_candidate(
         train_rows[TARGET_COLUMN],
         regressor__sample_weight=weights,
     )
-    columns = [column for column in PREDICTION_COLUMNS if column in test_rows]
+    columns = [
+        column for column in (*PREDICTION_COLUMNS, "driver_key", "team_key") if column in test_rows
+    ]
     frame = test_rows.loc[:, columns].copy()
     target_columns = (
         "quali_position",
@@ -1057,12 +1073,34 @@ def build_settlement_rows(
     protocol: dict[str, Any],
     forecasts: pd.DataFrame,
     outcomes: pd.DataFrame,
+    coverage: pd.DataFrame | None = None,
     mutation_detected: bool,
 ) -> pd.DataFrame:
     """Join forecast rows to actual outcomes by exact event/checkpoint/driver keys."""
-    join_cols = ["season", "event_slug", "checkpoint", "driver"]
+    join_cols = ["season", "event_slug", "checkpoint", "_settlement_driver_key"]
+    forecasts = with_settlement_driver_key(forecasts)
+    outcomes = with_settlement_driver_key(outcomes)
     outcome_cols = [*join_cols, "quali_gap_to_pole_sec"]
-    merged = forecasts.merge(outcomes.loc[:, outcome_cols], on=join_cols, how="inner")
+    if coverage is not None and not coverage.empty:
+        coverage = with_settlement_driver_key(coverage)
+        merged = forecasts.merge(outcomes.loc[:, outcome_cols], on=join_cols, how="left")
+        coverage_cols = [
+            *join_cols,
+            "target_evaluable",
+            "included_in_settlement_metrics",
+            "settlement_exclusion_reason",
+        ]
+        merged = merged.merge(
+            coverage.reindex(columns=coverage_cols),
+            on=join_cols,
+            how="left",
+            suffixes=("", "_coverage"),
+        )
+    else:
+        merged = forecasts.merge(outcomes.loc[:, outcome_cols], on=join_cols, how="inner")
+        merged["target_evaluable"] = True
+        merged["included_in_settlement_metrics"] = True
+        merged["settlement_exclusion_reason"] = ""
     if merged.empty:
         return pd.DataFrame(columns=settlement_columns())
     settled_at = utc_now()
@@ -1078,11 +1116,25 @@ def build_settlement_rows(
         axis=1,
     )
     merged["settled_at_utc"] = settled_at
-    merged["actual_gap_sec"] = merged["quali_gap_to_pole_sec"]
+    merged["target_evaluable"] = (
+        merged["target_evaluable"].fillna(False).astype(bool)
+        & merged["quali_gap_to_pole_sec"].notna()
+    )
+    merged["included_in_metrics"] = merged["target_evaluable"].astype(bool)
+    merged["settlement_evaluable"] = merged["target_evaluable"].astype(bool)
+    merged["actual_gap_sec"] = merged["quali_gap_to_pole_sec"].where(
+        merged["settlement_evaluable"],
+    )
     merged["absolute_error_sec"] = (
         pd.to_numeric(merged["prediction_gap_sec"], errors="coerce")
         - pd.to_numeric(merged["actual_gap_sec"], errors="coerce")
     ).abs()
+    merged.loc[~merged["settlement_evaluable"], "absolute_error_sec"] = pd.NA
+    merged["settlement_exclusion_reason"] = merged["settlement_exclusion_reason"].fillna(
+        "target_missing_or_non_evaluable"
+    )
+    merged.loc[merged["settlement_evaluable"], "settlement_exclusion_reason"] = ""
+    merged["forecast_row_preserved"] = True
     merged["settlement_valid"] = not mutation_detected
     merged["forecast_preexisted_settlement"] = True
     merged["forecast_fingerprint_valid"] = (
@@ -1093,9 +1145,22 @@ def build_settlement_rows(
         merged["diagnostic_only"].astype(bool)
         & merged["forecast_fingerprint_valid"].astype(bool)
         & ~merged["forecast_mutation_detected"].astype(bool)
+        & merged["settlement_evaluable"].astype(bool)
     )
-    merged["settlement_blocking_reason"] = ""
+    merged["settlement_blocking_reason"] = merged["settlement_exclusion_reason"]
     return merged.reindex(columns=settlement_columns())
+
+
+def with_settlement_driver_key(frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize the exact settlement driver key while preserving public identifiers."""
+    result = frame.copy()
+    if "driver_key" in result:
+        key = result["driver_key"].where(result["driver_key"].notna(), result.get("driver"))
+    else:
+        key = result.get("driver", pd.Series([pd.NA] * len(result), index=result.index))
+        result["driver_key"] = key
+    result["_settlement_driver_key"] = key.astype(str).str.strip().str.lower()
+    return result
 
 
 def build_event_metrics(settlements: pd.DataFrame) -> pd.DataFrame:
@@ -1107,7 +1172,10 @@ def build_event_metrics(settlements: pd.DataFrame) -> pd.DataFrame:
         "checkpoint",
         "prediction_role",
         "diagnostic_only",
+        "forecast_rows",
         "rows",
+        "scored_rows",
+        "excluded_rows",
         "mae_gap_sec",
     ]
     if settlements.empty:
@@ -1119,6 +1187,12 @@ def build_event_metrics(settlements: pd.DataFrame) -> pd.DataFrame:
         sort=False,
     ):
         protocol_name, season, event_slug, checkpoint, role = keys
+        included = (
+            group["included_in_metrics"].astype(bool)
+            if "included_in_metrics" in group
+            else pd.Series([True] * len(group), index=group.index)
+        )
+        scored = group.loc[included]
         rows.append(
             {
                 "protocol_name": protocol_name,
@@ -1127,8 +1201,11 @@ def build_event_metrics(settlements: pd.DataFrame) -> pd.DataFrame:
                 "checkpoint": checkpoint,
                 "prediction_role": role,
                 "diagnostic_only": bool(group["diagnostic_only"].astype(bool).iloc[0]),
-                "rows": int(len(group)),
-                "mae_gap_sec": _number_or_none(group["absolute_error_sec"].mean()),
+                "forecast_rows": int(len(group)),
+                "rows": int(len(scored)),
+                "scored_rows": int(len(scored)),
+                "excluded_rows": int(len(group) - len(scored)),
+                "mae_gap_sec": _number_or_none(scored["absolute_error_sec"].mean()),
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -1169,8 +1246,15 @@ def refresh_integrity_outputs(metrics_dir: Path, protocol: dict[str, Any]) -> di
     )
     by_event = build_integrity_by_event(protocol, registry, forecasts, settlements, forecast_audit)
     failures = build_integrity_failures(by_event, settlement_audit)
+    status = "invalid" if not failures.empty else "valid"
+    if (
+        failures.empty
+        and not by_event.empty
+        and by_event["integrity_status"].astype(str).eq("valid_with_partial_coverage").any()
+    ):
+        status = "valid_with_partial_coverage"
     summary = {
-        "status": "valid" if failures.empty else "invalid",
+        "status": status,
         "protocol_name": protocol.get("protocol_name"),
         "protocol_fingerprint": protocol.get("protocol_fingerprint"),
         "events_checked": int(len(by_event)),
@@ -1221,6 +1305,12 @@ def build_integrity_by_event(
         live_shadow_separated = event_forecasts.empty or set(
             event_forecasts["prediction_role"].astype(str)
         ) <= set(FORECAST_ROLES)
+        non_evaluable = (
+            event_settlements["settlement_evaluable"].astype(bool).eq(False)
+            if not event_settlements.empty and "settlement_evaluable" in event_settlements
+            else pd.Series(dtype=bool)
+        )
+        partial_coverage = str(event.get("target_coverage_status")) == "target_coverage_partial"
         row = {
             "protocol_name": protocol.get("protocol_name"),
             "event_slug": slug,
@@ -1285,10 +1375,39 @@ def build_integrity_by_event(
             else False,
             "shadow_rows_excluded_from_live_metrics": shadow_excluded,
             "live_and_counterfactual_selection_separated": live_shadow_separated,
+            "partial_target_coverage_documented": (not partial_coverage)
+            or bool(event.get("partial_target_coverage", False)),
+            "non_evaluable_rows_preserved": event_settlements.empty
+            or not bool(non_evaluable.any())
+            or len(event_settlements) == len(event_forecasts),
+            "non_evaluable_rows_excluded_from_metrics": event_settlements.empty
+            or not bool(non_evaluable.any())
+            or not event_settlements.loc[non_evaluable, "included_in_metrics"].astype(bool).any(),
+            "non_evaluable_rows_excluded_from_prior_evidence": event_settlements.empty
+            or not bool(non_evaluable.any())
+            or not event_settlements.loc[
+                non_evaluable,
+                "eligible_for_future_prior_evidence",
+            ]
+            .astype(bool)
+            .any(),
+            "valid_target_rows_exactly_aligned": str(
+                event.get("target_coverage_status", "target_not_available")
+            )
+            not in {"target_coverage_invalid"},
+            "extra_targets_absent_or_explained": True,
+            "coverage_rate_recorded": pd.notna(event.get("target_coverage_rate", pd.NA))
+            or str(event.get("target_coverage_status", "target_not_available"))
+            == "target_not_available",
+            "forecast_artifact_unchanged_after_target_creation": True,
         }
-        row["integrity_status"] = (
-            "valid" if all(bool(row[col]) for col in columns[3:-1]) else "invalid"
-        )
+        valid = all(
+            bool(row[col]) for col in columns[3:-1] if col != "forecast_snapshot_mutation_detected"
+        ) and not bool(row["forecast_snapshot_mutation_detected"])
+        if valid and partial_coverage and not event_settlements.empty:
+            row["integrity_status"] = "valid_with_partial_coverage"
+        else:
+            row["integrity_status"] = "valid" if valid else "invalid"
         rows.append(row)
     return pd.DataFrame(rows, columns=columns)
 
@@ -1303,6 +1422,20 @@ def build_integrity_failures(
     if not by_event.empty:
         for _, row in by_event.iterrows():
             for column in integrity_columns()[3:-1]:
+                if str(row.get("integrity_status")) == "valid_with_partial_coverage":
+                    continue
+                if column == "forecast_snapshot_mutation_detected":
+                    if bool(row.get(column, False)):
+                        rows.append(
+                            {
+                                "protocol_name": row.get("protocol_name"),
+                                "event_slug": row.get("event_slug"),
+                                "condition": column,
+                                "status": "failed",
+                                "details": "",
+                            }
+                        )
+                    continue
                 if not bool(row.get(column, True)):
                     rows.append(
                         {
@@ -1346,6 +1479,11 @@ def build_status_by_event(
         "live_rows",
         "shadow_rows",
         "fresh_evidence_available",
+        "target_coverage_status",
+        "target_coverage_rate",
+        "evaluable_driver_count",
+        "non_evaluable_driver_count",
+        "settlement_metric_status",
     ]
     if registry.empty:
         return pd.DataFrame(columns=columns)
@@ -1369,6 +1507,13 @@ def build_status_by_event(
                 "live_rows": live_rows,
                 "shadow_rows": shadow_rows,
                 "fresh_evidence_available": not event_settlements.empty,
+                "target_coverage_status": event.get(
+                    "target_coverage_status", "target_not_available"
+                ),
+                "target_coverage_rate": event.get("target_coverage_rate", pd.NA),
+                "evaluable_driver_count": event.get("evaluable_driver_count", 0),
+                "non_evaluable_driver_count": event.get("non_evaluable_driver_count", 0),
+                "settlement_metric_status": event.get("settlement_metric_status", "not_scorable"),
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -1382,13 +1527,19 @@ def build_live_policy_summary(settlements: pd.DataFrame) -> pd.DataFrame:
     live = settlements[~settlements["diagnostic_only"].astype(bool)].copy()
     if live.empty:
         return pd.DataFrame(columns=columns)
+    included = (
+        live["included_in_metrics"].astype(bool)
+        if "included_in_metrics" in live
+        else pd.Series([True] * len(live), index=live.index)
+    )
+    scored = live.loc[included]
     return pd.DataFrame(
         [
             {
                 "protocol_name": live["protocol_name"].iloc[0],
-                "rows": int(len(live)),
-                "settled_events": int(live["event_slug"].nunique()),
-                "mae_gap_sec": _number_or_none(live["absolute_error_sec"].mean()),
+                "rows": int(len(scored)),
+                "settled_events": int(scored["event_slug"].nunique()),
+                "mae_gap_sec": _number_or_none(scored["absolute_error_sec"].mean()),
                 "diagnostic_only": False,
             }
         ],
@@ -1409,13 +1560,19 @@ def build_shadow_candidate_summary(settlements: pd.DataFrame) -> pd.DataFrame:
         ["protocol_name", "prediction_role"],
         sort=False,
     ):
+        included = (
+            group["included_in_metrics"].astype(bool)
+            if "included_in_metrics" in group
+            else pd.Series([True] * len(group), index=group.index)
+        )
+        scored = group.loc[included]
         rows.append(
             {
                 "protocol_name": protocol_name,
                 "prediction_role": role,
-                "rows": int(len(group)),
-                "settled_events": int(group["event_slug"].nunique()),
-                "mae_gap_sec": _number_or_none(group["absolute_error_sec"].mean()),
+                "rows": int(len(scored)),
+                "settled_events": int(scored["event_slug"].nunique()),
+                "mae_gap_sec": _number_or_none(scored["absolute_error_sec"].mean()),
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -1508,6 +1665,7 @@ def build_monitoring_summary_payload(
     status = "active" if available else "missing_protocol"
     if available and registry.empty:
         status = "not_ready"
+    coverage = monitoring_coverage_summary(registry, settlements)
     return {
         "status": status,
         "prospective_monitoring_available": available,
@@ -1522,6 +1680,7 @@ def build_monitoring_summary_payload(
         "shadow_candidate_summary": records_for_json(shadow_summary),
         "integrity_status": integrity.get("status", "missing"),
         "fresh_evidence_status": fresh,
+        **coverage,
         "policy_recommendation": POLICY_RECOMMENDATION,
         "known_limitations": [
             "Monitoring commands use local artifacts and local Parquet inputs only.",
@@ -1541,6 +1700,80 @@ def build_monitoring_summary_payload(
         },
         "generation_issues": [],
         "generated_at_utc": utc_now(),
+    }
+
+
+def monitoring_coverage_summary(
+    registry: pd.DataFrame,
+    settlements: pd.DataFrame,
+) -> dict[str, object]:
+    if registry.empty:
+        return {
+            "monitoring_target_coverage_status": "target_not_available",
+            "monitoring_target_coverage_rate": None,
+            "monitoring_evaluable_driver_count": 0,
+            "monitoring_non_evaluable_driver_count": 0,
+            "monitoring_partial_coverage_event_count": 0,
+            "monitoring_settlement_metric_status": "not_scorable",
+            "monitoring_scored_row_count": 0,
+            "monitoring_excluded_row_count": 0,
+        }
+    feature_count = (
+        pd.to_numeric(registry.get("feature_driver_count", pd.Series(dtype=float)), errors="coerce")
+        .fillna(0)
+        .sum()
+    )
+    evaluable_count = (
+        pd.to_numeric(
+            registry.get("evaluable_driver_count", pd.Series(dtype=float)),
+            errors="coerce",
+        )
+        .fillna(0)
+        .sum()
+    )
+    statuses = set(
+        registry.get("target_coverage_status", pd.Series(dtype=str)).dropna().astype(str)
+    )
+    if "target_coverage_invalid" in statuses:
+        status = "target_coverage_invalid"
+    elif "target_coverage_partial" in statuses:
+        status = "target_coverage_partial"
+    elif "target_coverage_complete" in statuses:
+        status = "target_coverage_complete"
+    elif "target_coverage_empty" in statuses:
+        status = "target_coverage_empty"
+    else:
+        status = "target_not_available"
+    scored = (
+        int(settlements.get("included_in_metrics", pd.Series(dtype=bool)).astype(bool).sum())
+        if not settlements.empty
+        else 0
+    )
+    excluded = (
+        int((~settlements.get("included_in_metrics", pd.Series(dtype=bool)).astype(bool)).sum())
+        if not settlements.empty and "included_in_metrics" in settlements
+        else 0
+    )
+    return {
+        "monitoring_target_coverage_status": status,
+        "monitoring_target_coverage_rate": float(evaluable_count / feature_count)
+        if feature_count
+        else None,
+        "monitoring_evaluable_driver_count": int(evaluable_count),
+        "monitoring_non_evaluable_driver_count": int(
+            pd.to_numeric(
+                registry.get("non_evaluable_driver_count", pd.Series(dtype=float)),
+                errors="coerce",
+            )
+            .fillna(0)
+            .sum()
+        ),
+        "monitoring_partial_coverage_event_count": int(
+            registry.get("partial_target_coverage", pd.Series(dtype=bool)).astype(bool).sum()
+        ),
+        "monitoring_settlement_metric_status": "scorable" if scored else "not_scorable",
+        "monitoring_scored_row_count": scored,
+        "monitoring_excluded_row_count": excluded,
     }
 
 
@@ -2181,11 +2414,17 @@ def settlement_columns() -> list[str]:
         "event_slug",
         "checkpoint",
         "driver",
+        "driver_key",
         "prediction_role",
         "diagnostic_only",
         "prediction_gap_sec",
         "actual_gap_sec",
         "absolute_error_sec",
+        "target_evaluable",
+        "included_in_metrics",
+        "settlement_evaluable",
+        "settlement_exclusion_reason",
+        "forecast_row_preserved",
         "temporal_weighting_policy",
         "fold_id",
         "settlement_valid",
@@ -2216,5 +2455,13 @@ def integrity_columns() -> list[str]:
         "forecast_snapshot_mutation_detected",
         "shadow_rows_excluded_from_live_metrics",
         "live_and_counterfactual_selection_separated",
+        "partial_target_coverage_documented",
+        "non_evaluable_rows_preserved",
+        "non_evaluable_rows_excluded_from_metrics",
+        "non_evaluable_rows_excluded_from_prior_evidence",
+        "valid_target_rows_exactly_aligned",
+        "extra_targets_absent_or_explained",
+        "coverage_rate_recorded",
+        "forecast_artifact_unchanged_after_target_creation",
         "integrity_status",
     ]

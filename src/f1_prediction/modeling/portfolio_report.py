@@ -1355,6 +1355,18 @@ def _prospective_monitoring_portfolio_summary(
             "policy_recommendation",
             "season_aware_candidate_requires_more_evidence",
         ),
+        "monitoring_target_coverage_status": summary.get("monitoring_target_coverage_status"),
+        "monitoring_target_coverage_rate": summary.get("monitoring_target_coverage_rate"),
+        "monitoring_evaluable_driver_count": int(
+            summary.get("monitoring_evaluable_driver_count", 0) or 0
+        ),
+        "monitoring_non_evaluable_driver_count": int(
+            summary.get("monitoring_non_evaluable_driver_count", 0) or 0
+        ),
+        "monitoring_partial_coverage_event_count": int(
+            summary.get("monitoring_partial_coverage_event_count", 0) or 0
+        ),
+        "monitoring_settlement_metric_status": summary.get("monitoring_settlement_metric_status"),
     }
 
 
@@ -1376,6 +1388,18 @@ def _monitoring_data_readiness_portfolio_summary(
             "target_isolation_status",
             "unknown",
         ),
+        "monitoring_target_coverage_status": summary.get("monitoring_target_coverage_status"),
+        "monitoring_target_coverage_rate": summary.get("monitoring_target_coverage_rate"),
+        "monitoring_evaluable_driver_count": int(
+            summary.get("monitoring_evaluable_driver_count", 0) or 0
+        ),
+        "monitoring_non_evaluable_driver_count": int(
+            summary.get("monitoring_non_evaluable_driver_count", 0) or 0
+        ),
+        "monitoring_partial_coverage_event_count": int(
+            summary.get("monitoring_partial_coverage_event_count", 0) or 0
+        ),
+        "monitoring_settlement_metric_status": summary.get("monitoring_settlement_metric_status"),
     }
 
 
@@ -1819,12 +1843,20 @@ def _monitoring_data_onboarding_card_text(value: object) -> str:
     forecastable = value.get("monitoring_data_onboarding_forecastable_event_count", 0)
     settleable = value.get("monitoring_data_onboarding_settleable_event_count", 0)
     isolation = value.get("monitoring_data_onboarding_target_isolation_status", "unknown")
+    coverage_status = value.get("monitoring_target_coverage_status", "target_not_available")
+    coverage_rate = value.get("monitoring_target_coverage_rate")
+    evaluable = value.get("monitoring_evaluable_driver_count", 0)
+    non_evaluable = value.get("monitoring_non_evaluable_driver_count", 0)
     return (
         intro
         + f" Current onboarding status `{status}` has `{forecastable}` forecastable events and "
-        + f"`{settleable}` settleable events; target isolation is `{isolation}`. No monitoring "
-        + "data result changes default policy behavior, gates, thresholds, candidate identities, "
-        + "temporal weighting, or hyperparameters."
+        + f"`{settleable}` settleable events; target isolation is `{isolation}`. Target coverage "
+        + f"is `{coverage_status}` with coverage rate `{coverage_rate}`, `{evaluable}` evaluable "
+        + f"drivers, and `{non_evaluable}` non-evaluable drivers. Forecast rows without qualifying "
+        + "targets are retained for auditability, excluded from scoring and future prior evidence, "
+        + "and no target values are imputed. No monitoring data result changes default policy "
+        + "behavior, gates, thresholds, candidate identities, temporal weighting, or "
+        + "hyperparameters."
     )
 
 

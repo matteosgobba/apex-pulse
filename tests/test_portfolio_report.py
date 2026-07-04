@@ -176,6 +176,12 @@ def test_portfolio_report_includes_monitoring_data_onboarding_when_available(
                 "forecastable_event_count": 1,
                 "settleable_event_count": 0,
                 "target_isolation_status": "valid",
+                "monitoring_target_coverage_status": "target_coverage_partial",
+                "monitoring_target_coverage_rate": 20 / 22,
+                "monitoring_evaluable_driver_count": 20,
+                "monitoring_non_evaluable_driver_count": 2,
+                "monitoring_partial_coverage_event_count": 1,
+                "monitoring_settlement_metric_status": "scorable",
             }
         ),
         encoding="utf-8",
@@ -189,7 +195,11 @@ def test_portfolio_report_includes_monitoring_data_onboarding_when_available(
     assert onboarding["monitoring_data_onboarding_available"] is True
     assert onboarding["monitoring_data_onboarding_status"] == "partially_ready"
     assert onboarding["monitoring_data_onboarding_forecastable_event_count"] == 1
+    assert onboarding["monitoring_target_coverage_status"] == "target_coverage_partial"
+    assert onboarding["monitoring_evaluable_driver_count"] == 20
+    assert onboarding["monitoring_non_evaluable_driver_count"] == 2
     assert "Monitoring data onboarding" in model_card
+    assert "Forecast rows without qualifying targets are retained" in model_card
 
 
 def test_portfolio_report_includes_guarded_mode_when_artifacts_exist(tmp_path: Path) -> None:
