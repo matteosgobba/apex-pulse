@@ -1140,6 +1140,10 @@ def _prospective_monitoring_summary(summary: dict[str, Any] | None) -> dict[str,
             "monitoring_non_evaluable_driver_count": 0,
             "monitoring_partial_coverage_event_count": 0,
             "monitoring_settlement_metric_status": "not_scorable",
+            "monitoring_event_order_lineage_status": "not_evaluated",
+            "monitoring_legacy_event_order_exclusion_count": 0,
+            "monitoring_prior_evidence_lineage_status": "not_evaluated",
+            "monitoring_next_forecast_prior_evidence_status": "not_evaluated",
         }
     return {
         "prospective_monitoring_available": True,
@@ -1164,6 +1168,21 @@ def _prospective_monitoring_summary(summary: dict[str, Any] | None) -> dict[str,
             summary.get("monitoring_partial_coverage_event_count", 0) or 0
         ),
         "monitoring_settlement_metric_status": summary.get("monitoring_settlement_metric_status"),
+        "monitoring_event_order_lineage_status": summary.get(
+            "monitoring_event_order_lineage_status",
+            "not_evaluated",
+        ),
+        "monitoring_legacy_event_order_exclusion_count": int(
+            summary.get("monitoring_legacy_event_order_exclusion_count", 0) or 0
+        ),
+        "monitoring_prior_evidence_lineage_status": summary.get(
+            "monitoring_prior_evidence_lineage_status",
+            "not_evaluated",
+        ),
+        "monitoring_next_forecast_prior_evidence_status": summary.get(
+            "monitoring_next_forecast_prior_evidence_status",
+            "not_evaluated",
+        ),
     }
 
 
@@ -1181,6 +1200,10 @@ def _monitoring_data_readiness_summary(summary: dict[str, Any] | None) -> dict[s
             "monitoring_non_evaluable_driver_count": 0,
             "monitoring_partial_coverage_event_count": 0,
             "monitoring_settlement_metric_status": "not_scorable",
+            "monitoring_event_order_lineage_status": "not_evaluated",
+            "monitoring_legacy_event_order_exclusion_count": 0,
+            "monitoring_prior_evidence_lineage_status": "not_evaluated",
+            "monitoring_next_forecast_prior_evidence_status": "not_evaluated",
         }
     return {
         "monitoring_data_onboarding_available": True,
@@ -1207,6 +1230,21 @@ def _monitoring_data_readiness_summary(summary: dict[str, Any] | None) -> dict[s
             summary.get("monitoring_partial_coverage_event_count", 0) or 0
         ),
         "monitoring_settlement_metric_status": summary.get("monitoring_settlement_metric_status"),
+        "monitoring_event_order_lineage_status": summary.get(
+            "monitoring_event_order_lineage_status",
+            "not_evaluated",
+        ),
+        "monitoring_legacy_event_order_exclusion_count": int(
+            summary.get("monitoring_legacy_event_order_exclusion_count", 0) or 0
+        ),
+        "monitoring_prior_evidence_lineage_status": summary.get(
+            "monitoring_prior_evidence_lineage_status",
+            "not_evaluated",
+        ),
+        "monitoring_next_forecast_prior_evidence_status": summary.get(
+            "monitoring_next_forecast_prior_evidence_status",
+            "not_evaluated",
+        ),
     }
 
 

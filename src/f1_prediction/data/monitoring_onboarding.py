@@ -372,6 +372,15 @@ def create_monitoring_data_readiness_report(config: DataConfig) -> MonitoringOnb
     ensure_directory(figures_dir)
     integrity = refresh_onboarding_integrity(config)
     protocol = read_json_if_exists(metrics_dir / "prospective_monitoring_protocol.json") or {}
+    event_order_integrity = (
+        read_json_if_exists(
+            metrics_dir / "prospective_monitoring_event_order_integrity_summary.json"
+        )
+        or {}
+    )
+    monitoring_summary = (
+        read_json_if_exists(metrics_dir / "prospective_monitoring_summary.json") or {}
+    )
     registry = read_registry(metrics_dir)
     manifests = discover_event_manifests(config)
     by_event = build_readiness_by_event(config, protocol, registry, manifests)
@@ -406,6 +415,25 @@ def create_monitoring_data_readiness_report(config: DataConfig) -> MonitoringOnb
         if "partial_target_coverage" in by_event
         else 0,
         "monitoring_settlement_metric_status": aggregate_metric_status(by_event),
+        "monitoring_event_order_lineage_status": monitoring_summary.get(
+            "monitoring_event_order_lineage_status",
+            event_order_integrity.get("status", "not_evaluated"),
+        ),
+        "monitoring_legacy_event_order_exclusion_count": int(
+            monitoring_summary.get(
+                "monitoring_legacy_event_order_exclusion_count",
+                event_order_integrity.get("legacy_event_order_exclusion_count", 0),
+            )
+            or 0
+        ),
+        "monitoring_prior_evidence_lineage_status": monitoring_summary.get(
+            "monitoring_prior_evidence_lineage_status",
+            event_order_integrity.get("prior_evidence_lineage_status", "not_evaluated"),
+        ),
+        "monitoring_next_forecast_prior_evidence_status": monitoring_summary.get(
+            "monitoring_next_forecast_prior_evidence_status",
+            event_order_integrity.get("prior_evidence_lineage_status", "not_evaluated"),
+        ),
         "chronological_order_status": integrity.get("chronological_order_status", "unknown"),
         "integrity_status": integrity.get("status", "missing"),
         "available_next_actions": available_next_actions(by_event),

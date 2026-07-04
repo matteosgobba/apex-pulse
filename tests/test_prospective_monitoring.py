@@ -9,6 +9,7 @@ from f1_prediction.config import DataConfig, load_feature_config, load_model_con
 from f1_prediction.modeling.backtest_report import build_backtest_report_payload
 from f1_prediction.modeling.prospective_monitoring import (
     build_event_metrics,
+    build_event_order_reconciliation,
     build_integrity_by_event,
     create_prospective_monitoring_forecast,
     create_prospective_monitoring_protocol,
@@ -140,6 +141,78 @@ def test_forecast_excludes_current_targets_and_future_events(tmp_path: Path) -> 
     assert not manifest["training_event_keys_used"].astype(str).str.contains("2026/monza").any()
 
 
+def test_forecast_uses_registry_event_order_metadata_not_training_count(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path)
+    registry.loc[registry["event_slug"].eq("monza"), "event_order"] = 9
+    registry.to_csv(registry_path, index=False)
+
+    create_prospective_monitoring_forecast(
+        config,
+        load_model_config(),
+        load_feature_config(),
+        protocol_name="season_2026_v1",
+        event="Monza",
+    )
+    forecasts = pd.read_parquet(
+        config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    )
+    monza = forecasts[forecasts["event_slug"].eq("monza")]
+
+    assert monza["event_order"].eq(9).all()
+    assert monza["event_order_source"].eq("registry").all()
+    assert monza["event_order_registry_valid"].astype(bool).all()
+    assert monza["event_order_lineage_status"].eq("valid_registry_lineage").all()
+    assert not monza["event_order"].eq(monza["training_event_count"]).any()
+
+
+@pytest.mark.parametrize("bad_value", [pd.NA, 0, "bad"])
+def test_forecast_fails_when_registry_event_order_is_invalid(
+    tmp_path: Path,
+    bad_value: object,
+) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path)
+    registry.loc[registry["event_slug"].eq("bahrain"), "event_order"] = bad_value
+    registry.to_csv(registry_path, index=False)
+
+    with pytest.raises(ValueError, match="registry event order"):
+        create_prospective_monitoring_forecast(
+            config,
+            load_model_config(),
+            load_feature_config(),
+            protocol_name="season_2026_v1",
+            event="Bahrain",
+        )
+
+
+def test_forecast_fails_with_duplicate_registry_event_rows(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path)
+    duplicate = registry[registry["event_slug"].eq("bahrain")]
+    pd.concat([registry, duplicate], ignore_index=True).to_csv(registry_path, index=False)
+
+    with pytest.raises(ValueError, match="duplicate_registry_event_order"):
+        create_prospective_monitoring_forecast(
+            config,
+            load_model_config(),
+            load_feature_config(),
+            protocol_name="season_2026_v1",
+            event="Bahrain",
+        )
+
+
 def test_weighted_shadow_rows_are_diagnostic_only_and_not_live(tmp_path: Path) -> None:
     config = _config(tmp_path)
     dataset_path = _write_dataset(config)
@@ -266,6 +339,12 @@ def test_only_settled_earlier_event_evidence_reaches_later_forecast(tmp_path: Pa
 
     assert monza["training_event_keys_used"].astype(str).str.contains("2026/bahrain").any()
     assert not monza["training_event_keys_used"].astype(str).str.contains("2026/monza").any()
+    forecasts = pd.read_parquet(
+        config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    )
+    monza_forecasts = forecasts[forecasts["event_slug"].eq("monza")]
+    assert monza_forecasts["prior_monitoring_event_count"].eq(1).all()
+    assert monza_forecasts["prior_monitoring_event_orders"].eq("[2]").all()
 
 
 def test_report_handles_no_monitored_season_data_and_generates_figures(tmp_path: Path) -> None:
@@ -286,6 +365,105 @@ def test_report_handles_no_monitored_season_data_and_generates_figures(tmp_path:
     assert payload["status"] == "not_ready"
     assert payload["fresh_evidence_status"] == "not_collected"
     assert len(summary.figure_paths) == 5
+
+
+def test_reconciliation_flags_legacy_noncanonical_event_order() -> None:
+    protocol = {
+        "protocol_name": "season_2026_v1",
+        "monitor_season": 2026,
+        "protocol_fingerprint": "abc",
+    }
+    registry = pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "monitor_season": 2026,
+                "event_slug": "great-britain",
+                "event_order": 9,
+            }
+        ]
+    )
+    forecasts = pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "event_slug": "great-britain",
+                "forecast_id": "gb",
+                "event_order": 44,
+                "forecast_created_at_utc": "2026-07-04T10:00:00+00:00",
+            }
+        ]
+    )
+    settlements = pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "event_slug": "great-britain",
+                "forecast_id": "gb",
+                "event_order": 44,
+                "settled_at_utc": "2026-07-04T12:00:00+00:00",
+                "eligible_for_future_prior_evidence": True,
+            }
+        ]
+    )
+
+    reconciliation = build_event_order_reconciliation(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        pd.DataFrame(),
+    )
+    row = reconciliation.iloc[0]
+
+    assert row["artifact_event_order"] == 44
+    assert row["registry_event_order"] == 9
+    assert bool(row["event_order_match"]) is False
+    assert row["event_order_lineage_status"] == "legacy_noncanonical_event_order"
+    assert bool(row["affected_by_prior_evidence_lineage"]) is True
+    assert bool(row["eligible_for_future_prior_evidence_after_reconciliation"]) is False
+    assert row["reconciliation_action"] == "exclude_from_prior_monitoring_evidence"
+
+
+def test_legacy_noncanonical_rows_are_excluded_without_mutating_forecast(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    create_prospective_monitoring_forecast(
+        config,
+        load_model_config(),
+        load_feature_config(),
+        protocol_name="season_2026_v1",
+        event="Bahrain",
+    )
+    forecast_path = config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    forecasts = pd.read_parquet(forecast_path)
+    forecasts["event_order"] = 44
+    forecasts.to_parquet(forecast_path, index=False)
+    before = forecast_path.read_bytes()
+    create_prospective_monitoring_settlement(
+        config,
+        protocol_name="season_2026_v1",
+        event="Bahrain",
+    )
+
+    summary = create_prospective_monitoring_report(config)
+    after = forecast_path.read_bytes()
+    payload = json.loads(summary.summary_path.read_text())
+    reconciliation = pd.read_csv(
+        config.metrics_output_dir / "prospective_monitoring_event_order_reconciliation.csv"
+    )
+    ledger = pd.read_csv(
+        config.metrics_output_dir / "prospective_monitoring_shadow_evidence_ledger.csv"
+    )
+
+    assert after == before
+    assert payload["integrity_status"] == "valid_with_legacy_artifact_exclusion"
+    assert payload["monitoring_legacy_event_order_exclusion_count"] == 1
+    assert reconciliation["event_order_lineage_status"].eq("legacy_noncanonical_event_order").all()
+    assert not ledger["eligible_for_future_prior_evidence"].astype(bool).any()
 
 
 def test_future_settlement_row_triggers_integrity_failure(tmp_path: Path) -> None:

@@ -74,6 +74,12 @@ FORECAST_ROLES = (
     "uniform_default_shadow",
     "season_aware_weighted_candidate_shadow",
 )
+EVENT_ORDER_SOURCE = "registry"
+EVENT_ORDER_VALID_STATUS = "valid_registry_lineage"
+EVENT_ORDER_LEGACY_STATUS = "legacy_noncanonical_event_order"
+EVENT_ORDER_MISSING_STATUS = "missing_registry_event_order"
+EVENT_ORDER_DUPLICATE_STATUS = "duplicate_registry_event_order"
+EVENT_ORDER_INVALID_STATUS = "invalid_registry_event_order"
 
 
 @dataclass(frozen=True)
@@ -176,11 +182,24 @@ def create_prospective_monitoring_forecast(
     if not registry_event_forecastable(event_row):
         raise ValueError(f"Event is not forecastable: {event}")
     event_key = f"{int(event_row['monitor_season'])}/{event_row['event_slug']}"
+    event_order_lineage = resolve_registry_event_order(
+        registry,
+        protocol_name=protocol_name,
+        monitor_season=int(protocol["monitor_season"]),
+        event_slug=str(event_row["event_slug"]),
+        registry_path=metrics_dir / "prospective_monitoring_event_registry.csv",
+        strict=True,
+    )
     assert_forecast_not_exists(metrics_dir, protocol_name, str(event_row["event_slug"]))
 
     dataset = monitoring_dataset_for_forecast(config, protocol, dataset, event_row)
-    event_order = ordered_event_keys(dataset)
-    prior_settled_events = settled_event_keys(metrics_dir, protocol_name)
+    event_order = monitoring_event_order_keys(dataset, registry, protocol)
+    prior_settled_events = settled_event_keys(
+        metrics_dir,
+        protocol,
+        registry,
+        current_event_order=int(event_order_lineage["event_order"]),
+    )
     legal_train_events = [
         key
         for key in prior_events_for(
@@ -206,8 +225,13 @@ def create_prospective_monitoring_forecast(
     )
     history = prior_settlement_history(
         metrics_dir,
-        protocol_name,
+        protocol,
+        registry,
         current_event_order=int(event_row["event_order"]),
+    )
+    prior_monitoring = prior_monitoring_evidence_summary(
+        history,
+        event_order_lineage_valid=bool(event_order_lineage["event_order_registry_valid"]),
     )
     profiles = build_frozen_policy_profiles(
         model_config,
@@ -233,12 +257,16 @@ def create_prospective_monitoring_forecast(
         forecast_id=forecast_id,
         forecast_created=forecast_created,
         event_key=event_key,
+        event_order_lineage=event_order_lineage,
+        prior_monitoring=prior_monitoring,
     )
     leakage = monitoring_forecast_integrity_rows(
         source["leakage"],
         protocol=protocol,
         forecast_id=forecast_id,
         event_key=event_key,
+        event_order_lineage=event_order_lineage,
+        prior_monitoring=prior_monitoring,
     )
     forecasts, shadow = monitoring_prediction_rows(
         source=source,
@@ -247,6 +275,8 @@ def create_prospective_monitoring_forecast(
         forecast_created=forecast_created,
         event_key=event_key,
         event_order=event_order,
+        event_order_lineage=event_order_lineage,
+        prior_monitoring=prior_monitoring,
         candidate_eligible=candidate_eligible,
         selection_reason=selection_reason,
     )
@@ -257,6 +287,8 @@ def create_prospective_monitoring_forecast(
         forecast_id=forecast_id,
         forecast_created=forecast_created,
         event_key=event_key,
+        event_order_lineage=event_order_lineage,
+        prior_monitoring=prior_monitoring,
         candidate_eligible=candidate_eligible,
         selection_reason=selection_reason,
         snapshot_hash=snapshot_hash,
@@ -346,8 +378,18 @@ def create_prospective_monitoring_settlement(
         raise ValueError(f"No exact forecast/outcome driver matches for {event_slug}")
     settlement_path = metrics_dir / "prospective_monitoring_settlements.parquet"
     append_parquet(settlement_path, settlements)
-    event_metrics = build_event_metrics(read_parquet(settlement_path))
-    ledger = build_shadow_evidence_ledger(read_parquet(settlement_path))
+    all_settlements = read_parquet(settlement_path)
+    all_forecasts = read_parquet(metrics_dir / "prospective_monitoring_forecasts.parquet")
+    reconciliation = build_event_order_reconciliation(
+        protocol,
+        registry,
+        all_forecasts,
+        all_settlements,
+        read_csv(metrics_dir / "prospective_monitoring_shadow_evidence_ledger.csv"),
+        metrics_dir=metrics_dir,
+    )
+    event_metrics = build_event_metrics(all_settlements)
+    ledger = build_shadow_evidence_ledger(all_settlements, reconciliation=reconciliation)
     audit = settlement_integrity_rows(
         protocol=protocol,
         event_slug=event_slug,
@@ -359,6 +401,10 @@ def create_prospective_monitoring_settlement(
     )
     event_metrics.to_csv(metrics_dir / "prospective_monitoring_event_metrics.csv", index=False)
     ledger.to_csv(metrics_dir / "prospective_monitoring_shadow_evidence_ledger.csv", index=False)
+    reconciliation.to_csv(
+        metrics_dir / "prospective_monitoring_event_order_reconciliation.csv",
+        index=False,
+    )
     append_csv(metrics_dir / "prospective_monitoring_settlement_integrity_audit.csv", audit)
     refresh_integrity_outputs(metrics_dir, protocol)
     return ProspectiveMonitoringSummary(
@@ -384,11 +430,36 @@ def create_prospective_monitoring_report(config: DataConfig) -> ProspectiveMonit
     forecasts = read_parquet(metrics_dir / "prospective_monitoring_forecasts.parquet")
     settlements = read_parquet(metrics_dir / "prospective_monitoring_settlements.parquet")
     integrity = refresh_integrity_outputs(metrics_dir, protocol) if protocol else {}
-    status_by_event = build_status_by_event(protocol, registry, forecasts, settlements)
+    ledger = read_csv(metrics_dir / "prospective_monitoring_shadow_evidence_ledger.csv")
+    reconciliation = build_event_order_reconciliation(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        ledger,
+        metrics_dir=metrics_dir,
+    )
+    if not settlements.empty:
+        reconciled_ledger = build_shadow_evidence_ledger(
+            settlements,
+            reconciliation=reconciliation,
+        )
+        reconciled_ledger.to_csv(
+            metrics_dir / "prospective_monitoring_shadow_evidence_ledger.csv",
+            index=False,
+        )
+        ledger = reconciled_ledger
+    status_by_event = build_status_by_event(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        reconciliation=reconciliation,
+    )
     live_summary = build_live_policy_summary(settlements)
     shadow_summary = build_shadow_candidate_summary(settlements)
-    gate_timeline = build_gate_timeline(forecasts)
-    evidence_growth = build_evidence_growth(settlements)
+    gate_timeline = build_gate_timeline(forecasts, reconciliation=reconciliation)
+    evidence_growth = build_evidence_growth(settlements, reconciliation=reconciliation)
     summary = build_monitoring_summary_payload(
         protocol=protocol,
         registry=registry,
@@ -397,6 +468,7 @@ def create_prospective_monitoring_report(config: DataConfig) -> ProspectiveMonit
         integrity=integrity,
         live_summary=live_summary,
         shadow_summary=shadow_summary,
+        reconciliation=reconciliation,
     )
     paths = {
         "summary": metrics_dir / "prospective_monitoring_summary.json",
@@ -474,7 +546,9 @@ def build_protocol_payload(
         "uncertainty_configuration": asdict(model_config.uncertainty),
         "dataset_path": _display_path(dataset_path, config.project_root),
         "results_path_or_contract": "local reports/metrics monitoring artifacts",
-        "event_ordering_contract": "ordered_event_keys: season then event_order or dataset order",
+        "event_ordering_contract": (
+            "monitoring registry event_order is the sole monitored-season chronology source"
+        ),
         "forecast_artifact_contract": "immutable pre-qualification forecast snapshots",
         "settlement_artifact_contract": "post-qualification exact-key settlement only",
         "policy_recommendation": POLICY_RECOMMENDATION,
@@ -833,6 +907,8 @@ def monitoring_prediction_rows(
     forecast_created: str,
     event_key: str,
     event_order: list[str],
+    event_order_lineage: dict[str, object],
+    prior_monitoring: dict[str, object],
     candidate_eligible: bool,
     selection_reason: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -846,6 +922,8 @@ def monitoring_prediction_rows(
         forecast_created=forecast_created,
         event_key=event_key,
         event_order=event_order,
+        event_order_lineage=event_order_lineage,
+        prior_monitoring=prior_monitoring,
         temporal_policy=DEFAULT_TEMPORAL_POLICY,
         candidate_eligible=candidate_eligible,
         selection_reason="observed_static_policy_reference",
@@ -867,6 +945,8 @@ def monitoring_prediction_rows(
         forecast_created=forecast_created,
         event_key=event_key,
         event_order=event_order,
+        event_order_lineage=event_order_lineage,
+        prior_monitoring=prior_monitoring,
         temporal_policy=DEFAULT_TEMPORAL_POLICY,
         candidate_eligible=candidate_eligible,
         selection_reason="diagnostic_shadow_default",
@@ -882,6 +962,8 @@ def monitoring_prediction_rows(
         forecast_created=forecast_created,
         event_key=event_key,
         event_order=event_order,
+        event_order_lineage=event_order_lineage,
+        prior_monitoring=prior_monitoring,
         temporal_policy=CANDIDATE_TEMPORAL_POLICY,
         candidate_eligible=candidate_eligible,
         selection_reason=selection_reason,
@@ -903,6 +985,8 @@ def role_frame(
     forecast_created: str,
     event_key: str,
     event_order: list[str],
+    event_order_lineage: dict[str, object],
+    prior_monitoring: dict[str, object],
     temporal_policy: str,
     candidate_eligible: bool,
     selection_reason: str,
@@ -922,7 +1006,22 @@ def role_frame(
     result["forecast_id"] = forecast_id
     result["forecast_created_at_utc"] = forecast_created
     result["monitor_season"] = protocol["monitor_season"]
-    result["event_order"] = event_order.index(event_key) if event_key in event_order else pd.NA
+    result["event_order"] = event_order_lineage.get("event_order", pd.NA)
+    result["event_order_source"] = event_order_lineage.get("event_order_source", EVENT_ORDER_SOURCE)
+    result["event_order_registry_valid"] = bool(
+        event_order_lineage.get("event_order_registry_valid", False)
+    )
+    result["event_order_registry_path"] = event_order_lineage.get("event_order_registry_path")
+    result["event_order_registry_protocol_name"] = event_order_lineage.get(
+        "event_order_registry_protocol_name"
+    )
+    result["event_order_registry_monitor_season"] = event_order_lineage.get(
+        "event_order_registry_monitor_season"
+    )
+    result["event_order_lineage_status"] = event_order_lineage.get(
+        "event_order_lineage_status",
+        EVENT_ORDER_INVALID_STATUS,
+    )
     result["fold_id"] = event_index_from_key(event_key)
     result["season"] = season
     result["event"] = result.get("event", slug)
@@ -961,6 +1060,8 @@ def role_frame(
     result["future_seasons_excluded"] = True
     result["current_event_target_accessed"] = False
     result["forecast_integrity_status"] = "valid"
+    for column, value in prior_monitoring.items():
+        result[column] = value
     result["actual_gap_sec"] = pd.NA
     result["absolute_error_sec"] = pd.NA
     return result
@@ -973,6 +1074,8 @@ def monitoring_manifest_rows(
     forecast_id: str,
     forecast_created: str,
     event_key: str,
+    event_order_lineage: dict[str, object],
+    prior_monitoring: dict[str, object],
 ) -> pd.DataFrame:
     """Decorate training manifest rows with protocol metadata."""
     frame = pd.DataFrame(manifest_rows)
@@ -984,6 +1087,10 @@ def monitoring_manifest_rows(
     frame["forecast_created_at_utc"] = forecast_created
     frame["monitor_season"] = protocol["monitor_season"]
     frame["event_key"] = event_key
+    for column, value in event_order_lineage.items():
+        frame[column] = value
+    for column, value in prior_monitoring.items():
+        frame[column] = value
     frame["current_event_excluded_from_training"] = ~frame["current_event_in_training"].astype(bool)
     frame["future_same_season_events_excluded"] = True
     frame["future_seasons_excluded"] = True
@@ -996,6 +1103,8 @@ def monitoring_forecast_integrity_rows(
     protocol: dict[str, Any],
     forecast_id: str,
     event_key: str,
+    event_order_lineage: dict[str, object],
+    prior_monitoring: dict[str, object],
 ) -> pd.DataFrame:
     """Build forecast integrity audit rows."""
     frame = pd.DataFrame(leakage_rows)
@@ -1005,7 +1114,14 @@ def monitoring_forecast_integrity_rows(
     frame["protocol_fingerprint"] = protocol["protocol_fingerprint"]
     frame["forecast_id"] = forecast_id
     frame["event_key"] = event_key
+    for column, value in event_order_lineage.items():
+        frame[column] = value
+    for column, value in prior_monitoring.items():
+        frame[column] = value
     frame["protocol_fingerprint_valid"] = True
+    frame["event_order_registry_valid"] = bool(
+        event_order_lineage.get("event_order_registry_valid", False)
+    )
     frame["current_event_target_not_accessed"] = True
     frame["current_event_excluded_from_training"] = ~frame.get(
         "current_event_used",
@@ -1027,6 +1143,7 @@ def monitoring_forecast_integrity_rows(
                 "current_event_excluded_from_training",
                 "future_same_season_events_excluded",
                 "future_seasons_excluded",
+                "event_order_registry_valid",
             ]
         ]
         .all(axis=1)
@@ -1041,19 +1158,35 @@ def monitoring_selection_row(
     forecast_id: str,
     forecast_created: str,
     event_key: str,
+    event_order_lineage: dict[str, object],
+    prior_monitoring: dict[str, object],
     candidate_eligible: bool,
     selection_reason: str,
     snapshot_hash: str,
 ) -> dict[str, object]:
     """Build the event-level forecast selection record."""
     season, slug = parse_event_key(event_key)
-    return {
+    row = {
         "protocol_name": protocol["protocol_name"],
         "protocol_fingerprint": protocol["protocol_fingerprint"],
         "forecast_id": forecast_id,
         "forecast_created_at_utc": forecast_created,
         "season": season,
         "event_slug": slug,
+        "event_order": event_order_lineage.get("event_order", pd.NA),
+        "event_order_source": event_order_lineage.get("event_order_source", EVENT_ORDER_SOURCE),
+        "event_order_registry_valid": event_order_lineage.get("event_order_registry_valid", False),
+        "event_order_registry_path": event_order_lineage.get("event_order_registry_path"),
+        "event_order_registry_protocol_name": event_order_lineage.get(
+            "event_order_registry_protocol_name"
+        ),
+        "event_order_registry_monitor_season": event_order_lineage.get(
+            "event_order_registry_monitor_season"
+        ),
+        "event_order_lineage_status": event_order_lineage.get(
+            "event_order_lineage_status",
+            EVENT_ORDER_INVALID_STATUS,
+        ),
         "checkpoint": protocol["checkpoint"],
         "observed_live_policy_role": "observed_live_policy",
         "live_policy_selected": "uniform_default",
@@ -1066,6 +1199,8 @@ def monitoring_selection_row(
         "candidate_selection_reason": selection_reason,
         "forecast_snapshot_hash": snapshot_hash,
     }
+    row.update(prior_monitoring)
+    return row
 
 
 def build_settlement_rows(
@@ -1211,7 +1346,11 @@ def build_event_metrics(settlements: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def build_shadow_evidence_ledger(settlements: pd.DataFrame) -> pd.DataFrame:
+def build_shadow_evidence_ledger(
+    settlements: pd.DataFrame,
+    *,
+    reconciliation: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Return settled diagnostic rows available to future event gates."""
     columns = [
         "protocol_name",
@@ -1219,7 +1358,10 @@ def build_shadow_evidence_ledger(settlements: pd.DataFrame) -> pd.DataFrame:
         "forecast_id",
         "season",
         "event_slug",
+        "artifact_event_order",
         "event_order",
+        "registry_event_order",
+        "event_order_lineage_status",
         "checkpoint",
         "driver",
         "prediction_role",
@@ -1232,6 +1374,49 @@ def build_shadow_evidence_ledger(settlements: pd.DataFrame) -> pd.DataFrame:
     if settlements.empty:
         return pd.DataFrame(columns=columns)
     shadow = settlements[settlements["diagnostic_only"].astype(bool)].copy()
+    shadow["artifact_event_order"] = shadow.get("event_order", pd.NA)
+    shadow["registry_event_order"] = pd.NA
+    shadow["event_order_lineage_status"] = EVENT_ORDER_MISSING_STATUS
+    if reconciliation is not None and not reconciliation.empty:
+        keep = reconciliation[
+            [
+                "forecast_id",
+                "event_slug",
+                "registry_event_order",
+                "event_order_lineage_status",
+                "eligible_for_future_prior_evidence_after_reconciliation",
+            ]
+        ].copy()
+        shadow = shadow.merge(
+            keep,
+            on=["forecast_id", "event_slug"],
+            how="left",
+            suffixes=("", "_reconciled"),
+        )
+        shadow["registry_event_order"] = shadow["registry_event_order_reconciled"].where(
+            shadow["registry_event_order_reconciled"].notna(),
+            shadow["registry_event_order"],
+        )
+        shadow["event_order_lineage_status"] = shadow[
+            "event_order_lineage_status_reconciled"
+        ].fillna(shadow["event_order_lineage_status"])
+        shadow["eligible_for_future_prior_evidence"] = shadow[
+            "eligible_for_future_prior_evidence"
+        ].fillna(False).astype(bool) & shadow[
+            "eligible_for_future_prior_evidence_after_reconciliation"
+        ].fillna(False).astype(bool)
+        shadow["event_order"] = shadow["registry_event_order"].where(
+            shadow["registry_event_order"].notna(),
+            shadow["event_order"],
+        )
+        shadow = shadow.drop(
+            columns=[
+                "registry_event_order_reconciled",
+                "event_order_lineage_status_reconciled",
+                "eligible_for_future_prior_evidence_after_reconciliation",
+            ],
+            errors="ignore",
+        )
     return shadow.reindex(columns=columns)
 
 
@@ -1240,15 +1425,79 @@ def refresh_integrity_outputs(metrics_dir: Path, protocol: dict[str, Any]) -> di
     registry = read_csv(metrics_dir / "prospective_monitoring_event_registry.csv")
     forecasts = read_parquet(metrics_dir / "prospective_monitoring_forecasts.parquet")
     settlements = read_parquet(metrics_dir / "prospective_monitoring_settlements.parquet")
+    ledger = read_csv(metrics_dir / "prospective_monitoring_shadow_evidence_ledger.csv")
+    reconciliation = build_event_order_reconciliation(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        ledger,
+        metrics_dir=metrics_dir,
+    )
+    reconciliation.to_csv(
+        metrics_dir / "prospective_monitoring_event_order_reconciliation.csv",
+        index=False,
+    )
     forecast_audit = read_csv(metrics_dir / "prospective_monitoring_forecast_integrity_audit.csv")
     settlement_audit = read_csv(
         metrics_dir / "prospective_monitoring_settlement_integrity_audit.csv"
     )
-    by_event = build_integrity_by_event(protocol, registry, forecasts, settlements, forecast_audit)
+    event_order_by_event = build_event_order_integrity_by_event(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        ledger,
+        reconciliation,
+    )
+    event_order_failures = build_event_order_integrity_failures(event_order_by_event)
+    event_order_status = event_order_integrity_status(event_order_by_event, event_order_failures)
+    event_order_summary = {
+        "status": event_order_status,
+        "protocol_name": protocol.get("protocol_name"),
+        "protocol_fingerprint": protocol.get("protocol_fingerprint"),
+        "events_checked": int(len(event_order_by_event)),
+        "failure_count": int(len(event_order_failures)),
+        "legacy_event_order_exclusion_count": int(
+            reconciliation["event_order_lineage_status"]
+            .astype(str)
+            .eq(EVENT_ORDER_LEGACY_STATUS)
+            .sum()
+        )
+        if not reconciliation.empty
+        else 0,
+        "prior_evidence_lineage_status": prior_evidence_lineage_status(reconciliation),
+        "policy_recommendation": POLICY_RECOMMENDATION,
+        "generated_at_utc": utc_now(),
+    }
+    _write_json(
+        metrics_dir / "prospective_monitoring_event_order_integrity_summary.json",
+        event_order_summary,
+    )
+    event_order_by_event.to_csv(
+        metrics_dir / "prospective_monitoring_event_order_integrity_by_event.csv",
+        index=False,
+    )
+    event_order_failures.to_csv(
+        metrics_dir / "prospective_monitoring_event_order_integrity_failures.csv",
+        index=False,
+    )
+    by_event = build_integrity_by_event(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        forecast_audit,
+        reconciliation=reconciliation,
+    )
     failures = build_integrity_failures(by_event, settlement_audit)
     status = "invalid" if not failures.empty else "valid"
+    if status == "valid" and event_order_status == "valid_with_legacy_artifact_exclusion":
+        status = event_order_status
+    elif event_order_status == "invalid":
+        status = "invalid"
     if (
-        failures.empty
+        status == "valid"
         and not by_event.empty
         and by_event["integrity_status"].astype(str).eq("valid_with_partial_coverage").any()
     ):
@@ -1259,6 +1508,11 @@ def refresh_integrity_outputs(metrics_dir: Path, protocol: dict[str, Any]) -> di
         "protocol_fingerprint": protocol.get("protocol_fingerprint"),
         "events_checked": int(len(by_event)),
         "failure_count": int(len(failures)),
+        "event_order_lineage_status": event_order_status,
+        "legacy_event_order_exclusion_count": event_order_summary[
+            "legacy_event_order_exclusion_count"
+        ],
+        "prior_evidence_lineage_status": prior_evidence_lineage_status(reconciliation),
         "policy_recommendation": POLICY_RECOMMENDATION,
         "generated_at_utc": utc_now(),
     }
@@ -1274,6 +1528,8 @@ def build_integrity_by_event(
     forecasts: pd.DataFrame,
     settlements: pd.DataFrame,
     forecast_audit: pd.DataFrame,
+    *,
+    reconciliation: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Build required monitoring integrity conditions by event."""
     columns = integrity_columns()
@@ -1310,7 +1566,8 @@ def build_integrity_by_event(
             if not event_settlements.empty and "settlement_evaluable" in event_settlements
             else pd.Series(dtype=bool)
         )
-        partial_coverage = str(event.get("target_coverage_status")) == "target_coverage_partial"
+        target_status = normalized_target_coverage_status(event)
+        partial_coverage = target_status == "target_coverage_partial"
         row = {
             "protocol_name": protocol.get("protocol_name"),
             "event_slug": slug,
@@ -1361,6 +1618,7 @@ def build_integrity_by_event(
                 event,
                 settlements,
                 event_forecasts,
+                reconciliation=reconciliation,
             ),
             "prior_settlement_only_evidence": True,
             "forecast_snapshot_mutation_detected": bool(
@@ -1391,14 +1649,10 @@ def build_integrity_by_event(
             ]
             .astype(bool)
             .any(),
-            "valid_target_rows_exactly_aligned": str(
-                event.get("target_coverage_status", "target_not_available")
-            )
-            not in {"target_coverage_invalid"},
+            "valid_target_rows_exactly_aligned": str(target_status) != "target_coverage_invalid",
             "extra_targets_absent_or_explained": True,
             "coverage_rate_recorded": pd.notna(event.get("target_coverage_rate", pd.NA))
-            or str(event.get("target_coverage_status", "target_not_available"))
-            == "target_not_available",
+            or target_status == "target_not_available",
             "forecast_artifact_unchanged_after_target_creation": True,
         }
         valid = all(
@@ -1461,11 +1715,245 @@ def build_integrity_failures(
     return pd.DataFrame(rows, columns=columns)
 
 
+def build_event_order_integrity_by_event(
+    protocol: dict[str, Any],
+    registry: pd.DataFrame,
+    forecasts: pd.DataFrame,
+    settlements: pd.DataFrame,
+    ledger: pd.DataFrame,
+    reconciliation: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = event_order_integrity_columns()
+    if registry.empty or not protocol:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    protocol_name = str(protocol.get("protocol_name"))
+    monitor_season = int(protocol.get("monitor_season", 0) or 0)
+    registry_path = Path("reports/metrics/prospective_monitoring_event_registry.csv")
+    for _, event in registry.iterrows():
+        slug = str(event["event_slug"])
+        lineage = resolve_registry_event_order(
+            registry,
+            protocol_name=protocol_name,
+            monitor_season=monitor_season,
+            event_slug=slug,
+            registry_path=registry_path,
+            strict=False,
+        )
+        event_recon = (
+            reconciliation[reconciliation["event_slug"].astype(str).eq(slug)].copy()
+            if not reconciliation.empty
+            else pd.DataFrame(columns=event_order_reconciliation_columns())
+        )
+        event_forecasts = subset_event(forecasts, protocol_name, slug)
+        event_settlements = subset_event(settlements, protocol_name, slug)
+        event_ledger = subset_event(ledger, protocol_name, slug)
+        registry_available = bool(lineage.get("event_order_registry_valid", False))
+        forecast_match = (
+            event_forecasts.empty
+            or event_recon[
+                event_recon["forecast_id"]
+                .astype(str)
+                .isin(event_forecasts["forecast_id"].dropna().astype(str))
+            ]["event_order_match"]
+            .astype(bool)
+            .all()
+        )
+        settlement_match = (
+            event_settlements.empty
+            or event_recon[
+                event_recon["forecast_id"]
+                .astype(str)
+                .isin(event_settlements["forecast_id"].dropna().astype(str))
+            ]["event_order_match"]
+            .astype(bool)
+            .all()
+        )
+        ledger_match = (
+            event_ledger.empty
+            or event_recon[
+                event_recon["forecast_id"]
+                .astype(str)
+                .isin(event_ledger["forecast_id"].dropna().astype(str))
+            ]["event_order_match"]
+            .astype(bool)
+            .all()
+        )
+        legacy = event_recon["event_order_lineage_status"].astype(str).eq(EVENT_ORDER_LEGACY_STATUS)
+        legacy_excluded = event_recon.empty or not bool(
+            event_recon.loc[
+                legacy,
+                "eligible_for_future_prior_evidence_after_reconciliation",
+            ]
+            .fillna(False)
+            .astype(bool)
+            .any()
+        )
+        future_violation, same_violation = event_order_prior_violations(
+            event,
+            forecasts,
+            settlements,
+            reconciliation,
+            protocol_name=protocol_name,
+        )
+        prior_registry_only = legacy_excluded and not future_violation and not same_violation
+        status = "valid"
+        if not registry_available or not legacy_excluded or future_violation or same_violation:
+            status = "invalid"
+        elif (
+            not bool(forecast_match)
+            or not bool(settlement_match)
+            or not bool(ledger_match)
+            or bool(legacy.any())
+        ):
+            status = "valid_with_legacy_artifact_exclusion"
+        rows.append(
+            {
+                "protocol_name": protocol_name,
+                "monitor_season": monitor_season,
+                "event_slug": slug,
+                "registry_event_order": lineage.get("event_order", pd.NA),
+                "registry_event_order_available": registry_available,
+                "forecast_event_order_matches_registry": bool(forecast_match),
+                "settlement_event_order_matches_registry": bool(settlement_match),
+                "shadow_ledger_event_order_matches_registry": bool(ledger_match),
+                "prior_evidence_uses_registry_order_only": bool(prior_registry_only),
+                "legacy_noncanonical_rows_excluded_from_prior_evidence": bool(legacy_excluded),
+                "future_event_order_violation": bool(future_violation),
+                "same_event_order_violation": bool(same_violation),
+                "integrity_status": status,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def event_order_prior_violations(
+    event: pd.Series,
+    forecasts: pd.DataFrame,
+    settlements: pd.DataFrame,
+    reconciliation: pd.DataFrame,
+    *,
+    protocol_name: str,
+) -> tuple[bool, bool]:
+    event_forecasts = subset_event(forecasts, protocol_name, str(event["event_slug"]))
+    if event_forecasts.empty or settlements.empty or reconciliation.empty:
+        return False, False
+    current_order = pd.to_numeric(pd.Series([event.get("event_order")]), errors="coerce").iloc[0]
+    forecast_time = pd.to_datetime(
+        event_forecasts["forecast_created_at_utc"],
+        errors="coerce",
+    ).min()
+    eligible = reconciliation[
+        reconciliation["eligible_for_future_prior_evidence_after_reconciliation"].astype(bool)
+    ].copy()
+    if eligible.empty or pd.isna(current_order) or pd.isna(forecast_time):
+        return False, False
+    eligible_settlements = settlements.merge(
+        eligible[["forecast_id", "event_slug", "registry_event_order"]],
+        on=["forecast_id", "event_slug"],
+        how="inner",
+    )
+    if eligible_settlements.empty or "settled_at_utc" not in eligible_settlements:
+        return False, False
+    settled_before = pd.to_datetime(
+        eligible_settlements["settled_at_utc"],
+        errors="coerce",
+    ).le(forecast_time)
+    orders = pd.to_numeric(eligible_settlements["registry_event_order"], errors="coerce")
+    future = bool((settled_before & orders.gt(current_order)).any())
+    same = bool((settled_before & orders.eq(current_order)).any())
+    return future, same
+
+
+def build_event_order_integrity_failures(by_event: pd.DataFrame) -> pd.DataFrame:
+    columns = ["protocol_name", "event_slug", "condition", "status", "details"]
+    if by_event.empty:
+        return pd.DataFrame(columns=columns)
+    rows: list[dict[str, object]] = []
+    checked = event_order_integrity_columns()[4:-1]
+    for _, row in by_event.iterrows():
+        if str(row.get("integrity_status")) == "valid_with_legacy_artifact_exclusion":
+            continue
+        for column in checked:
+            value = bool(row.get(column, True))
+            if column in {"future_event_order_violation", "same_event_order_violation"}:
+                value = not bool(row.get(column, False))
+            if not value:
+                rows.append(
+                    {
+                        "protocol_name": row.get("protocol_name"),
+                        "event_slug": row.get("event_slug"),
+                        "condition": column,
+                        "status": "failed",
+                        "details": row.get("integrity_status", ""),
+                    }
+                )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def event_order_integrity_status(
+    by_event: pd.DataFrame,
+    failures: pd.DataFrame,
+) -> str:
+    if not failures.empty:
+        return "invalid"
+    if (
+        not by_event.empty
+        and by_event["integrity_status"]
+        .astype(str)
+        .eq("valid_with_legacy_artifact_exclusion")
+        .any()
+    ):
+        return "valid_with_legacy_artifact_exclusion"
+    return "valid" if not by_event.empty else "not_evaluated"
+
+
+def prior_evidence_lineage_status(reconciliation: pd.DataFrame) -> str:
+    if reconciliation.empty:
+        return "no_settled_monitoring_evidence"
+    if reconciliation["eligible_for_future_prior_evidence_after_reconciliation"].astype(bool).any():
+        return "valid_registry_prior_evidence_available"
+    if reconciliation["event_order_lineage_status"].astype(str).eq(EVENT_ORDER_LEGACY_STATUS).any():
+        return "legacy_noncanonical_rows_excluded"
+    return "no_valid_prior_evidence_available"
+
+
+def event_order_lineage_summary_status(reconciliation: pd.DataFrame | None) -> str:
+    if reconciliation is None or reconciliation.empty:
+        return "not_evaluated"
+    statuses = set(reconciliation["event_order_lineage_status"].dropna().astype(str))
+    if EVENT_ORDER_LEGACY_STATUS in statuses:
+        return "valid_with_legacy_artifact_exclusion"
+    if statuses <= {EVENT_ORDER_VALID_STATUS}:
+        return EVENT_ORDER_VALID_STATUS
+    return "invalid"
+
+
+def event_order_integrity_columns() -> list[str]:
+    return [
+        "protocol_name",
+        "monitor_season",
+        "event_slug",
+        "registry_event_order",
+        "registry_event_order_available",
+        "forecast_event_order_matches_registry",
+        "settlement_event_order_matches_registry",
+        "shadow_ledger_event_order_matches_registry",
+        "prior_evidence_uses_registry_order_only",
+        "legacy_noncanonical_rows_excluded_from_prior_evidence",
+        "future_event_order_violation",
+        "same_event_order_violation",
+        "integrity_status",
+    ]
+
+
 def build_status_by_event(
     protocol: dict[str, Any],
     registry: pd.DataFrame,
     forecasts: pd.DataFrame,
     settlements: pd.DataFrame,
+    *,
+    reconciliation: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Summarize event monitoring status."""
     columns = [
@@ -1484,6 +1972,8 @@ def build_status_by_event(
         "evaluable_driver_count",
         "non_evaluable_driver_count",
         "settlement_metric_status",
+        "monitoring_event_order_lineage_status",
+        "monitoring_legacy_event_order_exclusion_count",
     ]
     if registry.empty:
         return pd.DataFrame(columns=columns)
@@ -1492,6 +1982,11 @@ def build_status_by_event(
         slug = str(event["event_slug"])
         event_forecasts = subset_event(forecasts, protocol.get("protocol_name"), slug)
         event_settlements = subset_event(settlements, protocol.get("protocol_name"), slug)
+        event_recon = (
+            reconciliation[reconciliation["event_slug"].astype(str).eq(slug)]
+            if reconciliation is not None and not reconciliation.empty
+            else pd.DataFrame()
+        )
         diagnostic = event_forecasts.get("diagnostic_only", pd.Series(dtype=bool)).astype(bool)
         live_rows = int((~diagnostic).sum()) if not event_forecasts.empty else 0
         shadow_rows = int(diagnostic.sum()) if not event_forecasts.empty else 0
@@ -1514,6 +2009,15 @@ def build_status_by_event(
                 "evaluable_driver_count": event.get("evaluable_driver_count", 0),
                 "non_evaluable_driver_count": event.get("non_evaluable_driver_count", 0),
                 "settlement_metric_status": event.get("settlement_metric_status", "not_scorable"),
+                "monitoring_event_order_lineage_status": event_lineage_status(event_recon),
+                "monitoring_legacy_event_order_exclusion_count": int(
+                    event_recon["event_order_lineage_status"]
+                    .astype(str)
+                    .eq(EVENT_ORDER_LEGACY_STATUS)
+                    .sum()
+                )
+                if not event_recon.empty
+                else 0,
             }
         )
     return pd.DataFrame(rows, columns=columns)
@@ -1578,7 +2082,48 @@ def build_shadow_candidate_summary(settlements: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
 
 
-def build_gate_timeline(forecasts: pd.DataFrame) -> pd.DataFrame:
+def reconciliation_for_event(
+    reconciliation: pd.DataFrame | None,
+    protocol_name: str,
+    event_slug: str,
+) -> pd.DataFrame:
+    if reconciliation is None or reconciliation.empty:
+        return pd.DataFrame(columns=event_order_reconciliation_columns())
+    return reconciliation[
+        reconciliation["protocol_name"].astype(str).eq(str(protocol_name))
+        & reconciliation["event_slug"].astype(str).eq(str(event_slug))
+    ].copy()
+
+
+def event_lineage_status(event_recon: pd.DataFrame) -> str:
+    if event_recon.empty:
+        return "not_evaluated"
+    statuses = set(event_recon["event_order_lineage_status"].dropna().astype(str))
+    if EVENT_ORDER_LEGACY_STATUS in statuses:
+        return EVENT_ORDER_LEGACY_STATUS
+    if EVENT_ORDER_DUPLICATE_STATUS in statuses:
+        return EVENT_ORDER_DUPLICATE_STATUS
+    if EVENT_ORDER_MISSING_STATUS in statuses:
+        return EVENT_ORDER_MISSING_STATUS
+    if EVENT_ORDER_INVALID_STATUS in statuses:
+        return EVENT_ORDER_INVALID_STATUS
+    if EVENT_ORDER_VALID_STATUS in statuses:
+        return EVENT_ORDER_VALID_STATUS
+    return "unknown"
+
+
+def normalized_target_coverage_status(event: pd.Series) -> str:
+    value = event.get("target_coverage_status", "target_not_available")
+    if value is None or pd.isna(value) or not str(value).strip():
+        return "target_not_available"
+    return str(value)
+
+
+def build_gate_timeline(
+    forecasts: pd.DataFrame,
+    *,
+    reconciliation: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Summarize frozen gate status over forecasted events."""
     columns = [
         "protocol_name",
@@ -1586,6 +2131,7 @@ def build_gate_timeline(forecasts: pd.DataFrame) -> pd.DataFrame:
         "event_slug",
         "candidate_eligible_under_frozen_gates",
         "counterfactual_shadow_selected",
+        "event_order_lineage_status",
     ]
     if forecasts.empty:
         return pd.DataFrame(columns=columns)
@@ -1595,20 +2141,31 @@ def build_gate_timeline(forecasts: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for keys, group in weighted.groupby(["protocol_name", "event_order", "event_slug"], sort=True):
         protocol_name, event_order, event_slug = keys
+        event_recon = reconciliation_for_event(reconciliation, str(protocol_name), str(event_slug))
+        registry_order = (
+            event_recon["registry_event_order"].dropna().iloc[0]
+            if not event_recon.empty and not event_recon["registry_event_order"].dropna().empty
+            else event_order
+        )
         eligible = bool(group["candidate_eligible_under_frozen_gates"].astype(bool).any())
         rows.append(
             {
                 "protocol_name": protocol_name,
-                "event_order": event_order,
+                "event_order": registry_order,
                 "event_slug": event_slug,
                 "candidate_eligible_under_frozen_gates": eligible,
                 "counterfactual_shadow_selected": eligible,
+                "event_order_lineage_status": event_lineage_status(event_recon),
             }
         )
     return pd.DataFrame(rows, columns=columns)
 
 
-def build_evidence_growth(settlements: pd.DataFrame) -> pd.DataFrame:
+def build_evidence_growth(
+    settlements: pd.DataFrame,
+    *,
+    reconciliation: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """Track settled diagnostic evidence accumulation."""
     columns = [
         "protocol_name",
@@ -1620,6 +2177,13 @@ def build_evidence_growth(settlements: pd.DataFrame) -> pd.DataFrame:
     if settlements.empty:
         return pd.DataFrame(columns=columns)
     shadow = settlements[settlements["diagnostic_only"].astype(bool)].copy()
+    if reconciliation is not None and not reconciliation.empty:
+        eligible = reconciliation[
+            reconciliation["eligible_for_future_prior_evidence_after_reconciliation"].astype(bool)
+        ][["forecast_id", "event_slug", "registry_event_order"]]
+        shadow = shadow.merge(eligible, on=["forecast_id", "event_slug"], how="inner")
+        if not shadow.empty:
+            shadow["event_order"] = shadow["registry_event_order"]
     if shadow.empty:
         return pd.DataFrame(columns=columns)
     events = shadow[["protocol_name", "event_order", "event_slug"]].drop_duplicates()
@@ -1656,6 +2220,7 @@ def build_monitoring_summary_payload(
     integrity: dict[str, object],
     live_summary: pd.DataFrame,
     shadow_summary: pd.DataFrame,
+    reconciliation: pd.DataFrame | None = None,
 ) -> dict[str, object]:
     """Build the top-level monitoring summary JSON."""
     available = bool(protocol)
@@ -1666,6 +2231,26 @@ def build_monitoring_summary_payload(
     if available and registry.empty:
         status = "not_ready"
     coverage = monitoring_coverage_summary(registry, settlements)
+    lineage_status = (
+        event_order_lineage_summary_status(reconciliation)
+        if reconciliation is not None
+        else "not_evaluated"
+    )
+    legacy_count = (
+        int(
+            reconciliation["event_order_lineage_status"]
+            .astype(str)
+            .eq(EVENT_ORDER_LEGACY_STATUS)
+            .sum()
+        )
+        if reconciliation is not None and not reconciliation.empty
+        else 0
+    )
+    prior_lineage = (
+        prior_evidence_lineage_status(reconciliation)
+        if reconciliation is not None
+        else "not_evaluated"
+    )
     return {
         "status": status,
         "prospective_monitoring_available": available,
@@ -1680,6 +2265,10 @@ def build_monitoring_summary_payload(
         "shadow_candidate_summary": records_for_json(shadow_summary),
         "integrity_status": integrity.get("status", "missing"),
         "fresh_evidence_status": fresh,
+        "monitoring_event_order_lineage_status": lineage_status,
+        "monitoring_legacy_event_order_exclusion_count": legacy_count,
+        "monitoring_prior_evidence_lineage_status": prior_lineage,
+        "monitoring_next_forecast_prior_evidence_status": prior_lineage,
         **coverage,
         "policy_recommendation": POLICY_RECOMMENDATION,
         "known_limitations": [
@@ -1695,6 +2284,10 @@ def build_monitoring_summary_payload(
                 "reports/metrics/prospective_monitoring_shadow_candidate_summary.csv",
                 "reports/metrics/prospective_monitoring_gate_timeline.csv",
                 "reports/metrics/prospective_monitoring_evidence_growth.csv",
+                "reports/metrics/prospective_monitoring_event_order_reconciliation.csv",
+                "reports/metrics/prospective_monitoring_event_order_integrity_summary.json",
+                "reports/metrics/prospective_monitoring_event_order_integrity_by_event.csv",
+                "reports/metrics/prospective_monitoring_event_order_integrity_failures.csv",
             ],
             "figures": [],
         },
@@ -2015,6 +2608,97 @@ def load_or_build_registry(
     return ensure_registry_columns(registry)
 
 
+def resolve_registry_event_order(
+    registry: pd.DataFrame,
+    *,
+    protocol_name: str,
+    monitor_season: int,
+    event_slug: str,
+    registry_path: Path,
+    strict: bool = False,
+) -> dict[str, object]:
+    """Resolve monitored-season chronology from the frozen registry only."""
+    base = {
+        "event_order": pd.NA,
+        "event_order_source": EVENT_ORDER_SOURCE,
+        "event_order_registry_valid": False,
+        "event_order_registry_path": _relative_report_path(registry_path),
+        "event_order_registry_protocol_name": protocol_name,
+        "event_order_registry_monitor_season": int(monitor_season),
+        "event_order_registry_row_index": pd.NA,
+        "event_order_lineage_status": EVENT_ORDER_MISSING_STATUS,
+    }
+    if registry.empty:
+        return _event_order_resolution(base, strict)
+    required = {"protocol_name", "monitor_season", "event_slug", "event_order"}
+    if not required <= set(registry.columns):
+        base["event_order_lineage_status"] = EVENT_ORDER_MISSING_STATUS
+        return _event_order_resolution(base, strict)
+    frame = registry.copy()
+    mask = (
+        frame["protocol_name"].astype(str).eq(str(protocol_name))
+        & pd.to_numeric(frame["monitor_season"], errors="coerce").eq(int(monitor_season))
+        & frame["event_slug"].astype(str).eq(str(event_slug))
+    )
+    matches = frame.loc[mask]
+    if matches.empty:
+        base["event_order_lineage_status"] = EVENT_ORDER_MISSING_STATUS
+        return _event_order_resolution(base, strict)
+    if len(matches) != 1:
+        base["event_order_lineage_status"] = EVENT_ORDER_DUPLICATE_STATUS
+        return _event_order_resolution(base, strict)
+    value = pd.to_numeric(matches["event_order"], errors="coerce").iloc[0]
+    if pd.isna(value) or int(value) <= 0 or float(value) != float(int(value)):
+        base["event_order_lineage_status"] = EVENT_ORDER_INVALID_STATUS
+        return _event_order_resolution(base, strict)
+    base.update(
+        {
+            "event_order": int(value),
+            "event_order_registry_valid": True,
+            "event_order_registry_row_index": int(matches.index[0]),
+            "event_order_lineage_status": EVENT_ORDER_VALID_STATUS,
+        }
+    )
+    return base
+
+
+def _event_order_resolution(payload: dict[str, object], strict: bool) -> dict[str, object]:
+    if strict and payload["event_order_lineage_status"] != EVENT_ORDER_VALID_STATUS:
+        raise ValueError(
+            "Monitoring registry event order is unavailable or invalid: "
+            f"{payload['event_order_lineage_status']}"
+        )
+    return payload
+
+
+def monitoring_event_order_keys(
+    dataset: pd.DataFrame,
+    registry: pd.DataFrame,
+    protocol: dict[str, Any],
+) -> list[str]:
+    """Return train chronology plus monitored-season registry chronology."""
+    monitor_season = int(protocol["monitor_season"])
+    historical = [key for key in ordered_event_keys(dataset) if event_season(key) != monitor_season]
+    monitor = registry.copy()
+    required = {"protocol_name", "monitor_season", "event_order", "event_slug"}
+    if not monitor.empty and required <= set(monitor.columns):
+        monitor = monitor[
+            monitor["protocol_name"].astype(str).eq(str(protocol.get("protocol_name")))
+            & pd.to_numeric(monitor["monitor_season"], errors="coerce").eq(monitor_season)
+        ].copy()
+        monitor["event_order_numeric"] = pd.to_numeric(monitor["event_order"], errors="coerce")
+        monitor = monitor.dropna(subset=["event_order_numeric"]).sort_values(
+            ["event_order_numeric", "event_slug"],
+            kind="stable",
+        )
+        monitored = [
+            f"{monitor_season}/{slug}" for slug in monitor["event_slug"].astype(str).tolist()
+        ]
+    else:
+        monitored = []
+    return list(dict.fromkeys([*historical, *monitored]))
+
+
 def resolve_registry_event(registry: pd.DataFrame, event: str) -> pd.Series:
     if registry.empty:
         raise ValueError("Monitoring event registry is empty")
@@ -2046,17 +2730,192 @@ def assert_forecast_not_exists(metrics_dir: Path, protocol_name: str, event_slug
         raise ValueError(f"Forecast snapshot already exists for {event_slug}")
 
 
-def settled_event_keys(metrics_dir: Path, protocol_name: str) -> set[str]:
+def build_event_order_reconciliation(
+    protocol: dict[str, Any],
+    registry: pd.DataFrame,
+    forecasts: pd.DataFrame,
+    settlements: pd.DataFrame,
+    ledger: pd.DataFrame | None = None,
+    *,
+    metrics_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Compare immutable artifact event order to canonical registry chronology."""
+    columns = event_order_reconciliation_columns()
+    if not protocol:
+        return pd.DataFrame(columns=columns)
+    protocol_name = str(protocol.get("protocol_name"))
+    monitor_season = int(protocol.get("monitor_season", 0) or 0)
+    registry_path = (
+        metrics_dir / "prospective_monitoring_event_registry.csv"
+        if metrics_dir is not None
+        else Path("reports/metrics/prospective_monitoring_event_registry.csv")
+    )
+    rows: list[dict[str, object]] = []
+    for event in artifact_event_order_records(forecasts, settlements, ledger):
+        if str(event.get("protocol_name")) != protocol_name:
+            continue
+        slug = str(event.get("event_slug"))
+        lineage = resolve_registry_event_order(
+            registry,
+            protocol_name=protocol_name,
+            monitor_season=monitor_season,
+            event_slug=slug,
+            registry_path=registry_path,
+            strict=False,
+        )
+        registry_order = lineage.get("event_order", pd.NA)
+        artifact_order = numeric_int_or_na(event.get("artifact_event_order"))
+        match = (
+            pd.notna(artifact_order)
+            and pd.notna(registry_order)
+            and int(artifact_order) == int(registry_order)
+            and bool(lineage.get("event_order_registry_valid", False))
+        )
+        status = (
+            EVENT_ORDER_VALID_STATUS
+            if match
+            else str(lineage.get("event_order_lineage_status", EVENT_ORDER_INVALID_STATUS))
+        )
+        if status == EVENT_ORDER_VALID_STATUS and not match:
+            status = EVENT_ORDER_LEGACY_STATUS
+        elif not match and bool(lineage.get("event_order_registry_valid", False)):
+            status = EVENT_ORDER_LEGACY_STATUS
+        has_settlement = bool(event.get("has_settlement", False))
+        has_future_eligible = bool(event.get("artifact_future_eligible", False))
+        eligible_after = bool(match and has_settlement and has_future_eligible)
+        action = (
+            "retain_for_prior_monitoring_evidence"
+            if eligible_after
+            else "exclude_from_prior_monitoring_evidence"
+        )
+        reason = (
+            "registry_event_order_matches_artifact"
+            if eligible_after
+            else "event_order_lineage_mismatch_or_unsettled"
+        )
+        rows.append(
+            {
+                "protocol_name": protocol_name,
+                "monitor_season": monitor_season,
+                "event_slug": slug,
+                "forecast_id": event.get("forecast_id"),
+                "artifact_event_order": artifact_order,
+                "registry_event_order": registry_order,
+                "event_order_match": bool(match),
+                "event_order_lineage_status": status,
+                "artifact_created_at_utc": event.get("artifact_created_at_utc"),
+                "affected_by_prior_evidence_lineage": bool(has_settlement or has_future_eligible),
+                "eligible_for_future_prior_evidence_after_reconciliation": eligible_after,
+                "reconciliation_action": action,
+                "reconciliation_reason": reason,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def artifact_event_order_records(
+    forecasts: pd.DataFrame,
+    settlements: pd.DataFrame,
+    ledger: pd.DataFrame | None,
+) -> list[dict[str, object]]:
+    frames: list[pd.DataFrame] = []
+    if not forecasts.empty:
+        forecast = forecasts.copy()
+        forecast["_artifact_kind"] = "forecast"
+        frames.append(forecast)
+    if not settlements.empty:
+        settlement = settlements.copy()
+        settlement["_artifact_kind"] = "settlement"
+        frames.append(settlement)
+    if ledger is not None and not ledger.empty:
+        ledger_frame = ledger.copy()
+        ledger_frame["_artifact_kind"] = "ledger"
+        frames.append(ledger_frame)
+    if not frames:
+        return []
+    combined = pd.concat(frames, ignore_index=True, sort=False)
+    if "forecast_id" not in combined:
+        combined["forecast_id"] = pd.NA
+    rows: list[dict[str, object]] = []
+    group_columns = ["protocol_name", "event_slug", "forecast_id"]
+    for keys, group in combined.groupby(group_columns, dropna=False, sort=False):
+        protocol_name, event_slug, forecast_id = keys
+        created = first_non_missing(
+            group,
+            ("forecast_created_at_utc", "settled_at_utc", "artifact_created_at_utc"),
+        )
+        artifact_order = first_non_missing(group, ("event_order", "artifact_event_order"))
+        has_settlement = bool(group["_artifact_kind"].astype(str).eq("settlement").any())
+        eligible = bool(
+            "eligible_for_future_prior_evidence" in group
+            and group["eligible_for_future_prior_evidence"].eq(True).any()
+        )
+        rows.append(
+            {
+                "protocol_name": protocol_name,
+                "event_slug": event_slug,
+                "forecast_id": forecast_id,
+                "artifact_event_order": artifact_order,
+                "artifact_created_at_utc": created,
+                "has_settlement": has_settlement,
+                "artifact_future_eligible": eligible,
+            }
+        )
+    return rows
+
+
+def event_order_reconciliation_columns() -> list[str]:
+    return [
+        "protocol_name",
+        "monitor_season",
+        "event_slug",
+        "forecast_id",
+        "artifact_event_order",
+        "registry_event_order",
+        "event_order_match",
+        "event_order_lineage_status",
+        "artifact_created_at_utc",
+        "affected_by_prior_evidence_lineage",
+        "eligible_for_future_prior_evidence_after_reconciliation",
+        "reconciliation_action",
+        "reconciliation_reason",
+    ]
+
+
+def settled_event_keys(
+    metrics_dir: Path,
+    protocol: dict[str, Any],
+    registry: pd.DataFrame,
+    *,
+    current_event_order: int,
+) -> set[str]:
     settlements = read_parquet(metrics_dir / "prospective_monitoring_settlements.parquet")
     if settlements.empty:
         return set()
-    frame = settlements[settlements["protocol_name"].astype(str).eq(protocol_name)]
-    return set(frame["season"].astype(str) + "/" + frame["event_slug"].astype(str))
+    forecasts = read_parquet(metrics_dir / "prospective_monitoring_forecasts.parquet")
+    reconciliation = build_event_order_reconciliation(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        read_csv(metrics_dir / "prospective_monitoring_shadow_evidence_ledger.csv"),
+        metrics_dir=metrics_dir,
+    )
+    eligible = reconciliation[
+        reconciliation["eligible_for_future_prior_evidence_after_reconciliation"].astype(bool)
+        & pd.to_numeric(reconciliation["registry_event_order"], errors="coerce").lt(
+            int(current_event_order)
+        )
+    ].copy()
+    if eligible.empty:
+        return set()
+    return set(str(protocol["monitor_season"]) + "/" + eligible["event_slug"].astype(str))
 
 
 def prior_settlement_history(
     metrics_dir: Path,
-    protocol_name: str,
+    protocol: dict[str, Any],
+    registry: pd.DataFrame,
     *,
     current_event_order: int,
 ) -> pd.DataFrame:
@@ -2064,22 +2923,76 @@ def prior_settlement_history(
     settlements = read_parquet(metrics_dir / "prospective_monitoring_settlements.parquet")
     if settlements.empty:
         return pd.DataFrame()
+    forecasts = read_parquet(metrics_dir / "prospective_monitoring_forecasts.parquet")
+    reconciliation = build_event_order_reconciliation(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        read_csv(metrics_dir / "prospective_monitoring_shadow_evidence_ledger.csv"),
+        metrics_dir=metrics_dir,
+    )
+    eligible = reconciliation[
+        reconciliation["eligible_for_future_prior_evidence_after_reconciliation"].astype(bool)
+        & pd.to_numeric(reconciliation["registry_event_order"], errors="coerce").lt(
+            int(current_event_order)
+        )
+    ].copy()
+    if eligible.empty:
+        return pd.DataFrame()
+    eligible_ids = set(eligible["forecast_id"].dropna().astype(str))
+    eligible_events = set(eligible["event_slug"].dropna().astype(str))
     frame = settlements[
-        settlements["protocol_name"].astype(str).eq(protocol_name)
+        settlements["protocol_name"].astype(str).eq(str(protocol.get("protocol_name")))
         & settlements["diagnostic_only"].astype(bool)
         & settlements["eligible_for_future_prior_evidence"].astype(bool)
+        & settlements["forecast_id"].astype(str).isin(eligible_ids)
+        & settlements["event_slug"].astype(str).isin(eligible_events)
     ].copy()
-    frame = frame[
-        pd.to_numeric(frame["event_order"], errors="coerce")
-        .fillna(float("inf"))
-        .lt(current_event_order)
-    ]
+    registry_orders = eligible.set_index(["forecast_id", "event_slug"])["registry_event_order"]
+    frame["_event_order_lookup"] = list(
+        zip(frame["forecast_id"].astype(str), frame["event_slug"].astype(str), strict=False)
+    )
+    frame["event_order"] = frame["_event_order_lookup"].map(registry_orders.to_dict())
+    frame = frame[pd.to_numeric(frame["event_order"], errors="coerce").lt(int(current_event_order))]
     if frame.empty:
         return pd.DataFrame()
     frame["source_temporal_weighting_policy"] = frame["temporal_weighting_policy"]
     frame["predicted_quali_gap_to_pole_sec"] = frame["prediction_gap_sec"]
     frame["quali_gap_to_pole_sec"] = frame["actual_gap_sec"]
-    return frame
+    frame["prior_monitoring_evidence_lineage_valid"] = True
+    return frame.drop(columns=["_event_order_lookup"])
+
+
+def prior_monitoring_evidence_summary(
+    history: pd.DataFrame,
+    *,
+    event_order_lineage_valid: bool,
+) -> dict[str, object]:
+    if history.empty:
+        return {
+            "prior_monitoring_event_count": 0,
+            "prior_monitoring_prediction_count": 0,
+            "prior_monitoring_event_orders": "[]",
+            "prior_monitoring_event_slugs": "[]",
+            "prior_monitoring_evidence_lineage_valid": bool(event_order_lineage_valid),
+            "prior_monitoring_evidence_exclusion_reasons": "[]",
+        }
+    orders = sorted(
+        {
+            int(value)
+            for value in pd.to_numeric(history["event_order"], errors="coerce").dropna().tolist()
+        }
+    )
+    slugs = sorted(set(history["event_slug"].dropna().astype(str).tolist()))
+    return {
+        "prior_monitoring_event_count": int(len(slugs)),
+        "prior_monitoring_prediction_count": int(len(history)),
+        "prior_monitoring_event_orders": json.dumps(orders),
+        "prior_monitoring_event_slugs": json.dumps(slugs),
+        "prior_monitoring_evidence_lineage_valid": bool(event_order_lineage_valid),
+        "prior_monitoring_evidence_exclusion_reasons": "[]",
+    }
 
 
 def event_outcomes(dataset: pd.DataFrame, season: int, event_slug: str) -> pd.DataFrame:
@@ -2186,6 +3099,8 @@ def no_future_settlement_used(
     event: pd.Series,
     settlements: pd.DataFrame,
     event_forecasts: pd.DataFrame,
+    *,
+    reconciliation: pd.DataFrame | None = None,
 ) -> bool:
     if event_forecasts.empty or settlements.empty:
         return True
@@ -2196,9 +3111,26 @@ def no_future_settlement_used(
         event_forecasts["forecast_created_at_utc"],
         errors="coerce",
     ).min()
-    future = settlements[
-        pd.to_numeric(settlements["event_order"], errors="coerce").gt(current_order)
-    ]
+    frame = settlements.copy()
+    if reconciliation is not None and not reconciliation.empty:
+        keep = reconciliation[
+            [
+                "forecast_id",
+                "event_slug",
+                "registry_event_order",
+                "eligible_for_future_prior_evidence_after_reconciliation",
+            ]
+        ].copy()
+        frame = frame.merge(keep, on=["forecast_id", "event_slug"], how="left")
+        frame = frame[
+            frame["eligible_for_future_prior_evidence_after_reconciliation"]
+            .fillna(False)
+            .astype(bool)
+        ].copy()
+        if frame.empty:
+            return True
+        frame["event_order"] = frame["registry_event_order"]
+    future = frame[pd.to_numeric(frame["event_order"], errors="coerce").gt(current_order)]
     if future.empty or pd.isna(forecast_time):
         return True
     if "settled_at_utc" not in future:
@@ -2289,6 +3221,23 @@ def first_value(frame: pd.DataFrame, column: str, default: object) -> object:
     return frame[column].dropna().iloc[0]
 
 
+def first_non_missing(frame: pd.DataFrame, columns: tuple[str, ...]) -> object:
+    for column in columns:
+        if column in frame and not frame[column].dropna().empty:
+            return frame[column].dropna().iloc[0]
+    return pd.NA
+
+
+def numeric_int_or_na(value: object) -> object:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").dropna()
+    if numeric.empty:
+        return pd.NA
+    number = numeric.iloc[0]
+    if float(number) != float(int(number)):
+        return pd.NA
+    return int(number)
+
+
 def _number_or_none(value: object) -> float | None:
     numeric = pd.to_numeric(pd.Series([value]), errors="coerce").dropna()
     return float(numeric.iloc[0]) if not numeric.empty else None
@@ -2337,6 +3286,12 @@ def forecast_columns() -> list[str]:
         "forecast_created_at_utc",
         "monitor_season",
         "event_order",
+        "event_order_source",
+        "event_order_registry_valid",
+        "event_order_registry_path",
+        "event_order_registry_protocol_name",
+        "event_order_registry_monitor_season",
+        "event_order_lineage_status",
         "fold_id",
         "season",
         "event",
@@ -2374,6 +3329,12 @@ def forecast_columns() -> list[str]:
         "future_seasons_excluded",
         "current_event_target_accessed",
         "forecast_integrity_status",
+        "prior_monitoring_event_count",
+        "prior_monitoring_prediction_count",
+        "prior_monitoring_event_orders",
+        "prior_monitoring_event_slugs",
+        "prior_monitoring_evidence_lineage_valid",
+        "prior_monitoring_evidence_exclusion_reasons",
     ]
 
 
@@ -2385,6 +3346,13 @@ def manifest_columns() -> list[str]:
         "forecast_created_at_utc",
         "monitor_season",
         "event_key",
+        "event_order",
+        "event_order_source",
+        "event_order_registry_valid",
+        "event_order_registry_path",
+        "event_order_registry_protocol_name",
+        "event_order_registry_monitor_season",
+        "event_order_lineage_status",
         "test_event",
         "checkpoint",
         "policy_profile",
@@ -2397,6 +3365,12 @@ def manifest_columns() -> list[str]:
         "current_event_excluded_from_training",
         "future_same_season_events_excluded",
         "future_seasons_excluded",
+        "prior_monitoring_event_count",
+        "prior_monitoring_prediction_count",
+        "prior_monitoring_event_orders",
+        "prior_monitoring_event_slugs",
+        "prior_monitoring_evidence_lineage_valid",
+        "prior_monitoring_evidence_exclusion_reasons",
     ]
 
 

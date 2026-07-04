@@ -1367,6 +1367,21 @@ def _prospective_monitoring_portfolio_summary(
             summary.get("monitoring_partial_coverage_event_count", 0) or 0
         ),
         "monitoring_settlement_metric_status": summary.get("monitoring_settlement_metric_status"),
+        "monitoring_event_order_lineage_status": summary.get(
+            "monitoring_event_order_lineage_status",
+            "not_evaluated",
+        ),
+        "monitoring_legacy_event_order_exclusion_count": int(
+            summary.get("monitoring_legacy_event_order_exclusion_count", 0) or 0
+        ),
+        "monitoring_prior_evidence_lineage_status": summary.get(
+            "monitoring_prior_evidence_lineage_status",
+            "not_evaluated",
+        ),
+        "monitoring_next_forecast_prior_evidence_status": summary.get(
+            "monitoring_next_forecast_prior_evidence_status",
+            "not_evaluated",
+        ),
     }
 
 
@@ -1400,6 +1415,21 @@ def _monitoring_data_readiness_portfolio_summary(
             summary.get("monitoring_partial_coverage_event_count", 0) or 0
         ),
         "monitoring_settlement_metric_status": summary.get("monitoring_settlement_metric_status"),
+        "monitoring_event_order_lineage_status": summary.get(
+            "monitoring_event_order_lineage_status",
+            "not_evaluated",
+        ),
+        "monitoring_legacy_event_order_exclusion_count": int(
+            summary.get("monitoring_legacy_event_order_exclusion_count", 0) or 0
+        ),
+        "monitoring_prior_evidence_lineage_status": summary.get(
+            "monitoring_prior_evidence_lineage_status",
+            "not_evaluated",
+        ),
+        "monitoring_next_forecast_prior_evidence_status": summary.get(
+            "monitoring_next_forecast_prior_evidence_status",
+            "not_evaluated",
+        ),
     }
 
 
@@ -1818,6 +1848,9 @@ def _prospective_monitoring_card_text(value: object) -> str:
     season = value.get("prospective_monitoring_monitor_season")
     integrity = value.get("prospective_monitoring_integrity_status")
     fresh = value.get("prospective_monitoring_fresh_evidence_status", "not_collected")
+    lineage = value.get("monitoring_event_order_lineage_status", "not_evaluated")
+    exclusions = value.get("monitoring_legacy_event_order_exclusion_count", 0)
+    prior_lineage = value.get("monitoring_prior_evidence_lineage_status", "not_evaluated")
     recommendation = value.get(
         "prospective_monitoring_policy_recommendation",
         "season_aware_candidate_requires_more_evidence",
@@ -1825,7 +1858,12 @@ def _prospective_monitoring_card_text(value: object) -> str:
     return (
         intro
         + f" Protocol `{protocol}` monitors season `{season}` with status `{status}`, "
-        + f"integrity `{integrity}`, and fresh evidence `{fresh}`. Policy recommendation: "
+        + f"integrity `{integrity}`, and fresh evidence `{fresh}`. Event-order lineage is "
+        + f"`{lineage}` with `{exclusions}` legacy exclusions; prior evidence lineage is "
+        + f"`{prior_lineage}`. Legacy forecasts and settlements remain descriptive immutable "
+        + "records but are excluded from future prior-only gate evidence when their artifact "
+        + "event order does not match the frozen registry. All newly created forecasts derive "
+        + "chronology from the registry only. Policy recommendation: "
         + f"`{recommendation}`. No monitored evidence may alter defaults, gates, thresholds, "
         + "candidate identities, temporal weighting, or hyperparameters."
     )

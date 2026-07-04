@@ -379,6 +379,10 @@ def test_backtest_report_includes_monitoring_data_onboarding_summary() -> None:
             "monitoring_non_evaluable_driver_count": 2,
             "monitoring_partial_coverage_event_count": 1,
             "monitoring_settlement_metric_status": "scorable",
+            "monitoring_event_order_lineage_status": "valid_with_legacy_artifact_exclusion",
+            "monitoring_legacy_event_order_exclusion_count": 2,
+            "monitoring_prior_evidence_lineage_status": "legacy_noncanonical_rows_excluded",
+            "monitoring_next_forecast_prior_evidence_status": ("legacy_noncanonical_rows_excluded"),
         },
     )
 
@@ -393,6 +397,11 @@ def test_backtest_report_includes_monitoring_data_onboarding_summary() -> None:
     assert report["monitoring_non_evaluable_driver_count"] == 2
     assert report["monitoring_partial_coverage_event_count"] == 1
     assert report["monitoring_settlement_metric_status"] == "scorable"
+    assert report["monitoring_event_order_lineage_status"] == "valid_with_legacy_artifact_exclusion"
+    assert report["monitoring_legacy_event_order_exclusion_count"] == 2
+    assert report["monitoring_prior_evidence_lineage_status"] == (
+        "legacy_noncanonical_rows_excluded"
+    )
 
 
 def _quality() -> dict[str, object]:

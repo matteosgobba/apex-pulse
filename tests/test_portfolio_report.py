@@ -182,6 +182,12 @@ def test_portfolio_report_includes_monitoring_data_onboarding_when_available(
                 "monitoring_non_evaluable_driver_count": 2,
                 "monitoring_partial_coverage_event_count": 1,
                 "monitoring_settlement_metric_status": "scorable",
+                "monitoring_event_order_lineage_status": ("valid_with_legacy_artifact_exclusion"),
+                "monitoring_legacy_event_order_exclusion_count": 2,
+                "monitoring_prior_evidence_lineage_status": ("legacy_noncanonical_rows_excluded"),
+                "monitoring_next_forecast_prior_evidence_status": (
+                    "legacy_noncanonical_rows_excluded"
+                ),
             }
         ),
         encoding="utf-8",
@@ -198,6 +204,10 @@ def test_portfolio_report_includes_monitoring_data_onboarding_when_available(
     assert onboarding["monitoring_target_coverage_status"] == "target_coverage_partial"
     assert onboarding["monitoring_evaluable_driver_count"] == 20
     assert onboarding["monitoring_non_evaluable_driver_count"] == 2
+    assert onboarding["monitoring_event_order_lineage_status"] == (
+        "valid_with_legacy_artifact_exclusion"
+    )
+    assert onboarding["monitoring_legacy_event_order_exclusion_count"] == 2
     assert "Monitoring data onboarding" in model_card
     assert "Forecast rows without qualifying targets are retained" in model_card
 
