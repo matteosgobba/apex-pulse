@@ -53,6 +53,7 @@ def create_backtest_report(
     season_aware_governance_summary_path: Path | None = None,
     season_aware_stability_summary_path: Path | None = None,
     prospective_monitoring_summary_path: Path | None = None,
+    monitoring_data_readiness_summary_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -156,6 +157,11 @@ def create_backtest_report(
         or config.metrics_output_dir / "prospective_monitoring_summary.json",
         config.project_root,
     )
+    monitoring_data_readiness_path = _resolve_path(
+        monitoring_data_readiness_summary_path
+        or config.metrics_output_dir / "monitoring_data_readiness_summary.json",
+        config.project_root,
+    )
     champion_mode_metrics = _read_champion_mode_metrics(config.metrics_output_dir)
     dataset = pd.read_parquet(source_path)
     quality = (
@@ -215,6 +221,11 @@ def create_backtest_report(
     prospective_monitoring_summary = (
         _read_json(prospective_monitoring_path) if prospective_monitoring_path.is_file() else None
     )
+    monitoring_data_readiness_summary = (
+        _read_json(monitoring_data_readiness_path)
+        if monitoring_data_readiness_path.is_file()
+        else None
+    )
     if champion_metrics is not None:
         mode = str(champion_metrics.get("selection_mode", ""))
         if mode:
@@ -242,6 +253,7 @@ def create_backtest_report(
         season_aware_governance_summary=season_aware_governance_summary,
         season_aware_stability_summary=season_aware_stability_summary,
         prospective_monitoring_summary=prospective_monitoring_summary,
+        monitoring_data_readiness_summary=monitoring_data_readiness_summary,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -282,6 +294,7 @@ def build_backtest_report_payload(
     season_aware_governance_summary: dict[str, Any] | None = None,
     season_aware_stability_summary: dict[str, Any] | None = None,
     prospective_monitoring_summary: dict[str, Any] | None = None,
+    monitoring_data_readiness_summary: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -320,6 +333,7 @@ def build_backtest_report_payload(
         payload.update(_season_aware_governance_summary(season_aware_governance_summary))
         payload.update(_season_aware_stability_summary(season_aware_stability_summary))
         payload.update(_prospective_monitoring_summary(prospective_monitoring_summary))
+        payload.update(_monitoring_data_readiness_summary(monitoring_data_readiness_summary))
         return payload
 
     training_status = (
@@ -380,6 +394,7 @@ def build_backtest_report_payload(
     payload.update(_season_aware_governance_summary(season_aware_governance_summary))
     payload.update(_season_aware_stability_summary(season_aware_stability_summary))
     payload.update(_prospective_monitoring_summary(prospective_monitoring_summary))
+    payload.update(_monitoring_data_readiness_summary(monitoring_data_readiness_summary))
     return payload
 
 
@@ -1130,6 +1145,31 @@ def _prospective_monitoring_summary(summary: dict[str, Any] | None) -> dict[str,
         "prospective_monitoring_policy_recommendation": summary.get(
             "policy_recommendation",
             "season_aware_candidate_requires_more_evidence",
+        ),
+    }
+
+
+def _monitoring_data_readiness_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "monitoring_data_onboarding_available": False,
+            "monitoring_data_onboarding_status": "missing",
+            "monitoring_data_onboarding_forecastable_event_count": 0,
+            "monitoring_data_onboarding_settleable_event_count": 0,
+            "monitoring_data_onboarding_target_isolation_status": "missing",
+        }
+    return {
+        "monitoring_data_onboarding_available": True,
+        "monitoring_data_onboarding_status": summary.get("status"),
+        "monitoring_data_onboarding_forecastable_event_count": int(
+            summary.get("forecastable_event_count", 0) or 0
+        ),
+        "monitoring_data_onboarding_settleable_event_count": int(
+            summary.get("settleable_event_count", 0) or 0
+        ),
+        "monitoring_data_onboarding_target_isolation_status": summary.get(
+            "target_isolation_status",
+            "unknown",
         ),
     }
 

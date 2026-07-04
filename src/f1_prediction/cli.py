@@ -13,6 +13,19 @@ from f1_prediction.data.fastf1_loader import (
 )
 from f1_prediction.data.ingest import DEFAULT_EVENT_SESSIONS, EventIngestionSummary
 from f1_prediction.data.ingest import ingest_event as run_event_ingestion
+from f1_prediction.data.monitoring_onboarding import MonitoringOnboardingSummary
+from f1_prediction.data.monitoring_onboarding import (
+    add_monitoring_targets as run_monitoring_add_targets,
+)
+from f1_prediction.data.monitoring_onboarding import (
+    create_monitoring_data_readiness_report as run_monitoring_data_readiness_report,
+)
+from f1_prediction.data.monitoring_onboarding import (
+    prepare_monitoring_event as run_monitoring_prepare_event,
+)
+from f1_prediction.data.monitoring_onboarding import (
+    register_monitoring_event as run_monitoring_register_event,
+)
 from f1_prediction.data.season_builder import SeasonDatasetBuildSummary, resolve_event_selection
 from f1_prediction.data.season_builder import build_season_dataset as run_season_dataset_build
 from f1_prediction.features.build import (
@@ -1265,6 +1278,121 @@ def prospective_policy_replay_command(
     _print_prospective_policy_replay_summary(summary, data_config.project_root)
 
 
+@app.command("monitoring-prepare-event")
+def monitoring_prepare_event_command(
+    season: Annotated[int, typer.Option("--season", min=1950, help="Monitored season.")],
+    event: Annotated[str, typer.Option("--event", help="Event name or slug.")],
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Rebuild local cleaned practice features if present."),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Prepare local FP3-safe monitoring features without reading qualifying targets."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_monitoring_prepare_event(
+            data_config,
+            feature_config,
+            season=season,
+            event=event,
+            force=force,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_monitoring_onboarding_summary(summary, data_config.project_root)
+
+
+@app.command("monitoring-register-event")
+def monitoring_register_event_command(
+    protocol_name: Annotated[str, typer.Option("--protocol-name", help="Frozen protocol name.")],
+    season: Annotated[int, typer.Option("--season", min=1950, help="Monitored season.")],
+    event: Annotated[str, typer.Option("--event", help="Prepared event name or slug.")],
+    event_order: Annotated[
+        int | None,
+        typer.Option("--event-order", help="Stable chronological order if not in artifacts."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Register one prepared monitoring event in the frozen protocol registry."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_monitoring_register_event(
+            data_config,
+            protocol_name=protocol_name,
+            season=season,
+            event=event,
+            event_order=event_order,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_monitoring_onboarding_summary(summary, data_config.project_root)
+
+
+@app.command("monitoring-add-targets")
+def monitoring_add_targets_command(
+    season: Annotated[int, typer.Option("--season", min=1950, help="Monitored season.")],
+    event: Annotated[str, typer.Option("--event", help="Prepared event name or slug.")],
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Add separate post-qualification targets for a prepared monitoring event."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_monitoring_add_targets(
+            data_config,
+            season=season,
+            event=event,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_monitoring_onboarding_summary(summary, data_config.project_root)
+
+
+@app.command("monitoring-data-readiness-report")
+def monitoring_data_readiness_report_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Summarize monitored-season data onboarding readiness."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_monitoring_data_readiness_report(data_config)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_monitoring_onboarding_summary(summary, data_config.project_root)
+
+
 @app.command(
     "prospective-monitoring-init",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -2016,6 +2144,21 @@ def _print_prospective_monitoring_summary(
     project_root: Path,
 ) -> None:
     typer.echo("Prospective monitoring command complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_monitoring_onboarding_summary(
+    summary: MonitoringOnboardingSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Monitoring onboarding command complete")
     typer.echo(f"Status: {summary.status}")
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Tables: {len(summary.table_paths)}")

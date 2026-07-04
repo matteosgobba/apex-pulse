@@ -367,6 +367,7 @@ def build_portfolio_summary_payload(
     season_aware_governance = artifacts["season_aware_governance_summary"] or {}
     season_aware_stability = artifacts["season_aware_stability_summary"] or {}
     prospective_monitoring = artifacts["prospective_monitoring_summary"] or {}
+    monitoring_data_readiness = artifacts["monitoring_data_readiness_summary"] or {}
     missing_artifacts = artifacts["missing_artifacts"]
     modes_available = [mode for mode in CHAMPION_MODES if mode in champion_metrics]
     best_by_checkpoint = _best_champion_mode_by_checkpoint(champion_metrics, backtest_report)
@@ -398,11 +399,12 @@ def build_portfolio_summary_payload(
             season_aware_governance,
             season_aware_stability,
             prospective_monitoring,
+            monitoring_data_readiness,
         ),
         "limitations": _limitations(),
         "recommended_next_milestone": (
-            "Milestone 36: run the frozen monitoring workflow only when local monitored-season "
-            "FP3 features and post-qualifying targets become available."
+            "Milestone 37: run the frozen monitoring workflow for prepared local monitored-season "
+            "events and settle only after separate qualifying targets are available."
         ),
         "temporal_weighting_if_available": _temporal_weighting_portfolio_summary(
             temporal_weighting_summary
@@ -445,6 +447,9 @@ def build_portfolio_summary_payload(
         ),
         "prospective_monitoring_if_available": _prospective_monitoring_portfolio_summary(
             prospective_monitoring
+        ),
+        "monitoring_data_onboarding_if_available": _monitoring_data_readiness_portfolio_summary(
+            monitoring_data_readiness
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -631,6 +636,11 @@ def build_model_card(
         "## Prospective monitoring",
         _prospective_monitoring_card_text(summary.get("prospective_monitoring_if_available")),
         "",
+        "## Monitoring data onboarding",
+        _monitoring_data_onboarding_card_text(
+            summary.get("monitoring_data_onboarding_if_available")
+        ),
+        "",
         "## Baselines",
         "The report compares champion policies against practice-lap baselines, including robust "
         "baselines that fall back from weak or extreme latest-session signals.",
@@ -728,6 +738,9 @@ def _load_artifacts(metrics_dir: Path) -> dict[str, Any]:
         ),
         "prospective_monitoring_summary": _read_json_if_exists(
             metrics_dir / "prospective_monitoring_summary.json"
+        ),
+        "monitoring_data_readiness_summary": _read_json_if_exists(
+            metrics_dir / "monitoring_data_readiness_summary.json"
         ),
         "event_error_summary": _read_parquet_if_exists(metrics_dir / "event_error_summary.parquet"),
         "driver_error_summary": _read_parquet_if_exists(
@@ -915,6 +928,7 @@ def _main_takeaways(
     season_aware_governance: dict[str, Any] | None = None,
     season_aware_stability: dict[str, Any] | None = None,
     prospective_monitoring: dict[str, Any] | None = None,
+    monitoring_data_readiness: dict[str, Any] | None = None,
 ) -> list[str]:
     takeaways: list[str] = []
     static = champion_metrics.get("static", {})
@@ -1028,6 +1042,15 @@ def _main_takeaways(
         takeaways.append(
             "Prospective monitoring is frozen and artifact-driven, separating forecasts from "
             f"settlements; status `{status}`, fresh evidence `{fresh}`."
+        )
+    if monitoring_data_readiness:
+        status = monitoring_data_readiness.get("status", "unknown")
+        forecastable = monitoring_data_readiness.get("forecastable_event_count", 0)
+        settleable = monitoring_data_readiness.get("settleable_event_count", 0)
+        takeaways.append(
+            "Monitoring data onboarding keeps FP3-safe features separate from settlement targets; "
+            f"status `{status}`, forecastable events `{forecastable}`, settleable events "
+            f"`{settleable}`."
         )
     if not takeaways:
         takeaways.append(
@@ -1331,6 +1354,27 @@ def _prospective_monitoring_portfolio_summary(
         "prospective_monitoring_policy_recommendation": summary.get(
             "policy_recommendation",
             "season_aware_candidate_requires_more_evidence",
+        ),
+    }
+
+
+def _monitoring_data_readiness_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "monitoring_data_onboarding_available": True,
+        "monitoring_data_onboarding_status": summary.get("status"),
+        "monitoring_data_onboarding_forecastable_event_count": int(
+            summary.get("forecastable_event_count", 0) or 0
+        ),
+        "monitoring_data_onboarding_settleable_event_count": int(
+            summary.get("settleable_event_count", 0) or 0
+        ),
+        "monitoring_data_onboarding_target_isolation_status": summary.get(
+            "target_isolation_status",
+            "unknown",
         ),
     }
 
@@ -1760,6 +1804,27 @@ def _prospective_monitoring_card_text(value: object) -> str:
         + f"integrity `{integrity}`, and fresh evidence `{fresh}`. Policy recommendation: "
         + f"`{recommendation}`. No monitored evidence may alter defaults, gates, thresholds, "
         + "candidate identities, temporal weighting, or hyperparameters."
+    )
+
+
+def _monitoring_data_onboarding_card_text(value: object) -> str:
+    intro = (
+        "Monitored-season onboarding stores pre-qualification FP3-safe features separately from "
+        "post-qualification target artifacts. Forecasts may use only the safe feature artifact; "
+        "settlement requires a separate validated qualifying-target artifact."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No monitoring data-readiness summary was available."
+    status = value.get("monitoring_data_onboarding_status", "missing")
+    forecastable = value.get("monitoring_data_onboarding_forecastable_event_count", 0)
+    settleable = value.get("monitoring_data_onboarding_settleable_event_count", 0)
+    isolation = value.get("monitoring_data_onboarding_target_isolation_status", "unknown")
+    return (
+        intro
+        + f" Current onboarding status `{status}` has `{forecastable}` forecastable events and "
+        + f"`{settleable}` settleable events; target isolation is `{isolation}`. No monitoring "
+        + "data result changes default policy behavior, gates, thresholds, candidate identities, "
+        + "temporal weighting, or hyperparameters."
     )
 
 

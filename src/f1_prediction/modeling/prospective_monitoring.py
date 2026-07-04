@@ -13,7 +13,19 @@ from typing import Any
 import pandas as pd
 
 from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig
+from f1_prediction.data.monitoring_onboarding import (
+    REGISTRY_ONBOARDING_COLUMNS,
+    ensure_registry_columns,
+    forbidden_target_columns,
+    target_artifact_path,
+    validate_target_artifact,
+)
+from f1_prediction.data.monitoring_onboarding import (
+    artifact_fingerprint as onboarding_artifact_fingerprint,
+)
 from f1_prediction.data.season_builder import build_combined_dataset_path
+from f1_prediction.features.historical_features import add_historical_features
+from f1_prediction.modeling.feature_groups import get_feature_columns_for_group
 from f1_prediction.modeling.prospective_policy_evaluation import (
     build_frozen_policy_profiles,
     records_for_json,
@@ -24,10 +36,12 @@ from f1_prediction.modeling.prospective_replay import (
     event_index_from_key,
     event_key_series,
     event_season,
+    historical_settings,
+    leakage_row,
     parse_event_key,
     prior_events_for,
     season_aware_decision,
-    train_event_sources,
+    training_manifest_row,
 )
 from f1_prediction.modeling.season_aware_governance import (
     CANDIDATE_TEMPORAL_POLICY,
@@ -36,6 +50,17 @@ from f1_prediction.modeling.season_aware_governance import (
     canonical_default_identity,
 )
 from f1_prediction.modeling.splits import ordered_event_keys
+from f1_prediction.modeling.tabular import (
+    TARGET_COLUMN,
+    build_regressors,
+    rank_gap_predictions,
+    usable_checkpoint_features,
+)
+from f1_prediction.modeling.temporal_weighting import (
+    TemporalWeightingPolicy,
+    prepare_temporal_training_data,
+)
+from f1_prediction.modeling.train_tabular import PREDICTION_COLUMNS
 from f1_prediction.utils.paths import ensure_directory
 
 PROTOCOL_VERSION = "1.0"
@@ -147,11 +172,12 @@ def create_prospective_monitoring_forecast(
         raise ValueError(f"Monitoring dataset unavailable: {dataset_status}")
     registry = load_or_build_registry(metrics_dir, protocol, dataset)
     event_row = resolve_registry_event(registry, event)
-    if str(event_row.get("forecast_status")) != "forecastable":
+    if not registry_event_forecastable(event_row):
         raise ValueError(f"Event is not forecastable: {event}")
     event_key = f"{int(event_row['monitor_season'])}/{event_row['event_slug']}"
     assert_forecast_not_exists(metrics_dir, protocol_name, str(event_row["event_slug"]))
 
+    dataset = monitoring_dataset_for_forecast(config, protocol, dataset, event_row)
     event_order = ordered_event_keys(dataset)
     prior_settled_events = settled_event_keys(metrics_dir, protocol_name)
     legal_train_events = [
@@ -167,7 +193,7 @@ def create_prospective_monitoring_forecast(
     if not legal_train_events:
         raise ValueError(f"No legal prior training history is available for {event_key}")
 
-    source = train_event_sources(
+    source = train_monitoring_event_sources(
         dataset=dataset,
         row_keys=event_key_series(dataset),
         event_order=event_order,
@@ -300,7 +326,10 @@ def create_prospective_monitoring_settlement(
         append_csv(metrics_dir / "prospective_monitoring_settlement_integrity_audit.csv", audit)
         refresh_integrity_outputs(metrics_dir, protocol)
         raise ValueError(f"Forecast snapshot mutation detected for {event_slug}")
-    outcomes = event_outcomes(dataset, int(protocol["monitor_season"]), event_slug)
+    validate_settlement_target_artifact(config, event_row)
+    outcomes = monitoring_target_outcomes(config, event_row)
+    if outcomes.empty:
+        outcomes = event_outcomes(dataset, int(protocol["monitor_season"]), event_slug)
     if outcomes.empty:
         raise ValueError(f"Qualifying targets are unavailable for {event_slug}")
     settlements = build_settlement_rows(
@@ -554,6 +583,230 @@ def build_readiness(
         columns=("requirement", "status", "blocking", "details"),
     )
     return readiness, missing
+
+
+def registry_event_forecastable(event_row: pd.Series) -> bool:
+    """Return whether a registry row is forecastable under old or onboarding schemas."""
+    if "forecastable" in event_row and not pd.isna(event_row.get("forecastable")):
+        return bool(event_row.get("forecastable"))
+    return str(event_row.get("forecast_status")) == "forecastable"
+
+
+def monitoring_dataset_for_forecast(
+    config: DataConfig,
+    protocol: dict[str, Any],
+    dataset: pd.DataFrame,
+    event_row: pd.Series,
+) -> pd.DataFrame:
+    """Combine frozen historical rows with one registered targetless feature artifact."""
+    feature_path = resolve_registered_path(
+        config,
+        event_row.get("feature_artifact_path"),
+    )
+    if feature_path is None or not feature_path.is_file():
+        return dataset
+    features = pd.read_parquet(feature_path)
+    forbidden = forbidden_target_columns(features)
+    if forbidden:
+        raise ValueError(
+            "Registered monitoring feature artifact contains forbidden target columns: "
+            + ", ".join(forbidden)
+        )
+    expected_fingerprint = event_row.get("feature_artifact_fingerprint")
+    if expected_fingerprint and not pd.isna(expected_fingerprint):
+        actual_fingerprint = onboarding_artifact_fingerprint(feature_path)
+        if str(expected_fingerprint) != actual_fingerprint:
+            raise ValueError("Registered monitoring feature artifact fingerprint is invalid")
+    event_key = f"{int(protocol['monitor_season'])}/{event_row['event_slug']}"
+    current_mask = event_key_series(dataset).astype(str).eq(event_key)
+    historical = dataset.loc[~current_mask].copy()
+    feature_rows = features.copy()
+    target_columns = (
+        "quali_position",
+        "quali_best_lap_time_sec",
+        "quali_gap_to_pole_sec",
+        "reached_q2",
+        "reached_q3",
+    )
+    for column in target_columns:
+        if column not in feature_rows:
+            feature_rows[column] = pd.NA
+    return pd.concat([historical, feature_rows], ignore_index=True, sort=False)
+
+
+def validate_settlement_target_artifact(config: DataConfig, event_row: pd.Series) -> None:
+    """Require a separate valid target artifact before settlement."""
+    feature_path = event_row.get("feature_artifact_path")
+    if feature_path is None or pd.isna(feature_path) or not str(feature_path).strip():
+        return
+    season = int(event_row["monitor_season"])
+    event = str(event_row.get("event", event_row["event_slug"]))
+    target_valid, reason = validate_target_artifact(config, season, event)
+    if not target_valid:
+        raise ValueError(f"Valid separate target artifact is required for settlement: {reason}")
+
+
+def monitoring_target_outcomes(config: DataConfig, event_row: pd.Series) -> pd.DataFrame:
+    """Read settlement-only targets and add the monitoring checkpoint key."""
+    season = int(event_row["monitor_season"])
+    event = str(event_row.get("event", event_row["event_slug"]))
+    path = target_artifact_path(config, season, event)
+    if not path.is_file():
+        return pd.DataFrame()
+    targets = pd.read_parquet(path).copy()
+    targets["checkpoint"] = FP3_CHECKPOINT
+    return targets
+
+
+def train_monitoring_event_sources(
+    *,
+    dataset: pd.DataFrame,
+    row_keys: pd.Series,
+    event_order: list[str],
+    event_key: str,
+    legal_train_events: list[str],
+    model_config: ModelConfig,
+    feature_config: FeatureConfig | None,
+    test_season: int,
+) -> dict[str, Any]:
+    """Fit monitoring candidates with targetless current-event rows."""
+    fold_scope = dataset[row_keys.isin([*legal_train_events, event_key])].copy()
+    fold_scope = add_historical_features(
+        fold_scope,
+        historical_settings(feature_config),
+        excluded_target_events={event_key},
+    )
+    fold_keys = event_key_series(fold_scope)
+    train = fold_scope[fold_keys.isin(legal_train_events)].copy()
+    test = fold_scope[fold_keys.eq(event_key)].copy()
+    if train.empty or test.empty:
+        raise ValueError(f"Monitoring event {event_key} must have train and test rows")
+    feature_columns = get_feature_columns_for_group(fold_scope, "base_plus_relative")
+    static_predictions, static_fit = fit_monitoring_source_candidate(
+        train=train,
+        test=test,
+        event_order=event_order,
+        event_key=event_key,
+        model_config=model_config,
+        feature_columns=feature_columns,
+        temporal_policy=TemporalWeightingPolicy.uniform,
+    )
+    weighted_predictions, weighted_fit = fit_monitoring_source_candidate(
+        train=train,
+        test=test,
+        event_order=event_order,
+        event_key=event_key,
+        model_config=model_config,
+        feature_columns=feature_columns,
+        temporal_policy=TemporalWeightingPolicy.current_season_only_with_prior,
+    )
+    manifest = [
+        training_manifest_row(
+            event_key=event_key,
+            test=test,
+            train=train,
+            legal_train_events=legal_train_events,
+            fit_payload=static_fit,
+            model_config=model_config,
+            temporal_policy="uniform",
+            policy_profile="static_baseline",
+            test_season=test_season,
+        ),
+        training_manifest_row(
+            event_key=event_key,
+            test=test,
+            train=train,
+            legal_train_events=legal_train_events,
+            fit_payload=weighted_fit,
+            model_config=model_config,
+            temporal_policy="current_season_only_with_prior",
+            policy_profile="season_aware_frozen",
+            test_season=test_season,
+        ),
+    ]
+    leakage = [leakage_row(row, event_order=event_order) for row in manifest]
+    return {
+        "event_key": event_key,
+        "test": test,
+        "static": static_predictions,
+        "weighted": weighted_predictions,
+        "manifest": manifest,
+        "leakage": leakage,
+    }
+
+
+def fit_monitoring_source_candidate(
+    *,
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    event_order: list[str],
+    event_key: str,
+    model_config: ModelConfig,
+    feature_columns: list[str],
+    temporal_policy: TemporalWeightingPolicy,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Train one FP3 RF candidate and predict targetless monitored rows."""
+    temporal = prepare_temporal_training_data(
+        train,
+        test_event=event_key,
+        event_order=event_order,
+        config=model_config.temporal_weighting,
+        policy=temporal_policy,
+    )
+    train_rows = temporal.train[temporal.train["checkpoint"].eq(FP3_CHECKPOINT)].dropna(
+        subset=[TARGET_COLUMN]
+    )
+    test_rows = test[test["checkpoint"].eq(FP3_CHECKPOINT)].copy()
+    if train_rows.empty or test_rows.empty:
+        raise ValueError("Monitoring forecast requires target-bearing training rows and test rows")
+    allowed = set(feature_columns)
+    features = [
+        column
+        for column in usable_checkpoint_features(train_rows, FP3_CHECKPOINT)
+        if column in allowed
+    ]
+    if not features:
+        raise ValueError(f"No usable numeric features for {FP3_CHECKPOINT}")
+    estimator = build_regressors(model_config)["random_forest"]
+    weights = temporal.sample_weights.reindex(train_rows.index).astype(float)
+    estimator.fit(
+        train_rows[features],
+        train_rows[TARGET_COLUMN],
+        regressor__sample_weight=weights,
+    )
+    columns = [column for column in PREDICTION_COLUMNS if column in test_rows]
+    frame = test_rows.loc[:, columns].copy()
+    target_columns = (
+        "quali_position",
+        "quali_best_lap_time_sec",
+        "quali_gap_to_pole_sec",
+        "reached_q2",
+        "reached_q3",
+    )
+    for column in target_columns:
+        if column not in frame:
+            frame[column] = pd.NA
+    frame["model_name"] = "random_forest"
+    frame["predicted_quali_gap_to_pole_sec"] = estimator.predict(test_rows[features])
+    frame["predicted_quali_position"] = rank_gap_predictions(frame)
+    frame["predicted_reached_q3"] = frame["predicted_quali_position"].le(10).astype("int8")
+    frame["feature_group"] = "base_plus_relative"
+    frame["temporal_weighting_policy"] = temporal_policy.value
+    frame["source_artifact_kind"] = "prospective_monitoring"
+    frame["prediction_source_identity"] = json.dumps(
+        {
+            "family": "ablation",
+            "model_name": "random_forest",
+            "feature_group": "base_plus_relative",
+            "temporal_weighting_policy": temporal_policy.value,
+            "event_key": event_key,
+        },
+        sort_keys=True,
+    )
+    return frame, {
+        "feature_columns": features,
+        "sample_weight_summary": temporal.summary,
+    }
 
 
 def monitoring_prediction_rows(
@@ -1523,10 +1776,10 @@ def load_or_build_registry(
 ) -> pd.DataFrame:
     path = metrics_dir / "prospective_monitoring_event_registry.csv"
     if path.is_file():
-        return pd.read_csv(path)
+        return ensure_registry_columns(pd.read_csv(path))
     registry = build_event_registry(protocol, dataset)
     registry.to_csv(path, index=False)
-    return registry
+    return ensure_registry_columns(registry)
 
 
 def resolve_registry_event(registry: pd.DataFrame, event: str) -> pd.Series:
@@ -1540,6 +1793,13 @@ def resolve_registry_event(registry: pd.DataFrame, event: str) -> pd.Series:
     if matches.empty:
         raise ValueError(f"Event is not registered for monitoring: {event}")
     return matches.iloc[0]
+
+
+def resolve_registered_path(config: DataConfig, value: object) -> Path | None:
+    if value is None or pd.isna(value) or not str(value).strip():
+        return None
+    path = Path(str(value))
+    return path if path.is_absolute() else config.project_root / path
 
 
 def assert_forecast_not_exists(metrics_dir: Path, protocol_name: str, event_slug: str) -> None:
@@ -1832,6 +2092,7 @@ def registry_columns() -> list[str]:
         "live_policy_status",
         "shadow_candidate_status",
         "readiness_blocking_reason",
+        *REGISTRY_ONBOARDING_COLUMNS,
     ]
 
 

@@ -164,6 +164,34 @@ def test_create_portfolio_report_writes_requested_outputs(tmp_path: Path) -> Non
     assert summary.model_card_path.is_file()
 
 
+def test_portfolio_report_includes_monitoring_data_onboarding_when_available(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_minimal_artifacts(config.metrics_output_dir)
+    (config.metrics_output_dir / "monitoring_data_readiness_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "partially_ready",
+                "forecastable_event_count": 1,
+                "settleable_event_count": 0,
+                "target_isolation_status": "valid",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    summary = create_portfolio_report(config)
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+    model_card = summary.model_card_path.read_text(encoding="utf-8")
+
+    onboarding = payload["monitoring_data_onboarding_if_available"]
+    assert onboarding["monitoring_data_onboarding_available"] is True
+    assert onboarding["monitoring_data_onboarding_status"] == "partially_ready"
+    assert onboarding["monitoring_data_onboarding_forecastable_event_count"] == 1
+    assert "Monitoring data onboarding" in model_card
+
+
 def test_portfolio_report_includes_guarded_mode_when_artifacts_exist(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_minimal_artifacts(

@@ -363,6 +363,26 @@ def test_backtest_report_includes_champion_source_lineage_summary() -> None:
     ]
 
 
+def test_backtest_report_includes_monitoring_data_onboarding_summary() -> None:
+    report = build_backtest_report_payload(
+        _quality(),
+        _baseline_metrics(),
+        _trained_metrics(),
+        monitoring_data_readiness_summary={
+            "status": "not_ready",
+            "forecastable_event_count": 1,
+            "settleable_event_count": 0,
+            "target_isolation_status": "valid",
+        },
+    )
+
+    assert report["monitoring_data_onboarding_available"] is True
+    assert report["monitoring_data_onboarding_status"] == "not_ready"
+    assert report["monitoring_data_onboarding_forecastable_event_count"] == 1
+    assert report["monitoring_data_onboarding_settleable_event_count"] == 0
+    assert report["monitoring_data_onboarding_target_isolation_status"] == "valid"
+
+
 def _quality() -> dict[str, object]:
     return {
         "n_rows": 120,

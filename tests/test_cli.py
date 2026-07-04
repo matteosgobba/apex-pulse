@@ -5,6 +5,7 @@ from typer.testing import CliRunner
 from f1_prediction.cli import app
 from f1_prediction.config import ChampionPolicyConfig, DataConfig, FeatureConfig, PushLapConfig
 from f1_prediction.data.ingest import EventIngestionSummary
+from f1_prediction.data.monitoring_onboarding import MonitoringOnboardingSummary
 from f1_prediction.data.season_builder import SeasonDatasetBuildSummary
 from f1_prediction.features.build import SessionFeatureBuildSummary
 from f1_prediction.features.modeling_dataset import ModelingDatasetBuildSummary
@@ -1054,6 +1055,85 @@ def test_prospective_monitoring_init_command_is_registered(monkeypatch, tmp_path
     assert captured["train_seasons"] == (2023, 2024, 2025)
 
 
+def test_monitoring_prepare_event_command_is_registered(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr("f1_prediction.cli.load_feature_config", lambda **kwargs: object())
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_monitoring_prepare_event",
+        lambda *args, **kwargs: _onboarding_summary(tmp_path, "manifest.json"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["monitoring-prepare-event", "--season", "2026", "--event", "Bahrain"],
+    )
+
+    assert result.exit_code == 0
+    assert "Monitoring onboarding command complete" in result.output
+
+
+def test_monitoring_register_event_command_is_registered(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_monitoring_register_event",
+        lambda *args, **kwargs: _onboarding_summary(tmp_path, "registry.csv"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "monitoring-register-event",
+            "--protocol-name",
+            "season_2026_v1",
+            "--season",
+            "2026",
+            "--event",
+            "Bahrain",
+            "--event-order",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Monitoring onboarding command complete" in result.output
+
+
+def test_monitoring_add_targets_command_is_registered(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_monitoring_add_targets",
+        lambda *args, **kwargs: _onboarding_summary(tmp_path, "targets.parquet"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["monitoring-add-targets", "--season", "2026", "--event", "Bahrain"],
+    )
+
+    assert result.exit_code == 0
+    assert "Monitoring onboarding command complete" in result.output
+
+
+def test_monitoring_data_readiness_report_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_monitoring_data_readiness_report",
+        lambda *args, **kwargs: _onboarding_summary(tmp_path, "readiness.json"),
+    )
+
+    result = CliRunner().invoke(app, ["monitoring-data-readiness-report"])
+
+    assert result.exit_code == 0
+    assert "Monitoring onboarding command complete" in result.output
+
+
 def test_prospective_monitoring_forecast_command_is_registered(
     monkeypatch,
     tmp_path: Path,
@@ -1168,6 +1248,17 @@ def _config(project_root: Path) -> DataConfig:
 
 def _monitoring_summary(tmp_path: Path, filename: str) -> ProspectiveMonitoringSummary:
     return ProspectiveMonitoringSummary(
+        status="complete",
+        summary_path=tmp_path / filename,
+        table_paths=(tmp_path / filename,),
+        figure_paths=(),
+        missing_inputs=(),
+        generation_issues=(),
+    )
+
+
+def _onboarding_summary(tmp_path: Path, filename: str) -> MonitoringOnboardingSummary:
+    return MonitoringOnboardingSummary(
         status="complete",
         summary_path=tmp_path / filename,
         table_paths=(tmp_path / filename,),
