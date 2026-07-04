@@ -64,6 +64,19 @@ from f1_prediction.modeling.policy_simulation import (
 )
 from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
 from f1_prediction.modeling.portfolio_report import create_portfolio_report as run_portfolio_report
+from f1_prediction.modeling.prospective_monitoring import ProspectiveMonitoringSummary
+from f1_prediction.modeling.prospective_monitoring import (
+    create_prospective_monitoring_forecast as run_prospective_monitoring_forecast,
+)
+from f1_prediction.modeling.prospective_monitoring import (
+    create_prospective_monitoring_protocol as run_prospective_monitoring_protocol,
+)
+from f1_prediction.modeling.prospective_monitoring import (
+    create_prospective_monitoring_report as run_prospective_monitoring_report,
+)
+from f1_prediction.modeling.prospective_monitoring import (
+    create_prospective_monitoring_settlement as run_prospective_monitoring_settlement,
+)
 from f1_prediction.modeling.prospective_policy_evaluation import (
     ProspectivePolicyEvaluationSummary,
 )
@@ -1252,6 +1265,154 @@ def prospective_policy_replay_command(
     _print_prospective_policy_replay_summary(summary, data_config.project_root)
 
 
+@app.command(
+    "prospective-monitoring-init",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+def prospective_monitoring_init_command(
+    ctx: typer.Context,
+    protocol_name: Annotated[str, typer.Option("--protocol-name", help="Frozen protocol name.")],
+    monitor_season: Annotated[
+        int,
+        typer.Option("--monitor-season", min=1950, help="Unseen season to monitor."),
+    ],
+    train_seasons: Annotated[
+        list[int],
+        typer.Option(
+            "--train-seasons",
+            "--train-season",
+            min=1950,
+            help="Completed seasons allowed before the monitored season.",
+        ),
+    ],
+    dataset_path: Annotated[
+        Path | None,
+        typer.Option("--dataset", help="Optional local monitoring/modeling dataset path."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Freeze a prospective monitoring protocol and event registry."""
+    configure_logging(verbose=verbose)
+    try:
+        parsed_train_seasons = tuple(train_seasons) + tuple(int(season) for season in ctx.args)
+    except ValueError as exc:
+        typer.echo("Error: --train-seasons values must be integer seasons.", err=True)
+        raise typer.Exit(code=1) from exc
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_prospective_monitoring_protocol(
+            data_config,
+            model_config,
+            protocol_name=protocol_name,
+            monitor_season=monitor_season,
+            train_seasons=parsed_train_seasons,
+            dataset_path=dataset_path,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_monitoring_summary(summary, data_config.project_root)
+
+
+@app.command("prospective-monitoring-forecast")
+def prospective_monitoring_forecast_command(
+    protocol_name: Annotated[str, typer.Option("--protocol-name", help="Frozen protocol name.")],
+    event: Annotated[str, typer.Option("--event", help="Registered event to forecast.")],
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Create one immutable monitoring forecast snapshot."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_prospective_monitoring_forecast(
+            data_config,
+            model_config,
+            feature_config,
+            protocol_name=protocol_name,
+            event=event,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_monitoring_summary(summary, data_config.project_root)
+
+
+@app.command("prospective-monitoring-settle")
+def prospective_monitoring_settle_command(
+    protocol_name: Annotated[str, typer.Option("--protocol-name", help="Frozen protocol name.")],
+    event: Annotated[str, typer.Option("--event", help="Forecasted event to settle.")],
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Settle an existing monitoring forecast after local outcomes are available."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_prospective_monitoring_settlement(
+            data_config,
+            protocol_name=protocol_name,
+            event=event,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_monitoring_summary(summary, data_config.project_root)
+
+
+@app.command("prospective-monitoring-report")
+def prospective_monitoring_report_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Summarize frozen prospective monitoring artifacts."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_prospective_monitoring_report(data_config)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_monitoring_summary(summary, data_config.project_root)
+
+
 @app.command("prospective-replay-eligibility-audit")
 def prospective_replay_eligibility_audit_command(
     config_path: Annotated[
@@ -1846,6 +2007,21 @@ def _print_prospective_policy_replay_summary(
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Tables: {len(summary.table_paths)}")
     typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_prospective_monitoring_summary(
+    summary: ProspectiveMonitoringSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Prospective monitoring command complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Tables: {len(summary.table_paths)}")
+    typer.echo(f"Figures: {len(summary.figure_paths)}")
+    if summary.missing_inputs:
+        typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
     if summary.generation_issues:
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
 

@@ -17,6 +17,7 @@ from f1_prediction.modeling.champion_policy import ChampionBacktestSummary
 from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
 from f1_prediction.modeling.policy_simulation import PolicySimulationSummary
 from f1_prediction.modeling.portfolio_report import PortfolioReportSummary
+from f1_prediction.modeling.prospective_monitoring import ProspectiveMonitoringSummary
 from f1_prediction.modeling.season_aware_candidate_audit import (
     SeasonAwareCandidateAuditSummary,
 )
@@ -1018,6 +1019,112 @@ def test_season_aware_stability_report_command_is_registered(
     assert "Season-aware stability report complete" in result.output
 
 
+def test_prospective_monitoring_init_command_is_registered(monkeypatch, tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: object())
+
+    def fake_monitoring_protocol(*args, **kwargs):
+        captured.update(kwargs)
+        return _monitoring_summary(tmp_path, "readiness.json")
+
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_prospective_monitoring_protocol",
+        fake_monitoring_protocol,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "prospective-monitoring-init",
+            "--protocol-name",
+            "season_2026_v1",
+            "--monitor-season",
+            "2026",
+            "--train-seasons",
+            "2023",
+            "2024",
+            "2025",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Prospective monitoring command complete" in result.output
+    assert captured["train_seasons"] == (2023, 2024, 2025)
+
+
+def test_prospective_monitoring_forecast_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr("f1_prediction.cli.load_model_config", lambda **kwargs: object())
+    monkeypatch.setattr("f1_prediction.cli.load_feature_config", lambda **kwargs: object())
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_prospective_monitoring_forecast",
+        lambda *args, **kwargs: _monitoring_summary(tmp_path, "forecast.csv"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "prospective-monitoring-forecast",
+            "--protocol-name",
+            "season_2026_v1",
+            "--event",
+            "Monza",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Prospective monitoring command complete" in result.output
+
+
+def test_prospective_monitoring_settle_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_prospective_monitoring_settlement",
+        lambda *args, **kwargs: _monitoring_summary(tmp_path, "settlement.csv"),
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "prospective-monitoring-settle",
+            "--protocol-name",
+            "season_2026_v1",
+            "--event",
+            "Monza",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Prospective monitoring command complete" in result.output
+
+
+def test_prospective_monitoring_report_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_prospective_monitoring_report",
+        lambda *args, **kwargs: _monitoring_summary(tmp_path, "summary.json"),
+    )
+
+    result = CliRunner().invoke(app, ["prospective-monitoring-report"])
+
+    assert result.exit_code == 0
+    assert "Prospective monitoring command complete" in result.output
+
+
 def test_rebuild_season_aware_artifacts_command_is_registered(
     monkeypatch,
     tmp_path: Path,
@@ -1056,4 +1163,15 @@ def _config(project_root: Path) -> DataConfig:
         session_features_output_dir=project_root / "session_features",
         modeling_output_dir=project_root / "modeling",
         metrics_output_dir=project_root / "metrics",
+    )
+
+
+def _monitoring_summary(tmp_path: Path, filename: str) -> ProspectiveMonitoringSummary:
+    return ProspectiveMonitoringSummary(
+        status="complete",
+        summary_path=tmp_path / filename,
+        table_paths=(tmp_path / filename,),
+        figure_paths=(),
+        missing_inputs=(),
+        generation_issues=(),
     )

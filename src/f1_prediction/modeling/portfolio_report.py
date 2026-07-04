@@ -366,6 +366,7 @@ def build_portfolio_summary_payload(
     prospective_replay_shadow = artifacts["prospective_replay_shadow_candidate_summary"] or {}
     season_aware_governance = artifacts["season_aware_governance_summary"] or {}
     season_aware_stability = artifacts["season_aware_stability_summary"] or {}
+    prospective_monitoring = artifacts["prospective_monitoring_summary"] or {}
     missing_artifacts = artifacts["missing_artifacts"]
     modes_available = [mode for mode in CHAMPION_MODES if mode in champion_metrics]
     best_by_checkpoint = _best_champion_mode_by_checkpoint(champion_metrics, backtest_report)
@@ -396,11 +397,12 @@ def build_portfolio_summary_payload(
             prospective_replay_shadow,
             season_aware_governance,
             season_aware_stability,
+            prospective_monitoring,
         ),
         "limitations": _limitations(),
         "recommended_next_milestone": (
-            "Milestone 35: collect additional live-style prospective evidence or design a "
-            "strictly diagnostic policy experiment without changing deployed defaults."
+            "Milestone 36: run the frozen monitoring workflow only when local monitored-season "
+            "FP3 features and post-qualifying targets become available."
         ),
         "temporal_weighting_if_available": _temporal_weighting_portfolio_summary(
             temporal_weighting_summary
@@ -440,6 +442,9 @@ def build_portfolio_summary_payload(
         ),
         "season_aware_stability_if_available": _season_aware_stability_portfolio_summary(
             season_aware_stability
+        ),
+        "prospective_monitoring_if_available": _prospective_monitoring_portfolio_summary(
+            prospective_monitoring
         ),
         "generated_at": _utc_now(),
         "generated_outputs": {
@@ -623,6 +628,9 @@ def build_model_card(
         "## Season-aware stability",
         _season_aware_stability_card_text(summary.get("season_aware_stability_if_available")),
         "",
+        "## Prospective monitoring",
+        _prospective_monitoring_card_text(summary.get("prospective_monitoring_if_available")),
+        "",
         "## Baselines",
         "The report compares champion policies against practice-lap baselines, including robust "
         "baselines that fall back from weak or extreme latest-session signals.",
@@ -717,6 +725,9 @@ def _load_artifacts(metrics_dir: Path) -> dict[str, Any]:
         ),
         "season_aware_stability_summary": _read_json_if_exists(
             metrics_dir / "season_aware_stability_summary.json"
+        ),
+        "prospective_monitoring_summary": _read_json_if_exists(
+            metrics_dir / "prospective_monitoring_summary.json"
         ),
         "event_error_summary": _read_parquet_if_exists(metrics_dir / "event_error_summary.parquet"),
         "driver_error_summary": _read_parquet_if_exists(
@@ -903,6 +914,7 @@ def _main_takeaways(
     prospective_replay_shadow: dict[str, Any] | None = None,
     season_aware_governance: dict[str, Any] | None = None,
     season_aware_stability: dict[str, Any] | None = None,
+    prospective_monitoring: dict[str, Any] | None = None,
 ) -> list[str]:
     takeaways: list[str] = []
     static = champion_metrics.get("static", {})
@@ -1009,6 +1021,13 @@ def _main_takeaways(
             "Season-aware stability analysis breaks the weighted FP3 candidate signal down by "
             "season, regime, event concentration, tail risk, and replay/shadow status; "
             f"classification `{classification}`, policy recommendation `{recommendation}`."
+        )
+    if prospective_monitoring:
+        status = prospective_monitoring.get("status", "unknown")
+        fresh = prospective_monitoring.get("fresh_evidence_status", "not_collected")
+        takeaways.append(
+            "Prospective monitoring is frozen and artifact-driven, separating forecasts from "
+            f"settlements; status `{status}`, fresh evidence `{fresh}`."
         )
     if not takeaways:
         takeaways.append(
@@ -1288,6 +1307,28 @@ def _season_aware_stability_portfolio_summary(
         "season_aware_stability_classification": summary.get("overall_stability_classification"),
         "season_aware_stability_primary_caution": primary_caution,
         "season_aware_stability_policy_recommendation": summary.get(
+            "policy_recommendation",
+            "season_aware_candidate_requires_more_evidence",
+        ),
+    }
+
+
+def _prospective_monitoring_portfolio_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, object] | None:
+    if not summary:
+        return None
+    return {
+        "prospective_monitoring_available": True,
+        "prospective_monitoring_status": summary.get("status"),
+        "prospective_monitoring_protocol_name": summary.get("protocol_name"),
+        "prospective_monitoring_monitor_season": summary.get("monitor_season"),
+        "prospective_monitoring_integrity_status": summary.get("integrity_status"),
+        "prospective_monitoring_fresh_evidence_status": summary.get(
+            "fresh_evidence_status",
+            "not_collected",
+        ),
+        "prospective_monitoring_policy_recommendation": summary.get(
             "policy_recommendation",
             "season_aware_candidate_requires_more_evidence",
         ),
@@ -1692,6 +1733,33 @@ def _season_aware_stability_card_text(value: object) -> str:
         + f" Overall classification: `{classification}`. Primary caution: {caution_text}. "
         + f"Policy recommendation: `{recommendation}`. No champion policy, threshold, "
         + "temporal weighting rule, model identity, or hyperparameter changed."
+    )
+
+
+def _prospective_monitoring_card_text(value: object) -> str:
+    intro = (
+        "The prospective monitoring workflow pre-registers a frozen out-of-season protocol, "
+        "keeps pre-qualification forecasts separate from post-qualification settlement, and "
+        "tracks the static or guarded live-policy reference separately from diagnostic weighted "
+        "shadow candidates."
+    )
+    if not isinstance(value, dict) or not value:
+        return intro + " No prospective monitoring summary was available."
+    status = value.get("prospective_monitoring_status", "missing")
+    protocol = value.get("prospective_monitoring_protocol_name")
+    season = value.get("prospective_monitoring_monitor_season")
+    integrity = value.get("prospective_monitoring_integrity_status")
+    fresh = value.get("prospective_monitoring_fresh_evidence_status", "not_collected")
+    recommendation = value.get(
+        "prospective_monitoring_policy_recommendation",
+        "season_aware_candidate_requires_more_evidence",
+    )
+    return (
+        intro
+        + f" Protocol `{protocol}` monitors season `{season}` with status `{status}`, "
+        + f"integrity `{integrity}`, and fresh evidence `{fresh}`. Policy recommendation: "
+        + f"`{recommendation}`. No monitored evidence may alter defaults, gates, thresholds, "
+        + "candidate identities, temporal weighting, or hyperparameters."
     )
 
 

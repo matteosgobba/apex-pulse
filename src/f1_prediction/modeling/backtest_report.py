@@ -52,6 +52,7 @@ def create_backtest_report(
     prospective_replay_eligibility_summary_path: Path | None = None,
     season_aware_governance_summary_path: Path | None = None,
     season_aware_stability_summary_path: Path | None = None,
+    prospective_monitoring_summary_path: Path | None = None,
 ) -> BacktestReportSummary:
     """Read available evaluation artifacts and persist a compact summary."""
     source_path = _resolve_path(
@@ -150,6 +151,11 @@ def create_backtest_report(
         or config.metrics_output_dir / "season_aware_stability_summary.json",
         config.project_root,
     )
+    prospective_monitoring_path = _resolve_path(
+        prospective_monitoring_summary_path
+        or config.metrics_output_dir / "prospective_monitoring_summary.json",
+        config.project_root,
+    )
     champion_mode_metrics = _read_champion_mode_metrics(config.metrics_output_dir)
     dataset = pd.read_parquet(source_path)
     quality = (
@@ -206,6 +212,9 @@ def create_backtest_report(
     season_aware_stability_summary = (
         _read_json(season_aware_stability_path) if season_aware_stability_path.is_file() else None
     )
+    prospective_monitoring_summary = (
+        _read_json(prospective_monitoring_path) if prospective_monitoring_path.is_file() else None
+    )
     if champion_metrics is not None:
         mode = str(champion_metrics.get("selection_mode", ""))
         if mode:
@@ -232,6 +241,7 @@ def create_backtest_report(
         prospective_replay_eligibility_summary=prospective_replay_eligibility_summary,
         season_aware_governance_summary=season_aware_governance_summary,
         season_aware_stability_summary=season_aware_stability_summary,
+        prospective_monitoring_summary=prospective_monitoring_summary,
     )
 
     output_path = config.metrics_output_dir / "backtest_report.json"
@@ -271,6 +281,7 @@ def build_backtest_report_payload(
     prospective_replay_eligibility_summary: dict[str, Any] | None = None,
     season_aware_governance_summary: dict[str, Any] | None = None,
     season_aware_stability_summary: dict[str, Any] | None = None,
+    prospective_monitoring_summary: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Compose comparable best-model and best-baseline metrics by checkpoint."""
     available_backtests = _available_backtests(
@@ -308,6 +319,7 @@ def build_backtest_report_payload(
         )
         payload.update(_season_aware_governance_summary(season_aware_governance_summary))
         payload.update(_season_aware_stability_summary(season_aware_stability_summary))
+        payload.update(_prospective_monitoring_summary(prospective_monitoring_summary))
         return payload
 
     training_status = (
@@ -367,6 +379,7 @@ def build_backtest_report_payload(
     payload.update(_prospective_replay_eligibility_summary(prospective_replay_eligibility_summary))
     payload.update(_season_aware_governance_summary(season_aware_governance_summary))
     payload.update(_season_aware_stability_summary(season_aware_stability_summary))
+    payload.update(_prospective_monitoring_summary(prospective_monitoring_summary))
     return payload
 
 
@@ -1088,6 +1101,33 @@ def _season_aware_stability_summary(summary: dict[str, Any] | None) -> dict[str,
         "season_aware_stability_classification": summary.get("overall_stability_classification"),
         "season_aware_stability_primary_caution": primary_caution,
         "season_aware_stability_policy_recommendation": summary.get(
+            "policy_recommendation",
+            "season_aware_candidate_requires_more_evidence",
+        ),
+    }
+
+
+def _prospective_monitoring_summary(summary: dict[str, Any] | None) -> dict[str, object]:
+    if not summary:
+        return {
+            "prospective_monitoring_available": False,
+            "prospective_monitoring_status": "missing",
+            "prospective_monitoring_protocol_name": None,
+            "prospective_monitoring_monitor_season": None,
+            "prospective_monitoring_integrity_status": "missing",
+            "prospective_monitoring_fresh_evidence_status": "not_collected",
+            "prospective_monitoring_policy_recommendation": (
+                "season_aware_candidate_requires_more_evidence"
+            ),
+        }
+    return {
+        "prospective_monitoring_available": True,
+        "prospective_monitoring_status": summary.get("status"),
+        "prospective_monitoring_protocol_name": summary.get("protocol_name"),
+        "prospective_monitoring_monitor_season": summary.get("monitor_season"),
+        "prospective_monitoring_integrity_status": summary.get("integrity_status"),
+        "prospective_monitoring_fresh_evidence_status": summary.get("fresh_evidence_status"),
+        "prospective_monitoring_policy_recommendation": summary.get(
             "policy_recommendation",
             "season_aware_candidate_requires_more_evidence",
         ),
