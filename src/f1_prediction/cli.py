@@ -6,6 +6,8 @@ from typing import Annotated
 import typer
 
 from f1_prediction.config import load_data_config, load_feature_config, load_model_config
+from f1_prediction.dashboard.export import DashboardExportSummary
+from f1_prediction.dashboard.export import export_dashboard_artifacts as run_dashboard_export
 from f1_prediction.data.fastf1_loader import (
     SessionDataUnavailableError,
     SessionLoadResult,
@@ -1571,6 +1573,45 @@ def prospective_monitoring_report_command(
     _print_prospective_monitoring_summary(summary, data_config.project_root)
 
 
+@app.command("dashboard-export")
+def dashboard_export_command(
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-dir",
+            help="Dashboard JSON output directory. Defaults to reports/dashboard.",
+        ),
+    ] = None,
+    season: Annotated[
+        int | None,
+        typer.Option("--season", min=1950, help="Optional monitored season filter."),
+    ] = None,
+    event: Annotated[
+        str | None,
+        typer.Option("--event", help="Optional event name or slug filter."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Export read-only dashboard JSON artifacts from existing final reports."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_dashboard_export(
+            data_config,
+            output_dir=output_dir,
+            season=season,
+            event=event,
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_dashboard_export_summary(summary, data_config.project_root)
+
+
 @app.command("prospective-replay-eligibility-audit")
 def prospective_replay_eligibility_audit_command(
     config_path: Annotated[
@@ -2195,6 +2236,18 @@ def _print_monitoring_onboarding_summary(
     typer.echo(f"Figures: {len(summary.figure_paths)}")
     if summary.missing_inputs:
         typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
+    if summary.generation_issues:
+        typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_dashboard_export_summary(summary: DashboardExportSummary, project_root: Path) -> None:
+    typer.echo("Dashboard export completed")
+    typer.echo(f"Status: {summary.status}")
+    current_event = summary.current_event or "none"
+    typer.echo(f"Current event: {current_event}")
+    typer.echo(f"Lifecycle state: {summary.lifecycle_state}")
+    typer.echo(f"Output directory: {_display_path(summary.output_dir, project_root)}")
+    typer.echo(f"Artifacts written: {len(summary.artifact_paths)}")
     if summary.generation_issues:
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
 
