@@ -82,6 +82,9 @@ from f1_prediction.modeling.prospective_monitoring import (
     create_prospective_monitoring_forecast as run_prospective_monitoring_forecast,
 )
 from f1_prediction.modeling.prospective_monitoring import (
+    create_prospective_monitoring_preflight as run_prospective_monitoring_preflight,
+)
+from f1_prediction.modeling.prospective_monitoring import (
     create_prospective_monitoring_protocol as run_prospective_monitoring_protocol,
 )
 from f1_prediction.modeling.prospective_monitoring import (
@@ -1449,6 +1452,33 @@ def prospective_monitoring_init_command(
             dataset_path=dataset_path,
         )
     except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_monitoring_summary(summary, data_config.project_root)
+
+
+@app.command("prospective-monitoring-preflight")
+def prospective_monitoring_preflight_command(
+    protocol_name: Annotated[str, typer.Option("--protocol-name", help="Frozen protocol name.")],
+    season: Annotated[int, typer.Option("--season", help="Monitored season.")],
+    event: Annotated[str, typer.Option("--event", help="Registered event to preflight.")],
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Validate whether a monitored event is safe to forecast before qualifying."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_prospective_monitoring_preflight(
+            data_config,
+            protocol_name=protocol_name,
+            season=season,
+            event=event,
+        )
+    except (ValueError, OSError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     _print_prospective_monitoring_summary(summary, data_config.project_root)

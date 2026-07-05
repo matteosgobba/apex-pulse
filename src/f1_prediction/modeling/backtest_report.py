@@ -1144,6 +1144,11 @@ def _prospective_monitoring_summary(summary: dict[str, Any] | None) -> dict[str,
             "monitoring_legacy_event_order_exclusion_count": 0,
             "monitoring_prior_evidence_lineage_status": "not_evaluated",
             "monitoring_next_forecast_prior_evidence_status": "not_evaluated",
+            "prospective_monitoring_preflight_available": False,
+            "prospective_monitoring_preflight_status": "missing",
+            "prospective_monitoring_preflight_blocking_check_count": 0,
+            "prospective_monitoring_next_event_ready_to_forecast": False,
+            "prospective_monitoring_preflight_runbook_path": None,
         }
     return {
         "prospective_monitoring_available": True,
@@ -1183,6 +1188,22 @@ def _prospective_monitoring_summary(summary: dict[str, Any] | None) -> dict[str,
             "monitoring_next_forecast_prior_evidence_status",
             "not_evaluated",
         ),
+        "prospective_monitoring_preflight_available": bool(
+            summary.get("prospective_monitoring_preflight_available", False)
+        ),
+        "prospective_monitoring_preflight_status": summary.get(
+            "prospective_monitoring_preflight_status",
+            "missing",
+        ),
+        "prospective_monitoring_preflight_blocking_check_count": int(
+            summary.get("prospective_monitoring_preflight_blocking_check_count", 0) or 0
+        ),
+        "prospective_monitoring_next_event_ready_to_forecast": bool(
+            summary.get("prospective_monitoring_next_event_ready_to_forecast", False)
+        ),
+        "prospective_monitoring_preflight_runbook_path": summary.get(
+            "prospective_monitoring_preflight_runbook_path"
+        ),
     }
 
 
@@ -1204,6 +1225,11 @@ def _monitoring_data_readiness_summary(summary: dict[str, Any] | None) -> dict[s
             "monitoring_legacy_event_order_exclusion_count": 0,
             "monitoring_prior_evidence_lineage_status": "not_evaluated",
             "monitoring_next_forecast_prior_evidence_status": "not_evaluated",
+            "prospective_monitoring_preflight_available": False,
+            "prospective_monitoring_preflight_status": "missing",
+            "prospective_monitoring_preflight_blocking_check_count": 0,
+            "prospective_monitoring_next_event_ready_to_forecast": False,
+            "prospective_monitoring_preflight_runbook_path": None,
         }
     return {
         "monitoring_data_onboarding_available": True,
@@ -1244,6 +1270,22 @@ def _monitoring_data_readiness_summary(summary: dict[str, Any] | None) -> dict[s
         "monitoring_next_forecast_prior_evidence_status": summary.get(
             "monitoring_next_forecast_prior_evidence_status",
             "not_evaluated",
+        ),
+        "prospective_monitoring_preflight_available": bool(
+            summary.get("prospective_monitoring_preflight_available", False)
+        ),
+        "prospective_monitoring_preflight_status": summary.get(
+            "prospective_monitoring_preflight_status",
+            "missing",
+        ),
+        "prospective_monitoring_preflight_blocking_check_count": int(
+            summary.get("prospective_monitoring_preflight_blocking_check_count", 0) or 0
+        ),
+        "prospective_monitoring_next_event_ready_to_forecast": bool(
+            summary.get("prospective_monitoring_next_event_ready_to_forecast", False)
+        ),
+        "prospective_monitoring_preflight_runbook_path": summary.get(
+            "prospective_monitoring_preflight_runbook_path"
         ),
     }
 

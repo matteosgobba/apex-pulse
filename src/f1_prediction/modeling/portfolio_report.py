@@ -1382,6 +1382,22 @@ def _prospective_monitoring_portfolio_summary(
             "monitoring_next_forecast_prior_evidence_status",
             "not_evaluated",
         ),
+        "prospective_monitoring_preflight_available": bool(
+            summary.get("prospective_monitoring_preflight_available", False)
+        ),
+        "prospective_monitoring_preflight_status": summary.get(
+            "prospective_monitoring_preflight_status",
+            "missing",
+        ),
+        "prospective_monitoring_preflight_blocking_check_count": int(
+            summary.get("prospective_monitoring_preflight_blocking_check_count", 0) or 0
+        ),
+        "prospective_monitoring_next_event_ready_to_forecast": bool(
+            summary.get("prospective_monitoring_next_event_ready_to_forecast", False)
+        ),
+        "prospective_monitoring_preflight_runbook_path": summary.get(
+            "prospective_monitoring_preflight_runbook_path"
+        ),
     }
 
 
@@ -1429,6 +1445,22 @@ def _monitoring_data_readiness_portfolio_summary(
         "monitoring_next_forecast_prior_evidence_status": summary.get(
             "monitoring_next_forecast_prior_evidence_status",
             "not_evaluated",
+        ),
+        "prospective_monitoring_preflight_available": bool(
+            summary.get("prospective_monitoring_preflight_available", False)
+        ),
+        "prospective_monitoring_preflight_status": summary.get(
+            "prospective_monitoring_preflight_status",
+            "missing",
+        ),
+        "prospective_monitoring_preflight_blocking_check_count": int(
+            summary.get("prospective_monitoring_preflight_blocking_check_count", 0) or 0
+        ),
+        "prospective_monitoring_next_event_ready_to_forecast": bool(
+            summary.get("prospective_monitoring_next_event_ready_to_forecast", False)
+        ),
+        "prospective_monitoring_preflight_runbook_path": summary.get(
+            "prospective_monitoring_preflight_runbook_path"
         ),
     }
 
@@ -1851,6 +1883,10 @@ def _prospective_monitoring_card_text(value: object) -> str:
     lineage = value.get("monitoring_event_order_lineage_status", "not_evaluated")
     exclusions = value.get("monitoring_legacy_event_order_exclusion_count", 0)
     prior_lineage = value.get("monitoring_prior_evidence_lineage_status", "not_evaluated")
+    preflight_status = value.get("prospective_monitoring_preflight_status", "missing")
+    preflight_blocks = value.get("prospective_monitoring_preflight_blocking_check_count", 0)
+    ready = value.get("prospective_monitoring_next_event_ready_to_forecast", False)
+    runbook = value.get("prospective_monitoring_preflight_runbook_path")
     recommendation = value.get(
         "prospective_monitoring_policy_recommendation",
         "season_aware_candidate_requires_more_evidence",
@@ -1863,7 +1899,9 @@ def _prospective_monitoring_card_text(value: object) -> str:
         + f"`{prior_lineage}`. Legacy forecasts and settlements remain descriptive immutable "
         + "records but are excluded from future prior-only gate evidence when their artifact "
         + "event order does not match the frozen registry. All newly created forecasts derive "
-        + "chronology from the registry only. Policy recommendation: "
+        + "chronology from the registry only. Preflight status is "
+        + f"`{preflight_status}` with `{preflight_blocks}` blocking checks and next-event ready "
+        + f"state `{ready}`; runbook `{runbook}`. Policy recommendation: "
         + f"`{recommendation}`. No monitored evidence may alter defaults, gates, thresholds, "
         + "candidate identities, temporal weighting, or hyperparameters."
     )
@@ -1885,6 +1923,10 @@ def _monitoring_data_onboarding_card_text(value: object) -> str:
     coverage_rate = value.get("monitoring_target_coverage_rate")
     evaluable = value.get("monitoring_evaluable_driver_count", 0)
     non_evaluable = value.get("monitoring_non_evaluable_driver_count", 0)
+    preflight_status = value.get("prospective_monitoring_preflight_status", "missing")
+    preflight_blocks = value.get("prospective_monitoring_preflight_blocking_check_count", 0)
+    preflight_ready = value.get("prospective_monitoring_next_event_ready_to_forecast", False)
+    preflight_runbook = value.get("prospective_monitoring_preflight_runbook_path")
     return (
         intro
         + f" Current onboarding status `{status}` has `{forecastable}` forecastable events and "
@@ -1892,7 +1934,10 @@ def _monitoring_data_onboarding_card_text(value: object) -> str:
         + f"is `{coverage_status}` with coverage rate `{coverage_rate}`, `{evaluable}` evaluable "
         + f"drivers, and `{non_evaluable}` non-evaluable drivers. Forecast rows without qualifying "
         + "targets are retained for auditability, excluded from scoring and future prior evidence, "
-        + "and no target values are imputed. No monitoring data result changes default policy "
+        + "and no target values are imputed. Preflight status "
+        + f"`{preflight_status}` has `{preflight_blocks}` blocking checks, next-event ready "
+        + f"state `{preflight_ready}`, and runbook `{preflight_runbook}`. No monitoring data "
+        + "result changes default policy "
         + "behavior, gates, thresholds, candidate identities, temporal weighting, or "
         + "hyperparameters."
     )

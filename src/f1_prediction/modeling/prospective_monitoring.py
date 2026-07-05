@@ -16,6 +16,7 @@ from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig
 from f1_prediction.data.monitoring_onboarding import (
     REGISTRY_ONBOARDING_COLUMNS,
     ensure_registry_columns,
+    feature_artifact_path,
     forbidden_target_columns,
     target_artifact_path,
     target_coverage_path,
@@ -74,6 +75,12 @@ FORECAST_ROLES = (
     "uniform_default_shadow",
     "season_aware_weighted_candidate_shadow",
 )
+PREFLIGHT_FILE_PREFIX = "prospective_monitoring_preflight"
+PREFLIGHT_READY = "ready_to_forecast"
+PREFLIGHT_BLOCKED = "blocked"
+PREFLIGHT_ALREADY_FORECASTED = "already_forecasted"
+PREFLIGHT_INVALID_PROTOCOL = "invalid_protocol"
+PREFLIGHT_INVALID_REGISTRY_LINEAGE = "invalid_registry_lineage"
 EVENT_ORDER_SOURCE = "registry"
 EVENT_ORDER_VALID_STATUS = "valid_registry_lineage"
 EVENT_ORDER_LEGACY_STATUS = "legacy_noncanonical_event_order"
@@ -160,6 +167,31 @@ def create_prospective_monitoring_protocol(
     )
 
 
+def create_prospective_monitoring_preflight(
+    config: DataConfig,
+    *,
+    protocol_name: str,
+    season: int,
+    event: str,
+) -> ProspectiveMonitoringSummary:
+    """Validate whether a monitored event is safe to forecast before qualifying."""
+    metrics_dir = config.metrics_output_dir
+    ensure_directory(metrics_dir)
+    result = build_monitoring_preflight_result(
+        config,
+        protocol_name=protocol_name,
+        season=season,
+        event=event,
+    )
+    paths = write_monitoring_preflight_outputs(metrics_dir, result)
+    return ProspectiveMonitoringSummary(
+        status=str(result["summary"]["status"]),
+        summary_path=paths["summary"],
+        table_paths=(paths["checks"], paths["failures"], paths["runbook"]),
+        missing_inputs=tuple(result["summary"].get("missing_inputs", [])),
+    )
+
+
 def create_prospective_monitoring_forecast(
     config: DataConfig,
     model_config: ModelConfig,
@@ -172,6 +204,15 @@ def create_prospective_monitoring_forecast(
     """Create an immutable pre-qualification forecast snapshot for one monitored event."""
     metrics_dir = config.metrics_output_dir
     protocol = load_protocol(metrics_dir, protocol_name)
+    preflight = create_prospective_monitoring_preflight(
+        config,
+        protocol_name=protocol_name,
+        season=int(protocol["monitor_season"]),
+        event=event,
+    )
+    if preflight.status != PREFLIGHT_READY:
+        raise ValueError(f"Monitoring preflight is not ready: {preflight.status}")
+    preflight_payload = _read_json(preflight.summary_path)
     dataset, dataset_status = read_monitoring_dataset(
         resolve_protocol_dataset_path(config, protocol)
     )
@@ -259,6 +300,7 @@ def create_prospective_monitoring_forecast(
         event_key=event_key,
         event_order_lineage=event_order_lineage,
         prior_monitoring=prior_monitoring,
+        preflight=preflight_payload,
     )
     leakage = monitoring_forecast_integrity_rows(
         source["leakage"],
@@ -267,6 +309,7 @@ def create_prospective_monitoring_forecast(
         event_key=event_key,
         event_order_lineage=event_order_lineage,
         prior_monitoring=prior_monitoring,
+        preflight=preflight_payload,
     )
     forecasts, shadow = monitoring_prediction_rows(
         source=source,
@@ -277,6 +320,7 @@ def create_prospective_monitoring_forecast(
         event_order=event_order,
         event_order_lineage=event_order_lineage,
         prior_monitoring=prior_monitoring,
+        preflight=preflight_payload,
         candidate_eligible=candidate_eligible,
         selection_reason=selection_reason,
     )
@@ -289,6 +333,7 @@ def create_prospective_monitoring_forecast(
         event_key=event_key,
         event_order_lineage=event_order_lineage,
         prior_monitoring=prior_monitoring,
+        preflight=preflight_payload,
         candidate_eligible=candidate_eligible,
         selection_reason=selection_reason,
         snapshot_hash=snapshot_hash,
@@ -429,6 +474,7 @@ def create_prospective_monitoring_report(config: DataConfig) -> ProspectiveMonit
     registry = read_csv(metrics_dir / "prospective_monitoring_event_registry.csv")
     forecasts = read_parquet(metrics_dir / "prospective_monitoring_forecasts.parquet")
     settlements = read_parquet(metrics_dir / "prospective_monitoring_settlements.parquet")
+    preflight_summary = _read_json_if_exists(metrics_dir / f"{PREFLIGHT_FILE_PREFIX}_summary.json")
     integrity = refresh_integrity_outputs(metrics_dir, protocol) if protocol else {}
     ledger = read_csv(metrics_dir / "prospective_monitoring_shadow_evidence_ledger.csv")
     reconciliation = build_event_order_reconciliation(
@@ -469,6 +515,7 @@ def create_prospective_monitoring_report(config: DataConfig) -> ProspectiveMonit
         live_summary=live_summary,
         shadow_summary=shadow_summary,
         reconciliation=reconciliation,
+        preflight_summary=preflight_summary,
     )
     paths = {
         "summary": metrics_dir / "prospective_monitoring_summary.json",
@@ -661,6 +708,781 @@ def build_readiness(
         columns=("requirement", "status", "blocking", "details"),
     )
     return readiness, missing
+
+
+def build_monitoring_preflight_result(
+    config: DataConfig,
+    *,
+    protocol_name: str,
+    season: int,
+    event: str,
+) -> dict[str, Any]:
+    """Build an artifact-only preflight result for one monitored event."""
+    metrics_dir = config.metrics_output_dir
+    protocol_path = metrics_dir / PROTOCOL_FILE
+    protocol = _read_json_if_exists(protocol_path) or {}
+    registry_path = metrics_dir / "prospective_monitoring_event_registry.csv"
+    registry = read_csv(registry_path)
+    forecasts = read_parquet(metrics_dir / "prospective_monitoring_forecasts.parquet")
+    settlements = read_parquet(metrics_dir / "prospective_monitoring_settlements.parquet")
+    reconciliation = read_csv(metrics_dir / "prospective_monitoring_event_order_reconciliation.csv")
+    checks: list[dict[str, object]] = []
+    event_slug = slugify_value(event)
+    event_order: object = pd.NA
+    event_row = pd.Series(dtype=object)
+    event_matches = pd.DataFrame()
+    if not registry.empty and {"protocol_name", "monitor_season", "event_slug"} <= set(
+        registry.columns
+    ):
+        event_matches = registry[
+            registry["protocol_name"].astype(str).eq(str(protocol_name))
+            & pd.to_numeric(registry["monitor_season"], errors="coerce").eq(int(season))
+            & (
+                registry["event_slug"].astype(str).eq(event_slug)
+                | registry.get("event", pd.Series(dtype=str))
+                .astype(str)
+                .map(slugify_value)
+                .eq(event_slug)
+            )
+        ].copy()
+        if not event_matches.empty:
+            event_row = event_matches.iloc[0]
+            event_slug = str(event_row.get("event_slug", event_slug))
+            event_order = event_row.get("event_order", pd.NA)
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "protocol",
+        "protocol_exists",
+        bool(protocol_path.is_file()),
+        True,
+        protocol_path.as_posix(),
+        True,
+        "Frozen monitoring protocol must exist before preflight.",
+        "Run prospective-monitoring-init for the requested protocol.",
+    )
+    fingerprint_valid = bool(
+        protocol
+        and str(protocol.get("protocol_name")) == str(protocol_name)
+        and protocol.get("protocol_fingerprint") == protocol_fingerprint(protocol)
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "protocol",
+        "protocol_fingerprint_valid",
+        fingerprint_valid,
+        True,
+        protocol.get("protocol_fingerprint"),
+        True,
+        "Protocol fingerprint must match frozen fields.",
+        "Create a distinct protocol if frozen scope changed.",
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "protocol",
+        "monitor_season_matches",
+        int(protocol.get("monitor_season", -1) or -1) == int(season),
+        True,
+        protocol.get("monitor_season"),
+        int(season),
+        "Preflight season must match the frozen monitor season.",
+        "Use the protocol monitor season or create a distinct protocol.",
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "protocol",
+        "candidate_identity_valid",
+        protocol.get("candidate_identity") == canonical_candidate_identity(),
+        True,
+        protocol.get("candidate_identity"),
+        canonical_candidate_identity(),
+        "Candidate identity must remain canonical.",
+        "Recreate or inspect the frozen protocol; do not forecast with mismatched identity.",
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "protocol",
+        "default_identity_valid",
+        protocol.get("default_identity") == canonical_default_identity(),
+        True,
+        protocol.get("default_identity"),
+        canonical_default_identity(),
+        "Default identity must remain canonical.",
+        "Recreate or inspect the frozen protocol; do not forecast with mismatched identity.",
+    )
+    gate_valid = frozen_gate_configuration_valid(protocol.get("frozen_gate_configuration", {}))
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "protocol",
+        "frozen_gate_configuration_valid",
+        gate_valid,
+        True,
+        protocol.get("frozen_gate_configuration"),
+        "required gate keys with non-negative values",
+        "Frozen gate configuration is required and must not be edited.",
+        "Inspect the protocol; create a distinct protocol if frozen gates changed.",
+    )
+    temporal_valid = temporal_weighting_configuration_valid(
+        protocol.get("temporal_weighting_configuration", {})
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "protocol",
+        "temporal_weighting_configuration_valid",
+        temporal_valid,
+        True,
+        protocol.get("temporal_weighting_configuration"),
+        "required temporal weighting keys",
+        "Frozen temporal-weighting configuration is required and must not be edited.",
+        "Inspect the protocol; create a distinct protocol if temporal weighting changed.",
+    )
+    event_exists = not event_matches.empty
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "event_registry",
+        "event_exists_in_registry",
+        event_exists,
+        True,
+        event_slug if event_exists else "",
+        event_slug,
+        "The event must be registered before forecast.",
+        "Run monitoring-register-event after preparing FP3-safe features.",
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "event_registry",
+        "event_slug_matches",
+        event_exists and str(event_row.get("event_slug")) == event_slug,
+        True,
+        event_row.get("event_slug", ""),
+        event_slug,
+        "The requested event must resolve to the registered slug.",
+        "Use the exact registered event name or inspect the registry.",
+    )
+    lineage = resolve_registry_event_order(
+        registry,
+        protocol_name=protocol_name,
+        monitor_season=int(season),
+        event_slug=event_slug,
+        registry_path=registry_path,
+        strict=False,
+    )
+    order_value = lineage.get("event_order", pd.NA)
+    event_order = order_value
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "event_registry",
+        "event_order_present",
+        pd.notna(order_value),
+        True,
+        order_value,
+        "present",
+        "A registry event_order is required.",
+        "Register the event with a valid event order.",
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "event_registry",
+        "event_order_positive_integer",
+        bool(lineage.get("event_order_registry_valid", False)),
+        True,
+        order_value,
+        "positive integer",
+        "Registry event_order must be a positive integer.",
+        "Correct the registry row by rerunning monitoring-register-event with --event-order.",
+    )
+    order_unique = registry_order_unique(registry, protocol_name, int(season), order_value)
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "event_registry",
+        "event_order_unique_within_protocol_and_season",
+        order_unique,
+        True,
+        order_value,
+        "unique within protocol and season",
+        "The event order must not be shared by another registered monitored event.",
+        "Inspect prospective_monitoring_event_registry.csv and correct the duplicate order.",
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "event_registry",
+        "event_order_source_is_registry",
+        lineage.get("event_order_source") == EVENT_ORDER_SOURCE,
+        True,
+        lineage.get("event_order_source"),
+        EVENT_ORDER_SOURCE,
+        "Monitored-season event order must come from the frozen registry.",
+        "Do not infer event order from dataset or training rows.",
+    )
+    add_preflight_check(
+        checks,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order,
+        "event_registry",
+        "event_order_lineage_valid",
+        lineage.get("event_order_lineage_status") == EVENT_ORDER_VALID_STATUS,
+        True,
+        lineage.get("event_order_lineage_status"),
+        EVENT_ORDER_VALID_STATUS,
+        "Registry event-order lineage must be valid.",
+        "Fix the registry event-order row before forecasting.",
+    )
+    feature_path = registered_feature_path(config, event_row, int(season), event)
+    feature_frame = read_feature_artifact(feature_path)
+    feature_forbidden = forbidden_target_columns(feature_frame)
+    feature_rows_present = not feature_frame.empty
+    feature_fingerprint = (
+        onboarding_artifact_fingerprint(feature_path) if feature_path.is_file() else ""
+    )
+    expected_fingerprint = event_row.get("feature_artifact_fingerprint", "")
+    required_identity = {
+        "season",
+        "event",
+        "event_slug",
+        "checkpoint",
+        "driver",
+        "driver_key",
+        "team",
+        "team_key",
+    }
+    feature_columns = (
+        get_feature_columns_for_group(feature_frame, "base_plus_relative")
+        if not feature_frame.empty
+        else []
+    )
+    for check_name, passed, observed, expected, reason, action in [
+        (
+            "feature_artifact_exists",
+            feature_path.is_file(),
+            feature_path.as_posix(),
+            "existing parquet",
+            "A prepared FP3-safe feature artifact is required.",
+            "Run monitoring-prepare-event and monitoring-register-event before preflight.",
+        ),
+        (
+            "feature_artifact_fingerprint_valid",
+            bool(feature_path.is_file() and str(expected_fingerprint) == feature_fingerprint),
+            feature_fingerprint,
+            expected_fingerprint,
+            "Feature artifact fingerprint must match the registry.",
+            "Re-register the event after recreating the safe feature artifact.",
+        ),
+        (
+            "feature_rows_present",
+            feature_rows_present,
+            len(feature_frame),
+            ">0",
+            "The feature artifact must contain driver rows.",
+            "Rebuild the monitored event feature artifact from local FP sessions.",
+        ),
+        (
+            "driver_rows_present",
+            feature_rows_present
+            and "driver" in feature_frame
+            and int(feature_frame["driver"].nunique()) > 0,
+            int(feature_frame["driver"].nunique()) if "driver" in feature_frame else 0,
+            ">0",
+            "The feature artifact must identify at least one driver.",
+            "Inspect feature generation and driver identifiers.",
+        ),
+        (
+            "checkpoint_is_after_fp3",
+            feature_rows_present
+            and "checkpoint" in feature_frame
+            and feature_frame["checkpoint"].astype(str).eq(FP3_CHECKPOINT).all(),
+            sorted(feature_frame["checkpoint"].dropna().astype(str).unique().tolist())
+            if "checkpoint" in feature_frame
+            else [],
+            FP3_CHECKPOINT,
+            "Monitoring forecast currently supports the after_fp3 checkpoint.",
+            "Regenerate the feature artifact with after_fp3 rows.",
+        ),
+        (
+            "forbidden_target_columns_absent",
+            not feature_forbidden,
+            feature_forbidden,
+            "no quali_ or target columns",
+            "Pre-qualification features must not contain qualifying targets.",
+            "Recreate the feature artifact without target columns.",
+        ),
+        (
+            "qualifying_targets_not_embedded",
+            not feature_forbidden,
+            feature_forbidden,
+            "no embedded targets",
+            "Qualifying targets must remain settlement-only.",
+            "Remove target columns by rerunning monitoring-prepare-event.",
+        ),
+        (
+            "required_identity_columns_present",
+            required_identity <= set(feature_frame.columns),
+            sorted(required_identity - set(feature_frame.columns)),
+            "no missing identity columns",
+            "Forecast joins require stable event and driver identity columns.",
+            "Regenerate the feature artifact with required identity columns.",
+        ),
+        (
+            "required_feature_columns_present",
+            bool(feature_columns),
+            len(feature_columns),
+            ">0 base_plus_relative model features",
+            "At least one configured model feature must be available.",
+            "Inspect feature generation and feature-group configuration.",
+        ),
+    ]:
+        add_preflight_check(
+            checks,
+            protocol_name,
+            season,
+            event,
+            event_slug,
+            event_order,
+            "fp3_safe_feature_artifact",
+            check_name,
+            bool(passed),
+            True,
+            observed,
+            expected,
+            reason,
+            action,
+        )
+    target_path = target_artifact_path(config, int(season), str(event_row.get("event", event)))
+    coverage_path = target_coverage_path(config, int(season), str(event_row.get("event", event)))
+    existing_forecast = not subset_event(forecasts, protocol_name, event_slug).empty
+    existing_settlement = not subset_event(settlements, protocol_name, event_slug).empty
+    safety_checks = [
+        (
+            "no_existing_forecast_for_event",
+            not existing_forecast,
+            existing_forecast,
+            False,
+            "Forecast snapshots are immutable and must not be overwritten.",
+            "Do not rerun forecast; use prospective-monitoring-report or settlement workflow.",
+        ),
+        (
+            "no_existing_settlement_for_event",
+            not existing_settlement,
+            existing_settlement,
+            False,
+            "A settled event cannot be forecast again.",
+            "Use the existing settlement/report artifacts.",
+        ),
+        (
+            "no_existing_target_artifact_before_forecast",
+            not target_path.is_file(),
+            target_path.as_posix() if target_path.is_file() else "",
+            "absent",
+            "Targets must not be present before forecast creation.",
+            "Do not forecast this event; start a new clean event or inspect operational ordering.",
+        ),
+        (
+            "no_target_coverage_artifact_before_forecast",
+            not coverage_path.is_file(),
+            coverage_path.as_posix() if coverage_path.is_file() else "",
+            "absent",
+            "Coverage ledgers are settlement-side artifacts and must not exist before forecast.",
+            "Do not forecast this event; inspect target onboarding order.",
+        ),
+        (
+            "no_current_event_target_accessible_to_forecast",
+            not target_path.is_file() and not coverage_path.is_file() and not feature_forbidden,
+            {
+                "target_artifact": target_path.is_file(),
+                "target_coverage": coverage_path.is_file(),
+                "embedded_target_columns": feature_forbidden,
+            },
+            "no target access",
+            "Forecast must not be able to access current-event qualifying targets.",
+            "Remove target-side artifacts before any clean forecast attempt.",
+        ),
+    ]
+    for check_name, passed, observed, expected, reason, action in safety_checks:
+        add_preflight_check(
+            checks,
+            protocol_name,
+            season,
+            event,
+            event_slug,
+            event_order,
+            "forecast_safety",
+            check_name,
+            bool(passed),
+            True,
+            observed,
+            expected,
+            reason,
+            action,
+        )
+    event_recon = reconciliation_for_event(reconciliation, protocol_name, event_slug)
+    current_legacy = (
+        not event_recon.empty
+        and event_recon["event_order_lineage_status"]
+        .astype(str)
+        .eq(EVENT_ORDER_LEGACY_STATUS)
+        .any()
+    )
+    legacy_rows_excluded = (
+        reconciliation.empty
+        or not reconciliation["event_order_lineage_status"]
+        .astype(str)
+        .eq(EVENT_ORDER_LEGACY_STATUS)
+        .any()
+        or not reconciliation.loc[
+            reconciliation["event_order_lineage_status"].astype(str).eq(EVENT_ORDER_LEGACY_STATUS),
+            "eligible_for_future_prior_evidence_after_reconciliation",
+        ]
+        .fillna(False)
+        .astype(bool)
+        .any()
+    )
+    valid_prior = (
+        not reconciliation.empty
+        and reconciliation["eligible_for_future_prior_evidence_after_reconciliation"]
+        .fillna(False)
+        .astype(bool)
+        .any()
+    )
+    legacy_checks = [
+        (
+            "event_not_marked_legacy_noncanonical",
+            not current_legacy,
+            event_lineage_status(event_recon),
+            f"not {EVENT_ORDER_LEGACY_STATUS}",
+            "The current event must not already be a legacy noncanonical artifact.",
+            "Do not forecast this event again; use existing descriptive artifacts only.",
+            True,
+        ),
+        (
+            "prior_evidence_lineage_valid",
+            legacy_rows_excluded,
+            prior_evidence_lineage_status(reconciliation)
+            if not reconciliation.empty
+            else "no_settled_monitoring_evidence",
+            "valid or quarantined",
+            "Future prior evidence must have valid registry lineage.",
+            "Run prospective-monitoring-report and inspect reconciliation failures.",
+            True,
+        ),
+        (
+            "legacy_rows_excluded_from_future_prior_evidence",
+            legacy_rows_excluded,
+            int(
+                reconciliation["event_order_lineage_status"]
+                .astype(str)
+                .eq(EVENT_ORDER_LEGACY_STATUS)
+                .sum()
+            )
+            if not reconciliation.empty
+            else 0,
+            "legacy rows quarantined",
+            "Legacy rows may exist globally but must be excluded from future prior evidence.",
+            "Inspect event-order reconciliation before forecasting.",
+            True,
+        ),
+        (
+            "valid_prior_monitoring_evidence_available",
+            valid_prior,
+            valid_prior,
+            True,
+            "The next forecast currently has zero valid prior monitoring evidence.",
+            "Proceed only knowing frozen gates may have no valid monitoring prior evidence.",
+            False,
+        ),
+    ]
+    for check_name, passed, observed, expected, reason, action, blocking in legacy_checks:
+        add_preflight_check(
+            checks,
+            protocol_name,
+            season,
+            event,
+            event_slug,
+            event_order,
+            "legacy_and_lineage_safety",
+            check_name,
+            bool(passed),
+            expected,
+            observed,
+            expected,
+            reason,
+            action,
+            blocking=blocking,
+        )
+    checks_frame = pd.DataFrame(checks, columns=preflight_check_columns())
+    summary = build_preflight_summary(
+        checks_frame=checks_frame,
+        protocol=protocol,
+        protocol_name=protocol_name,
+        season=int(season),
+        event=event,
+        event_slug=event_slug,
+        event_order=event_order,
+        existing_forecast=existing_forecast,
+        current_legacy=current_legacy,
+        valid_prior=valid_prior,
+    )
+    runbook = build_preflight_runbook(summary, checks_frame)
+    failures = checks_frame[checks_frame["status"].astype(str).isin(["fail", "warning"])].copy()
+    return {
+        "summary": summary,
+        "checks": checks_frame,
+        "failures": failures,
+        "runbook": runbook,
+    }
+
+
+def add_preflight_check(
+    rows: list[dict[str, object]],
+    protocol_name: str,
+    season: int,
+    event: str,
+    event_slug: str,
+    event_order: object,
+    check_group: str,
+    check_name: str,
+    passed: bool,
+    expected_passed: object,
+    observed_value: object,
+    expected_value: object,
+    reason: str,
+    recommended_action: str,
+    *,
+    blocking: bool = True,
+) -> None:
+    status = "pass" if passed else ("fail" if blocking else "warning")
+    rows.append(
+        {
+            "protocol_name": protocol_name,
+            "monitor_season": int(season),
+            "event": event,
+            "event_slug": event_slug,
+            "event_order": event_order,
+            "check_group": check_group,
+            "check_name": check_name,
+            "status": status,
+            "blocking": bool(blocking),
+            "observed_value": json.dumps(_json_clean(observed_value), sort_keys=True),
+            "expected_value": json.dumps(_json_clean(expected_value), sort_keys=True),
+            "reason": reason,
+            "recommended_action": recommended_action,
+        }
+    )
+
+
+def build_preflight_summary(
+    *,
+    checks_frame: pd.DataFrame,
+    protocol: dict[str, Any],
+    protocol_name: str,
+    season: int,
+    event: str,
+    event_slug: str,
+    event_order: object,
+    existing_forecast: bool,
+    current_legacy: bool,
+    valid_prior: bool,
+) -> dict[str, object]:
+    blocking_failures = checks_frame[
+        checks_frame["blocking"].astype(bool) & checks_frame["status"].astype(str).eq("fail")
+    ]
+    warnings = checks_frame[checks_frame["status"].astype(str).eq("warning")]
+    protocol_failures = blocking_failures[
+        blocking_failures["check_group"].astype(str).eq("protocol")
+    ]
+    registry_failures = blocking_failures[
+        blocking_failures["check_group"].astype(str).eq("event_registry")
+    ]
+    if not protocol_failures.empty:
+        status = PREFLIGHT_INVALID_PROTOCOL
+    elif current_legacy or not registry_failures.empty:
+        status = PREFLIGHT_INVALID_REGISTRY_LINEAGE
+    elif existing_forecast:
+        status = PREFLIGHT_ALREADY_FORECASTED
+    elif not blocking_failures.empty:
+        status = PREFLIGHT_BLOCKED
+    else:
+        status = PREFLIGHT_READY
+    run_id = stable_signature(
+        {
+            "protocol_name": protocol_name,
+            "season": season,
+            "event_slug": event_slug,
+            "generated_at": utc_now(),
+        }
+    )
+    summary_path = f"reports/metrics/{PREFLIGHT_FILE_PREFIX}_summary.json"
+    return {
+        "status": status,
+        "preflight_run_id": run_id,
+        "preflight_summary_path": summary_path,
+        "protocol_name": protocol_name,
+        "protocol_fingerprint": protocol.get("protocol_fingerprint"),
+        "season": int(season),
+        "event": event,
+        "event_slug": event_slug,
+        "event_order": _json_clean(event_order),
+        "forecast_allowed": status == PREFLIGHT_READY,
+        "blocking_check_count": int(len(blocking_failures)),
+        "warning_check_count": int(len(warnings)),
+        "prior_monitoring_evidence_status": (
+            "valid_prior_monitoring_evidence_available"
+            if valid_prior
+            else "zero_valid_prior_monitoring_evidence"
+        ),
+        "legacy_exclusion_status": legacy_exclusion_status(checks_frame),
+        "prospective_monitoring_preflight_available": True,
+        "prospective_monitoring_preflight_status": status,
+        "prospective_monitoring_preflight_blocking_check_count": int(len(blocking_failures)),
+        "prospective_monitoring_next_event_ready_to_forecast": status == PREFLIGHT_READY,
+        "prospective_monitoring_preflight_runbook_path": (
+            f"reports/metrics/{PREFLIGHT_FILE_PREFIX}_runbook.md"
+        ),
+        "next_required_command": next_preflight_command(protocol_name, event, status),
+        "generated_at_utc": utc_now(),
+    }
+
+
+def build_preflight_runbook(summary: dict[str, object], checks: pd.DataFrame) -> str:
+    lines = [
+        "# Prospective Monitoring Preflight Runbook",
+        "",
+        f"Status: `{summary['status']}`",
+        f"Protocol: `{summary['protocol_name']}`",
+        f"Event: `{summary['event']}` (`{summary['event_slug']}`)",
+        "",
+    ]
+    if summary["status"] == PREFLIGHT_READY:
+        lines.extend(
+            [
+                "Safe next command:",
+                "",
+                "```bash",
+                "python -m f1_prediction.cli prospective-monitoring-forecast "
+                f'--protocol-name {summary["protocol_name"]} --event "{summary["event"]}"',
+                "```",
+                "",
+            ]
+        )
+    else:
+        failures = checks[checks["status"].astype(str).eq("fail")].copy()
+        lines.append("Corrective steps:")
+        if failures.empty:
+            lines.append("- Inspect preflight summary; no failed checks were recorded.")
+        for _, row in failures.iterrows():
+            lines.append(f"- `{row['check_name']}`: {row['recommended_action']}")
+        lines.append("")
+    lines.extend(
+        [
+            "Operational guardrails:",
+            "- Do not ingest or add Q targets before the forecast is created.",
+            "- Do not run settlement before targets are separately added.",
+            "- Do not rerun or overwrite an existing forecast.",
+            "- A `ready_to_forecast` result is required before forecasting.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_monitoring_preflight_outputs(
+    metrics_dir: Path,
+    result: dict[str, Any],
+) -> dict[str, Path]:
+    paths = {
+        "summary": metrics_dir / f"{PREFLIGHT_FILE_PREFIX}_summary.json",
+        "checks": metrics_dir / f"{PREFLIGHT_FILE_PREFIX}_checks.csv",
+        "failures": metrics_dir / f"{PREFLIGHT_FILE_PREFIX}_failures.csv",
+        "runbook": metrics_dir / f"{PREFLIGHT_FILE_PREFIX}_runbook.md",
+    }
+    _write_json(paths["summary"], result["summary"])
+    result["checks"].to_csv(paths["checks"], index=False)
+    result["failures"].to_csv(paths["failures"], index=False)
+    paths["runbook"].write_text(str(result["runbook"]), encoding="utf-8")
+    return paths
+
+
+def preflight_check_columns() -> list[str]:
+    return [
+        "protocol_name",
+        "monitor_season",
+        "event",
+        "event_slug",
+        "event_order",
+        "check_group",
+        "check_name",
+        "status",
+        "blocking",
+        "observed_value",
+        "expected_value",
+        "reason",
+        "recommended_action",
+    ]
 
 
 def registry_event_forecastable(event_row: pd.Series) -> bool:
@@ -909,6 +1731,7 @@ def monitoring_prediction_rows(
     event_order: list[str],
     event_order_lineage: dict[str, object],
     prior_monitoring: dict[str, object],
+    preflight: dict[str, Any],
     candidate_eligible: bool,
     selection_reason: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -924,6 +1747,7 @@ def monitoring_prediction_rows(
         event_order=event_order,
         event_order_lineage=event_order_lineage,
         prior_monitoring=prior_monitoring,
+        preflight=preflight,
         temporal_policy=DEFAULT_TEMPORAL_POLICY,
         candidate_eligible=candidate_eligible,
         selection_reason="observed_static_policy_reference",
@@ -947,6 +1771,7 @@ def monitoring_prediction_rows(
         event_order=event_order,
         event_order_lineage=event_order_lineage,
         prior_monitoring=prior_monitoring,
+        preflight=preflight,
         temporal_policy=DEFAULT_TEMPORAL_POLICY,
         candidate_eligible=candidate_eligible,
         selection_reason="diagnostic_shadow_default",
@@ -964,6 +1789,7 @@ def monitoring_prediction_rows(
         event_order=event_order,
         event_order_lineage=event_order_lineage,
         prior_monitoring=prior_monitoring,
+        preflight=preflight,
         temporal_policy=CANDIDATE_TEMPORAL_POLICY,
         candidate_eligible=candidate_eligible,
         selection_reason=selection_reason,
@@ -987,6 +1813,7 @@ def role_frame(
     event_order: list[str],
     event_order_lineage: dict[str, object],
     prior_monitoring: dict[str, object],
+    preflight: dict[str, Any],
     temporal_policy: str,
     candidate_eligible: bool,
     selection_reason: str,
@@ -1062,6 +1889,9 @@ def role_frame(
     result["forecast_integrity_status"] = "valid"
     for column, value in prior_monitoring.items():
         result[column] = value
+    result["preflight_run_id"] = preflight.get("preflight_run_id")
+    result["preflight_status"] = preflight.get("status")
+    result["preflight_summary_path"] = preflight.get("preflight_summary_path")
     result["actual_gap_sec"] = pd.NA
     result["absolute_error_sec"] = pd.NA
     return result
@@ -1076,6 +1906,7 @@ def monitoring_manifest_rows(
     event_key: str,
     event_order_lineage: dict[str, object],
     prior_monitoring: dict[str, object],
+    preflight: dict[str, Any],
 ) -> pd.DataFrame:
     """Decorate training manifest rows with protocol metadata."""
     frame = pd.DataFrame(manifest_rows)
@@ -1091,6 +1922,9 @@ def monitoring_manifest_rows(
         frame[column] = value
     for column, value in prior_monitoring.items():
         frame[column] = value
+    frame["preflight_run_id"] = preflight.get("preflight_run_id")
+    frame["preflight_status"] = preflight.get("status")
+    frame["preflight_summary_path"] = preflight.get("preflight_summary_path")
     frame["current_event_excluded_from_training"] = ~frame["current_event_in_training"].astype(bool)
     frame["future_same_season_events_excluded"] = True
     frame["future_seasons_excluded"] = True
@@ -1105,6 +1939,7 @@ def monitoring_forecast_integrity_rows(
     event_key: str,
     event_order_lineage: dict[str, object],
     prior_monitoring: dict[str, object],
+    preflight: dict[str, Any],
 ) -> pd.DataFrame:
     """Build forecast integrity audit rows."""
     frame = pd.DataFrame(leakage_rows)
@@ -1118,6 +1953,9 @@ def monitoring_forecast_integrity_rows(
         frame[column] = value
     for column, value in prior_monitoring.items():
         frame[column] = value
+    frame["preflight_run_id"] = preflight.get("preflight_run_id")
+    frame["preflight_status"] = preflight.get("status")
+    frame["preflight_summary_path"] = preflight.get("preflight_summary_path")
     frame["protocol_fingerprint_valid"] = True
     frame["event_order_registry_valid"] = bool(
         event_order_lineage.get("event_order_registry_valid", False)
@@ -1160,6 +1998,7 @@ def monitoring_selection_row(
     event_key: str,
     event_order_lineage: dict[str, object],
     prior_monitoring: dict[str, object],
+    preflight: dict[str, Any],
     candidate_eligible: bool,
     selection_reason: str,
     snapshot_hash: str,
@@ -1200,6 +2039,9 @@ def monitoring_selection_row(
         "forecast_snapshot_hash": snapshot_hash,
     }
     row.update(prior_monitoring)
+    row["preflight_run_id"] = preflight.get("preflight_run_id")
+    row["preflight_status"] = preflight.get("status")
+    row["preflight_summary_path"] = preflight.get("preflight_summary_path")
     return row
 
 
@@ -2221,6 +3063,7 @@ def build_monitoring_summary_payload(
     live_summary: pd.DataFrame,
     shadow_summary: pd.DataFrame,
     reconciliation: pd.DataFrame | None = None,
+    preflight_summary: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Build the top-level monitoring summary JSON."""
     available = bool(protocol)
@@ -2251,6 +3094,7 @@ def build_monitoring_summary_payload(
         if reconciliation is not None
         else "not_evaluated"
     )
+    preflight = preflight_summary or {}
     return {
         "status": status,
         "prospective_monitoring_available": available,
@@ -2269,6 +3113,17 @@ def build_monitoring_summary_payload(
         "monitoring_legacy_event_order_exclusion_count": legacy_count,
         "monitoring_prior_evidence_lineage_status": prior_lineage,
         "monitoring_next_forecast_prior_evidence_status": prior_lineage,
+        "prospective_monitoring_preflight_available": bool(preflight),
+        "prospective_monitoring_preflight_status": preflight.get("status", "missing"),
+        "prospective_monitoring_preflight_blocking_check_count": int(
+            preflight.get("blocking_check_count", 0) or 0
+        ),
+        "prospective_monitoring_next_event_ready_to_forecast": bool(
+            preflight.get("forecast_allowed", False)
+        ),
+        "prospective_monitoring_preflight_runbook_path": preflight.get(
+            "prospective_monitoring_preflight_runbook_path",
+        ),
         **coverage,
         "policy_recommendation": POLICY_RECOMMENDATION,
         "known_limitations": [
@@ -2288,6 +3143,10 @@ def build_monitoring_summary_payload(
                 "reports/metrics/prospective_monitoring_event_order_integrity_summary.json",
                 "reports/metrics/prospective_monitoring_event_order_integrity_by_event.csv",
                 "reports/metrics/prospective_monitoring_event_order_integrity_failures.csv",
+                "reports/metrics/prospective_monitoring_preflight_summary.json",
+                "reports/metrics/prospective_monitoring_preflight_checks.csv",
+                "reports/metrics/prospective_monitoring_preflight_failures.csv",
+                "reports/metrics/prospective_monitoring_preflight_runbook.md",
             ],
             "figures": [],
         },
@@ -2710,6 +3569,95 @@ def resolve_registry_event(registry: pd.DataFrame, event: str) -> pd.Series:
     if matches.empty:
         raise ValueError(f"Event is not registered for monitoring: {event}")
     return matches.iloc[0]
+
+
+def frozen_gate_configuration_valid(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    required = {
+        "min_current_season_prior_events",
+        "min_prior_candidate_folds",
+        "min_prior_candidate_predictions",
+        "improvement_margin_sec",
+    }
+    if not required <= set(value):
+        return False
+    numeric = pd.to_numeric(pd.Series([value[key] for key in required]), errors="coerce")
+    return bool(numeric.notna().all() and numeric.ge(0).all())
+
+
+def temporal_weighting_configuration_valid(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    required = {
+        "policy",
+        "current_season_weight",
+        "previous_season_weight",
+        "older_season_weight",
+        "half_life_events",
+        "min_current_season_events",
+    }
+    return required <= set(value)
+
+
+def registry_order_unique(
+    registry: pd.DataFrame,
+    protocol_name: str,
+    season: int,
+    order_value: object,
+) -> bool:
+    if registry.empty or pd.isna(order_value) or "event_order" not in registry:
+        return False
+    frame = registry[
+        registry.get("protocol_name", pd.Series(dtype=str)).astype(str).eq(str(protocol_name))
+        & pd.to_numeric(registry.get("monitor_season", pd.Series(dtype=float)), errors="coerce").eq(
+            int(season)
+        )
+    ]
+    return pd.to_numeric(frame["event_order"], errors="coerce").eq(int(order_value)).sum() == 1
+
+
+def registered_feature_path(
+    config: DataConfig,
+    event_row: pd.Series,
+    season: int,
+    event: str,
+) -> Path:
+    registered = resolve_registered_path(config, event_row.get("feature_artifact_path"))
+    if registered is not None:
+        return registered
+    return feature_artifact_path(config, season, event)
+
+
+def read_feature_artifact(path: Path) -> pd.DataFrame:
+    if not path.is_file():
+        return pd.DataFrame()
+    try:
+        return pd.read_parquet(path)
+    except (OSError, ValueError):
+        return pd.DataFrame()
+
+
+def legacy_exclusion_status(checks: pd.DataFrame) -> str:
+    if checks.empty:
+        return "not_evaluated"
+    rows = checks[
+        checks["check_name"].astype(str).eq("legacy_rows_excluded_from_future_prior_evidence")
+    ]
+    if rows.empty:
+        return "not_evaluated"
+    return "valid" if rows["status"].astype(str).eq("pass").all() else "invalid"
+
+
+def next_preflight_command(protocol_name: str, event: str, status: str) -> str:
+    if status == PREFLIGHT_READY:
+        return (
+            "python -m f1_prediction.cli prospective-monitoring-forecast "
+            f'--protocol-name {protocol_name} --event "{event}"'
+        )
+    if status == PREFLIGHT_ALREADY_FORECASTED:
+        return "python -m f1_prediction.cli prospective-monitoring-report"
+    return "review prospective_monitoring_preflight_runbook.md"
 
 
 def resolve_registered_path(config: DataConfig, value: object) -> Path | None:
@@ -3335,6 +4283,9 @@ def forecast_columns() -> list[str]:
         "prior_monitoring_event_slugs",
         "prior_monitoring_evidence_lineage_valid",
         "prior_monitoring_evidence_exclusion_reasons",
+        "preflight_run_id",
+        "preflight_status",
+        "preflight_summary_path",
     ]
 
 
@@ -3371,6 +4322,9 @@ def manifest_columns() -> list[str]:
         "prior_monitoring_event_slugs",
         "prior_monitoring_evidence_lineage_valid",
         "prior_monitoring_evidence_exclusion_reasons",
+        "preflight_run_id",
+        "preflight_status",
+        "preflight_summary_path",
     ]
 
 

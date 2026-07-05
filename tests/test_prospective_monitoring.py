@@ -1,3 +1,4 @@
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -12,6 +13,7 @@ from f1_prediction.modeling.prospective_monitoring import (
     build_event_order_reconciliation,
     build_integrity_by_event,
     create_prospective_monitoring_forecast,
+    create_prospective_monitoring_preflight,
     create_prospective_monitoring_protocol,
     create_prospective_monitoring_report,
     create_prospective_monitoring_settlement,
@@ -141,6 +143,283 @@ def test_forecast_excludes_current_targets_and_future_events(tmp_path: Path) -> 
     assert not manifest["training_event_keys_used"].astype(str).str.contains("2026/monza").any()
 
 
+def test_preflight_ready_for_valid_prepared_registered_event(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+    checks = pd.read_csv(config.metrics_output_dir / "prospective_monitoring_preflight_checks.csv")
+    runbook = (config.metrics_output_dir / "prospective_monitoring_preflight_runbook.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert summary.status == "ready_to_forecast"
+    assert payload["forecast_allowed"] is True
+    assert payload["blocking_check_count"] == 0
+    assert checks["check_name"].str.contains("feature_artifact_exists").any()
+    assert "prospective-monitoring-forecast --protocol-name season_2026_v1" in runbook
+    assert "A `ready_to_forecast` result is required" in runbook
+
+
+def test_preflight_missing_protocol_returns_invalid_protocol(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+
+    assert summary.status == "invalid_protocol"
+    assert payload["forecast_allowed"] is False
+
+
+def test_preflight_missing_registry_row_blocks_forecast(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Singapore",
+    )
+    failures = pd.read_csv(
+        config.metrics_output_dir / "prospective_monitoring_preflight_failures.csv"
+    )
+
+    assert summary.status == "invalid_registry_lineage"
+    assert "event_exists_in_registry" in set(failures["check_name"])
+
+
+def test_preflight_duplicate_event_order_blocks_forecast(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path)
+    registry.loc[registry["event_slug"].eq("monza"), "event_order"] = 2
+    registry.to_csv(registry_path, index=False)
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+    failures = pd.read_csv(
+        config.metrics_output_dir / "prospective_monitoring_preflight_failures.csv"
+    )
+
+    assert summary.status == "invalid_registry_lineage"
+    assert "event_order_unique_within_protocol_and_season" in set(failures["check_name"])
+
+
+@pytest.mark.parametrize("bad_value", [pd.NA, "bad"])
+def test_preflight_missing_or_malformed_event_order_blocks_forecast(
+    tmp_path: Path,
+    bad_value: object,
+) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path).astype({"event_order": "object"})
+    registry.loc[registry["event_slug"].eq("bahrain"), "event_order"] = bad_value
+    registry.to_csv(registry_path, index=False)
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+
+    assert summary.status == "invalid_registry_lineage"
+
+
+def test_preflight_blocks_feature_artifact_with_quali_columns(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    registry = pd.read_csv(config.metrics_output_dir / "prospective_monitoring_event_registry.csv")
+    path = (
+        config.project_root
+        / registry.loc[
+            registry["event_slug"].eq("bahrain"),
+            "feature_artifact_path",
+        ].iloc[0]
+    )
+    frame = pd.read_parquet(path)
+    frame["quali_gap_to_pole_sec"] = 0.0
+    frame.to_parquet(path, index=False)
+    registry.loc[registry["event_slug"].eq("bahrain"), "feature_artifact_fingerprint"] = (
+        _fingerprint(path)
+    )
+    registry.to_csv(
+        config.metrics_output_dir / "prospective_monitoring_event_registry.csv", index=False
+    )
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+    failures = pd.read_csv(
+        config.metrics_output_dir / "prospective_monitoring_preflight_failures.csv"
+    )
+
+    assert summary.status == "blocked"
+    assert "forbidden_target_columns_absent" in set(failures["check_name"])
+
+
+def test_preflight_blocks_preexisting_target_artifact(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    _write_target_artifact(config, dataset_path, "Bahrain")
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+    failures = pd.read_csv(
+        config.metrics_output_dir / "prospective_monitoring_preflight_failures.csv"
+    )
+
+    assert summary.status == "blocked"
+    assert "no_existing_target_artifact_before_forecast" in set(failures["check_name"])
+
+
+def test_preflight_existing_forecast_returns_already_forecasted(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    create_prospective_monitoring_forecast(
+        config,
+        load_model_config(),
+        load_feature_config(),
+        protocol_name="season_2026_v1",
+        event="Bahrain",
+    )
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+
+    assert summary.status == "already_forecasted"
+
+
+def test_preflight_existing_settlement_blocks_when_no_forecast_snapshot(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "event_slug": "bahrain",
+                "forecast_id": "missing",
+            }
+        ]
+    ).to_parquet(config.metrics_output_dir / "prospective_monitoring_settlements.parquet")
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+
+    assert summary.status == "blocked"
+
+
+def test_preflight_legacy_current_event_blocks_forecast(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "monitor_season": 2026,
+                "event_slug": "bahrain",
+                "forecast_id": "old",
+                "artifact_event_order": 44,
+                "registry_event_order": 2,
+                "event_order_match": False,
+                "event_order_lineage_status": "legacy_noncanonical_event_order",
+                "eligible_for_future_prior_evidence_after_reconciliation": False,
+            }
+        ]
+    ).to_csv(
+        config.metrics_output_dir / "prospective_monitoring_event_order_reconciliation.csv",
+        index=False,
+    )
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Bahrain",
+    )
+
+    assert summary.status == "invalid_registry_lineage"
+
+
+def test_preflight_other_legacy_rows_do_not_block_clean_future_event(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "monitor_season": 2026,
+                "event_slug": "bahrain",
+                "forecast_id": "old",
+                "artifact_event_order": 44,
+                "registry_event_order": 2,
+                "event_order_match": False,
+                "event_order_lineage_status": "legacy_noncanonical_event_order",
+                "eligible_for_future_prior_evidence_after_reconciliation": False,
+            }
+        ]
+    ).to_csv(
+        config.metrics_output_dir / "prospective_monitoring_event_order_reconciliation.csv",
+        index=False,
+    )
+
+    summary = create_prospective_monitoring_preflight(
+        config,
+        protocol_name="season_2026_v1",
+        season=2026,
+        event="Monza",
+    )
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+
+    assert summary.status == "ready_to_forecast"
+    assert payload["legacy_exclusion_status"] == "valid"
+
+
 def test_forecast_uses_registry_event_order_metadata_not_training_count(
     tmp_path: Path,
 ) -> None:
@@ -169,6 +448,13 @@ def test_forecast_uses_registry_event_order_metadata_not_training_count(
     assert monza["event_order_registry_valid"].astype(bool).all()
     assert monza["event_order_lineage_status"].eq("valid_registry_lineage").all()
     assert not monza["event_order"].eq(monza["training_event_count"]).any()
+    assert monza["preflight_status"].eq("ready_to_forecast").all()
+    assert monza["preflight_run_id"].notna().all()
+    assert (
+        monza["preflight_summary_path"]
+        .eq("reports/metrics/prospective_monitoring_preflight_summary.json")
+        .all()
+    )
 
 
 @pytest.mark.parametrize("bad_value", [pd.NA, 0, "bad"])
@@ -184,7 +470,7 @@ def test_forecast_fails_when_registry_event_order_is_invalid(
     registry.loc[registry["event_slug"].eq("bahrain"), "event_order"] = bad_value
     registry.to_csv(registry_path, index=False)
 
-    with pytest.raises(ValueError, match="registry event order"):
+    with pytest.raises(ValueError, match="preflight is not ready"):
         create_prospective_monitoring_forecast(
             config,
             load_model_config(),
@@ -203,7 +489,7 @@ def test_forecast_fails_with_duplicate_registry_event_rows(tmp_path: Path) -> No
     duplicate = registry[registry["event_slug"].eq("bahrain")]
     pd.concat([registry, duplicate], ignore_index=True).to_csv(registry_path, index=False)
 
-    with pytest.raises(ValueError, match="duplicate_registry_event_order"):
+    with pytest.raises(ValueError, match="preflight is not ready"):
         create_prospective_monitoring_forecast(
             config,
             load_model_config(),
@@ -262,6 +548,7 @@ def test_settlement_scores_exact_keys_and_keeps_live_shadow_metrics_separate(
         protocol_name="season_2026_v1",
         event="Bahrain",
     )
+    _write_target_artifact(config, dataset_path, "Bahrain")
 
     create_prospective_monitoring_settlement(
         config,
@@ -320,6 +607,7 @@ def test_only_settled_earlier_event_evidence_reaches_later_forecast(tmp_path: Pa
         protocol_name="season_2026_v1",
         event="Bahrain",
     )
+    _write_target_artifact(config, dataset_path, "Bahrain")
     create_prospective_monitoring_settlement(
         config,
         protocol_name="season_2026_v1",
@@ -443,6 +731,7 @@ def test_legacy_noncanonical_rows_are_excluded_without_mutating_forecast(
     forecasts["event_order"] = 44
     forecasts.to_parquet(forecast_path, index=False)
     before = forecast_path.read_bytes()
+    _write_target_artifact(config, dataset_path, "Bahrain")
     create_prospective_monitoring_settlement(
         config,
         protocol_name="season_2026_v1",
@@ -536,6 +825,7 @@ def _init(config: DataConfig, dataset_path: Path) -> None:
         train_seasons=(2023,),
         dataset_path=dataset_path,
     )
+    _write_registered_feature_artifacts(config, dataset_path)
 
 
 def _config(tmp_path: Path) -> DataConfig:
@@ -598,3 +888,146 @@ def _write_dataset(config: DataConfig, *, include_monitor_season: bool = True) -
     path.parent.mkdir(parents=True, exist_ok=True)
     dataset.to_parquet(path, index=False)
     return path
+
+
+def _write_registered_feature_artifacts(config: DataConfig, dataset_path: Path) -> None:
+    dataset = pd.read_parquet(dataset_path)
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path)
+    target_columns = [
+        "quali_gap_to_pole_sec",
+        "quali_position",
+        "quali_best_lap_time_sec",
+        "reached_q2",
+        "reached_q3",
+    ]
+    for slug in registry["event_slug"].astype(str).tolist():
+        event_rows = dataset[
+            dataset["season"].astype(int).eq(2026)
+            & dataset["event_slug"].astype(str).eq(slug)
+            & dataset["checkpoint"].astype(str).eq("after_fp3")
+        ].copy()
+        if event_rows.empty:
+            continue
+        features = event_rows.drop(columns=target_columns)
+        event = str(event_rows["event"].iloc[0])
+        event_dir = config.project_root / "data/processed/monitoring/2026" / slug
+        event_dir.mkdir(parents=True, exist_ok=True)
+        feature_path = event_dir / "monitoring_fp3_features.parquet"
+        features.to_parquet(feature_path, index=False)
+        manifest_path = event_dir / "monitoring_event_manifest.json"
+        manifest = {
+            "season": 2026,
+            "event": event,
+            "event_slug": slug,
+            "feature_artifact_path": _portable(feature_path, config.project_root),
+            "feature_artifact_fingerprint": _fingerprint(feature_path),
+            "feature_driver_count": int(features["driver"].nunique()),
+            "target_coverage_status": "target_not_available",
+        }
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        mask = registry["event_slug"].astype(str).eq(slug)
+        registry.loc[mask, "feature_artifact_path"] = _portable(feature_path, config.project_root)
+        registry.loc[mask, "feature_artifact_fingerprint"] = _fingerprint(feature_path)
+        registry.loc[mask, "feature_artifact_valid"] = True
+        registry.loc[mask, "prequalification_ready"] = True
+        registry.loc[mask, "forecastable"] = True
+        registry.loc[mask, "target_artifact_path"] = ""
+        registry.loc[mask, "target_artifact_present"] = False
+        registry.loc[mask, "target_artifact_valid"] = False
+        registry.loc[mask, "settleable"] = False
+        registry.loc[mask, "target_coverage_status"] = "target_not_available"
+    registry.to_csv(registry_path, index=False)
+
+
+def _write_target_artifact(config: DataConfig, dataset_path: Path, event: str) -> None:
+    dataset = pd.read_parquet(dataset_path)
+    slug = event.strip().lower().replace(" ", "-")
+    event_rows = dataset[
+        dataset["season"].astype(int).eq(2026)
+        & dataset["event_slug"].astype(str).eq(slug)
+        & dataset["checkpoint"].astype(str).eq("after_fp3")
+    ].copy()
+    event_dir = config.project_root / "data/processed/monitoring/2026" / slug
+    target_path = event_dir / "monitoring_qualifying_targets.parquet"
+    coverage_path = event_dir / "monitoring_target_coverage.csv"
+    targets = event_rows[
+        [
+            "season",
+            "event",
+            "event_slug",
+            "driver",
+            "driver_key",
+            "team",
+            "team_key",
+            "quali_gap_to_pole_sec",
+            "quali_position",
+            "quali_best_lap_time_sec",
+            "reached_q2",
+            "reached_q3",
+        ]
+    ].copy()
+    targets["target_evaluable"] = True
+    targets["target_coverage_status"] = "target_coverage_complete"
+    targets["target_source_status"] = "synthetic"
+    targets["target_created_at_utc"] = "2026-01-01T00:00:00+00:00"
+    targets.to_parquet(target_path, index=False)
+    coverage = event_rows[
+        ["season", "event", "event_slug", "checkpoint", "driver", "driver_key", "team", "team_key"]
+    ].copy()
+    coverage["feature_row_present"] = True
+    coverage["qualifying_target_present"] = True
+    coverage["target_evaluable"] = True
+    coverage["target_missing_reason"] = ""
+    coverage["target_source_status"] = "synthetic"
+    coverage["target_validation_status"] = "valid"
+    coverage["included_in_settlement_metrics"] = True
+    coverage["excluded_from_settlement_metrics"] = False
+    coverage["settlement_exclusion_reason"] = ""
+    coverage.to_csv(coverage_path, index=False)
+    manifest_path = event_dir / "monitoring_event_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(
+        {
+            "target_artifact_path": _portable(target_path, config.project_root),
+            "target_artifact_fingerprint": _fingerprint(target_path),
+            "target_coverage_artifact_path": _portable(coverage_path, config.project_root),
+            "target_coverage_artifact_fingerprint": _fingerprint(coverage_path),
+            "feature_driver_count": int(event_rows["driver"].nunique()),
+            "target_driver_count": int(event_rows["driver"].nunique()),
+            "evaluable_driver_count": int(event_rows["driver"].nunique()),
+            "non_evaluable_driver_count": 0,
+            "feature_target_coverage_rate": 1.0,
+            "target_coverage_rate": 1.0,
+            "target_coverage_status": "target_coverage_complete",
+            "partial_target_coverage": False,
+            "settlement_metric_status": "scorable",
+        }
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path)
+    mask = registry["event_slug"].astype(str).eq(slug)
+    registry.loc[mask, "target_artifact_path"] = _portable(target_path, config.project_root)
+    registry.loc[mask, "target_artifact_present"] = True
+    registry.loc[mask, "target_artifact_valid"] = True
+    registry.loc[mask, "settleable"] = True
+    registry.loc[mask, "target_coverage_status"] = "target_coverage_complete"
+    registry.loc[mask, "target_coverage_rate"] = 1.0
+    registry.loc[mask, "feature_driver_count"] = int(event_rows["driver"].nunique())
+    registry.loc[mask, "target_driver_count"] = int(event_rows["driver"].nunique())
+    registry.loc[mask, "evaluable_driver_count"] = int(event_rows["driver"].nunique())
+    registry.loc[mask, "non_evaluable_driver_count"] = 0
+    registry.to_csv(registry_path, index=False)
+
+
+def _fingerprint(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as input_file:
+        for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()[:16]
+
+
+def _portable(path: Path, root: Path) -> str:
+    return path.resolve().relative_to(root.resolve()).as_posix()

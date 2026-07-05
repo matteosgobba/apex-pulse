@@ -381,6 +381,9 @@ def create_monitoring_data_readiness_report(config: DataConfig) -> MonitoringOnb
     monitoring_summary = (
         read_json_if_exists(metrics_dir / "prospective_monitoring_summary.json") or {}
     )
+    preflight_summary = (
+        read_json_if_exists(metrics_dir / "prospective_monitoring_preflight_summary.json") or {}
+    )
     registry = read_registry(metrics_dir)
     manifests = discover_event_manifests(config)
     by_event = build_readiness_by_event(config, protocol, registry, manifests)
@@ -433,6 +436,17 @@ def create_monitoring_data_readiness_report(config: DataConfig) -> MonitoringOnb
         "monitoring_next_forecast_prior_evidence_status": monitoring_summary.get(
             "monitoring_next_forecast_prior_evidence_status",
             event_order_integrity.get("prior_evidence_lineage_status", "not_evaluated"),
+        ),
+        "prospective_monitoring_preflight_available": bool(preflight_summary),
+        "prospective_monitoring_preflight_status": preflight_summary.get("status", "missing"),
+        "prospective_monitoring_preflight_blocking_check_count": int(
+            preflight_summary.get("blocking_check_count", 0) or 0
+        ),
+        "prospective_monitoring_next_event_ready_to_forecast": bool(
+            preflight_summary.get("forecast_allowed", False)
+        ),
+        "prospective_monitoring_preflight_runbook_path": preflight_summary.get(
+            "prospective_monitoring_preflight_runbook_path"
         ),
         "chronological_order_status": integrity.get("chronological_order_status", "unknown"),
         "integrity_status": integrity.get("status", "missing"),

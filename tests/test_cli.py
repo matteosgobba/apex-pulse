@@ -1134,6 +1134,43 @@ def test_monitoring_data_readiness_report_command_is_registered(
     assert "Monitoring onboarding command complete" in result.output
 
 
+def test_prospective_monitoring_preflight_command_is_registered(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("f1_prediction.cli.load_data_config", lambda config_path=None: config)
+
+    def fake_preflight(*args, **kwargs):
+        captured.update(kwargs)
+        return _monitoring_summary(tmp_path, "preflight.json")
+
+    monkeypatch.setattr(
+        "f1_prediction.cli.run_prospective_monitoring_preflight",
+        fake_preflight,
+    )
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "prospective-monitoring-preflight",
+            "--protocol-name",
+            "season_2026_v1",
+            "--season",
+            "2026",
+            "--event",
+            "Bahrain",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Prospective monitoring command complete" in result.output
+    assert captured["protocol_name"] == "season_2026_v1"
+    assert captured["season"] == 2026
+    assert captured["event"] == "Bahrain"
+
+
 def test_prospective_monitoring_forecast_command_is_registered(
     monkeypatch,
     tmp_path: Path,

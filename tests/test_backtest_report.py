@@ -383,6 +383,13 @@ def test_backtest_report_includes_monitoring_data_onboarding_summary() -> None:
             "monitoring_legacy_event_order_exclusion_count": 2,
             "monitoring_prior_evidence_lineage_status": "legacy_noncanonical_rows_excluded",
             "monitoring_next_forecast_prior_evidence_status": ("legacy_noncanonical_rows_excluded"),
+            "prospective_monitoring_preflight_available": True,
+            "prospective_monitoring_preflight_status": "ready_to_forecast",
+            "prospective_monitoring_preflight_blocking_check_count": 0,
+            "prospective_monitoring_next_event_ready_to_forecast": True,
+            "prospective_monitoring_preflight_runbook_path": (
+                "reports/metrics/prospective_monitoring_preflight_runbook.md"
+            ),
         },
     )
 
@@ -402,6 +409,9 @@ def test_backtest_report_includes_monitoring_data_onboarding_summary() -> None:
     assert report["monitoring_prior_evidence_lineage_status"] == (
         "legacy_noncanonical_rows_excluded"
     )
+    assert report["prospective_monitoring_preflight_available"] is True
+    assert report["prospective_monitoring_preflight_status"] == "ready_to_forecast"
+    assert report["prospective_monitoring_next_event_ready_to_forecast"] is True
 
 
 def _quality() -> dict[str, object]:

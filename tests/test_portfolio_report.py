@@ -188,6 +188,13 @@ def test_portfolio_report_includes_monitoring_data_onboarding_when_available(
                 "monitoring_next_forecast_prior_evidence_status": (
                     "legacy_noncanonical_rows_excluded"
                 ),
+                "prospective_monitoring_preflight_available": True,
+                "prospective_monitoring_preflight_status": "ready_to_forecast",
+                "prospective_monitoring_preflight_blocking_check_count": 0,
+                "prospective_monitoring_next_event_ready_to_forecast": True,
+                "prospective_monitoring_preflight_runbook_path": (
+                    "reports/metrics/prospective_monitoring_preflight_runbook.md"
+                ),
             }
         ),
         encoding="utf-8",
@@ -208,8 +215,10 @@ def test_portfolio_report_includes_monitoring_data_onboarding_when_available(
         "valid_with_legacy_artifact_exclusion"
     )
     assert onboarding["monitoring_legacy_event_order_exclusion_count"] == 2
+    assert onboarding["prospective_monitoring_preflight_status"] == "ready_to_forecast"
     assert "Monitoring data onboarding" in model_card
     assert "Forecast rows without qualifying targets are retained" in model_card
+    assert "Preflight status" in model_card
 
 
 def test_portfolio_report_includes_guarded_mode_when_artifacts_exist(tmp_path: Path) -> None:
