@@ -2252,6 +2252,38 @@ def _print_dashboard_export_summary(summary: DashboardExportSummary, project_roo
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
 
 
+@app.command("dashboard-api")
+def dashboard_api_command(
+    host: Annotated[
+        str,
+        typer.Option("--host", help="Development API host."),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", min=1, max=65535, help="Development API port."),
+    ] = 8000,
+    dashboard_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--dashboard-dir",
+            help="Directory containing dashboard-export JSON artifacts.",
+        ),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Run the read-only dashboard API development server."""
+    configure_logging(verbose=verbose)
+    try:
+        import uvicorn
+
+        from f1_prediction.dashboard_api.app import create_dashboard_app
+    except ImportError as exc:
+        typer.echo("Error: dashboard API dependencies are not installed.", err=True)
+        raise typer.Exit(code=1) from exc
+    application = create_dashboard_app(dashboard_dir=dashboard_dir)
+    uvicorn.run(application, host=host, port=port)
+
+
 def _print_prospective_replay_eligibility_audit_summary(
     summary: ProspectiveReplayEligibilityAuditSummary,
     project_root: Path,

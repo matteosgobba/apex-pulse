@@ -28,6 +28,7 @@ data/external/*
 models/*
 reports/figures/*
 reports/metrics/*
+reports/dashboard/*
 
 # Keep the directory structure in Git
 !data/raw/.gitkeep
@@ -37,6 +38,7 @@ reports/metrics/*
 !models/.gitkeep
 !reports/figures/.gitkeep
 !reports/metrics/.gitkeep
+!reports/dashboard/.gitkeep
 .matplotlib-cache/
 
 # Private/local project documentation
