@@ -7,10 +7,16 @@ import {
   loadPracticePageData,
   loadSettlementPageData
 } from "@/lib/api";
-import { DEFAULT_API_BASE_URL, getApiBaseUrl } from "@/lib/config";
+import {
+  DEFAULT_API_BASE_URL,
+  DEFAULT_STALE_AFTER_MINUTES,
+  getApiBaseUrl,
+  getDashboardStaleAfterMinutes
+} from "@/lib/config";
 
 const originalFetch = global.fetch;
 const originalApiBaseUrl = process.env.NEXT_PUBLIC_APEX_PULSE_API_BASE_URL;
+const originalStaleAfter = process.env.NEXT_PUBLIC_APEX_PULSE_DASHBOARD_STALE_AFTER_MINUTES;
 
 afterEach(() => {
   global.fetch = originalFetch;
@@ -18,6 +24,11 @@ afterEach(() => {
     delete process.env.NEXT_PUBLIC_APEX_PULSE_API_BASE_URL;
   } else {
     process.env.NEXT_PUBLIC_APEX_PULSE_API_BASE_URL = originalApiBaseUrl;
+  }
+  if (originalStaleAfter === undefined) {
+    delete process.env.NEXT_PUBLIC_APEX_PULSE_DASHBOARD_STALE_AFTER_MINUTES;
+  } else {
+    process.env.NEXT_PUBLIC_APEX_PULSE_DASHBOARD_STALE_AFTER_MINUTES = originalStaleAfter;
   }
   vi.restoreAllMocks();
 });
@@ -68,6 +79,27 @@ describe("dashboard API client", () => {
     delete process.env.NEXT_PUBLIC_APEX_PULSE_API_BASE_URL;
 
     expect(getApiBaseUrl()).toBe(DEFAULT_API_BASE_URL);
+  });
+
+  test("dashboard stale threshold is read from configuration", () => {
+    process.env.NEXT_PUBLIC_APEX_PULSE_DASHBOARD_STALE_AFTER_MINUTES = "240";
+
+    expect(getDashboardStaleAfterMinutes()).toBe(240);
+
+    process.env.NEXT_PUBLIC_APEX_PULSE_DASHBOARD_STALE_AFTER_MINUTES = "invalid";
+
+    expect(getDashboardStaleAfterMinutes()).toBe(DEFAULT_STALE_AFTER_MINUTES);
+  });
+
+  test("API-unavailable state uses safe frontend error text", async () => {
+    global.fetch = vi.fn(async () => {
+      throw new TypeError("fetch failed: /private/tmp/secret-dashboard-path");
+    });
+
+    await expect(fetchDashboard("/api/v1/dashboard/current-event")).rejects.toMatchObject({
+      code: "dashboard_api_unavailable",
+      message: "The dashboard API is unavailable. Start the read-only API server first."
+    });
   });
 
   test("forecast endpoint failure maps to a safe page error", async () => {

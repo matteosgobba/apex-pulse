@@ -24,6 +24,7 @@ DASHBOARD_ARTIFACTS: dict[str, str] = {
 }
 
 DEFAULT_DASHBOARD_DIR = "reports/dashboard"
+DEFAULT_STALE_AFTER_MINUTES = 180
 
 
 class DashboardApiError(Exception):
@@ -69,6 +70,7 @@ class DashboardArtifact:
     artifact_type: str
     payload: dict[str, Any]
     generated_at_utc: str
+    status: str
 
 
 class DashboardArtifactService:
@@ -109,6 +111,7 @@ class DashboardArtifactService:
             artifact_type=artifact_type,
             payload=payload,
             generated_at_utc=str(payload["generated_at_utc"]),
+            status=str(payload["status"]),
         )
 
     def load_bundle(self) -> dict[str, dict[str, Any]]:
@@ -120,3 +123,14 @@ class DashboardArtifactService:
 
     def _export_manifest_exists(self) -> bool:
         return (self.dashboard_dir / DASHBOARD_ARTIFACTS["dashboard_manifest"]).is_file()
+
+
+def parse_stale_after_minutes(value: str | None) -> int:
+    """Parse the dashboard stale threshold, falling back safely for malformed values."""
+    if value is None or not value.strip():
+        return DEFAULT_STALE_AFTER_MINUTES
+    try:
+        parsed = int(value)
+    except ValueError:
+        return DEFAULT_STALE_AFTER_MINUTES
+    return parsed if parsed > 0 else DEFAULT_STALE_AFTER_MINUTES

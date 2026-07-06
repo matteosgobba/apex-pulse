@@ -8,6 +8,10 @@ from typer.testing import CliRunner
 from f1_prediction.cli import app
 from f1_prediction.dashboard.schema import SCHEMA_VERSION
 from f1_prediction.dashboard_api.app import create_dashboard_app
+from f1_prediction.dashboard_api.service import (
+    DEFAULT_STALE_AFTER_MINUTES,
+    parse_stale_after_minutes,
+)
 
 GENERATED_AT = "2026-01-01T12:00:00+00:00"
 ARTIFACT_FILES = {
@@ -93,6 +97,21 @@ def test_valid_responses_include_generated_at_header(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.headers["x-apex-pulse-dashboard-generated-at"] == GENERATED_AT
+
+
+def test_valid_artifact_responses_include_safe_freshness_headers(tmp_path: Path) -> None:
+    dashboard_dir = _write_dashboard_bundle(tmp_path)
+    application = create_dashboard_app(dashboard_dir)
+
+    response = _request(application, "GET", "/api/v1/dashboard/current-event")
+
+    assert response.status_code == 200
+    assert response.headers["x-apex-pulse-dashboard-generated-at"] == GENERATED_AT
+    assert response.headers["x-apex-pulse-dashboard-artifact-type"] == "current_event"
+    assert response.headers["x-apex-pulse-dashboard-status"] == "complete"
+    assert response.headers["cache-control"] == "no-cache"
+    assert "immutable" not in response.headers["cache-control"]
+    assert str(tmp_path) not in json.dumps(dict(response.headers))
 
 
 def test_missing_optional_artifact_returns_stable_404(tmp_path: Path) -> None:
@@ -214,6 +233,18 @@ def test_configured_cors_origin_is_allowed(monkeypatch, tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
     assert "access-control-allow-credentials" not in response.headers
+
+
+def test_staleness_configuration_parsing_is_robust(monkeypatch, tmp_path: Path) -> None:
+    assert parse_stale_after_minutes("45") == 45
+    assert parse_stale_after_minutes("bad") == DEFAULT_STALE_AFTER_MINUTES
+    assert parse_stale_after_minutes("-10") == DEFAULT_STALE_AFTER_MINUTES
+    assert parse_stale_after_minutes(None) == DEFAULT_STALE_AFTER_MINUTES
+
+    monkeypatch.setenv("APEX_PULSE_DASHBOARD_STALE_AFTER_MINUTES", "not-a-number")
+    application = create_dashboard_app(tmp_path / "missing")
+
+    assert application.state.dashboard_stale_after_minutes == DEFAULT_STALE_AFTER_MINUTES
 
 
 def test_bundle_returns_same_validated_documents_without_second_schema(tmp_path: Path) -> None:

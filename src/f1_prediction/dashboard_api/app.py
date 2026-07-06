@@ -20,10 +20,12 @@ from f1_prediction.dashboard_api.service import (
     DEFAULT_DASHBOARD_DIR,
     DashboardApiError,
     DashboardArtifactService,
+    parse_stale_after_minutes,
 )
 
 DASHBOARD_DIR_ENV = "APEX_PULSE_DASHBOARD_DIR"
 CORS_ORIGINS_ENV = "APEX_PULSE_DASHBOARD_API_CORS_ORIGINS"
+STALE_AFTER_MINUTES_ENV = "APEX_PULSE_DASHBOARD_STALE_AFTER_MINUTES"
 DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
 
 
@@ -37,6 +39,9 @@ def create_dashboard_app(dashboard_dir: Path | None = None) -> FastAPI:
         description="Read-only API over validated dashboard JSON artifacts.",
     )
     app.state.dashboard_service = service
+    app.state.dashboard_stale_after_minutes = parse_stale_after_minutes(
+        os.getenv(STALE_AFTER_MINUTES_ENV)
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),
@@ -109,7 +114,12 @@ def _artifact_response(service: DashboardArtifactService, artifact_type: str) ->
     artifact = service.load_artifact(artifact_type)
     return _json_response(
         artifact.payload,
-        headers={"X-Apex-Pulse-Dashboard-Generated-At": artifact.generated_at_utc},
+        headers={
+            "X-Apex-Pulse-Dashboard-Generated-At": artifact.generated_at_utc,
+            "X-Apex-Pulse-Dashboard-Artifact-Type": artifact.artifact_type,
+            "X-Apex-Pulse-Dashboard-Status": artifact.status,
+            "Cache-Control": "no-cache",
+        },
     )
 
 

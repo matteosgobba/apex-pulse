@@ -120,6 +120,24 @@ describe("CurrentEventPageView", () => {
       "/monitoring-history"
     );
   });
+
+  test("API-unavailable state renders a polished safe message without raw fetch details", () => {
+    renderPage(readyCurrentEvent, {
+      currentEvent: null,
+      practiceStatus: null,
+      forecast: null,
+      error: {
+        code: "dashboard_api_unavailable",
+        message: "The dashboard API is unavailable. Start the read-only API server first."
+      }
+    });
+
+    expect(screen.getByText("Dashboard API Unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/not currently reachable or cannot serve this artifact safely/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/fetch failed/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/private\/tmp/i)).not.toBeInTheDocument();
+  });
 });
 
 describe("MethodologyPage", () => {
