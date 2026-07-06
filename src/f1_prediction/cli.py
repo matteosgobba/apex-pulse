@@ -115,6 +115,12 @@ from f1_prediction.modeling.prospective_replay_eligibility_audit import (
     ProspectiveReplayEligibilityAuditSummary,
     create_prospective_replay_eligibility_audit_report,
 )
+from f1_prediction.modeling.qualifying_target_parity_audit import (
+    QualifyingTargetParityAuditSummary,
+)
+from f1_prediction.modeling.qualifying_target_parity_audit import (
+    create_qualifying_target_parity_audit as run_qualifying_target_parity_audit,
+)
 from f1_prediction.modeling.season_aware_candidate_audit import (
     SeasonAwareCandidateAuditSummary,
 )
@@ -1423,6 +1429,37 @@ def monitoring_data_integrity_audit_command(
     _print_monitoring_data_integrity_audit_summary(summary, data_config.project_root)
 
 
+@app.command("qualifying-target-parity-audit")
+def qualifying_target_parity_audit_command(
+    season: Annotated[
+        int | None,
+        typer.Option("--season", min=1950, help="Optional monitored season filter."),
+    ] = None,
+    event: Annotated[
+        str | None,
+        typer.Option("--event", help="Optional monitored event name or slug filter."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Audit stored monitored qualifying targets against local raw Q lap artifacts."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_qualifying_target_parity_audit(
+            data_config,
+            season=season,
+            event=event,
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_qualifying_target_parity_audit_summary(summary, data_config.project_root)
+
+
 @app.command(
     "prospective-monitoring-init",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -2279,6 +2316,25 @@ def _print_monitoring_data_integrity_audit_summary(
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Checks: {_display_path(summary.checks_path, project_root)}")
     typer.echo(f"Driver populations: {_display_path(summary.population_path, project_root)}")
+    typer.echo(f"Runbook: {_display_path(summary.runbook_path, project_root)}")
+
+
+def _print_qualifying_target_parity_audit_summary(
+    summary: QualifyingTargetParityAuditSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Qualifying target parity audit complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Events audited: {summary.events_audited}")
+    typer.echo(f"Events with raw Q: {summary.events_with_raw_q}")
+    typer.echo(f"Events with verified parity: {summary.events_with_verified_parity}")
+    typer.echo(f"Events with blocking failures: {summary.events_with_blocking_failures}")
+    typer.echo(f"Events with missing raw Q: {summary.events_with_missing_raw_q}")
+    typer.echo(f"Recommended action: {summary.recommended_operator_action}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Checks: {_display_path(summary.checks_path, project_root)}")
+    typer.echo(f"Event summary: {_display_path(summary.event_summary_path, project_root)}")
+    typer.echo(f"Driver comparison: {_display_path(summary.driver_comparison_path, project_root)}")
     typer.echo(f"Runbook: {_display_path(summary.runbook_path, project_root)}")
 
 
