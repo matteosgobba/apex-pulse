@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "current_event",
+  "generated_at_utc": "2026-07-06T12:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "complete",
+  "data": {
+    "event_identity": {
+      "season": 2026,
+      "event": "Italy",
+      "event_slug": "italy",
+      "event_order": 14
+    },
+    "lifecycle": {
+      "state": "ready_to_forecast",
+      "display_label": "Ready to forecast",
+      "reason": "preflight_ready"
+    },
+    "freshness": {
+      "absent_values_are_unavailable_not_zero": true,
+      "dashboard_source_generated_at_utc": {
+        "preflight": "2026-07-06T11:55:00+00:00"
+      }
+    },
+    "monitoring_protocol": {
+      "checkpoint": "after_fp3",
+      "monitor_season": 2026,
+      "policy_recommendation": "season_aware_candidate_requires_more_evidence",
+      "protocol_fingerprint": "abc123",
+      "protocol_name": "season_2026_v1",
+      "protocol_version": "1.0",
+      "train_seasons": [2023, 2024, 2025]
+    },
+    "registry_lineage": {
+      "eligible_for_valid_prospective_evidence": true,
+      "event_order": 14,
+      "event_order_lineage_status": "valid",
+      "legacy_noncanonical": false,
+      "reconciliation_action": "include_in_prior_monitoring_evidence",
+      "reconciliation_reason": "registry_order_valid"
+    },
+    "preflight": {
+      "available": true,
+      "blocking_check_count": 0,
+      "forecast_allowed": true,
+      "next_required_command": null,
+      "preflight_run_id": "ready-run",
+      "runbook_path": null,
+      "status": "ready_to_forecast",
+      "warning_check_count": 1
+    },
+    "forecast_status": {
+      "available": false,
+      "checkpoint": null,
+      "forecast_created_at_utc": null,
+      "forecasted_driver_count": null
+    },
+    "settlement_status": {
+      "available": false,
+      "excluded_driver_count": null,
+      "scored_driver_count": null,
+      "settled_at_utc": null,
+      "settlement_valid": null
+    },
+    "legacy_status": {
+      "display_label": null,
+      "eligible_for_valid_prospective_evidence": true,
+      "legacy_noncanonical": false,
+      "reason": null
+    },
+    "summary_kpis": {
+      "actual_pole_driver": null,
+      "forecast_checkpoint": null,
+      "forecasted_driver_count": null,
+      "interval_availability_rate": null,
+      "predicted_pole_driver": null,
+      "settlement_mae_gap_sec": null
+    }
+  }
+}

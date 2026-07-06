@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "current_event",
+  "generated_at_utc": "2026-07-06T12:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "empty",
+  "data": {
+    "event_identity": {
+      "season": null,
+      "event": null,
+      "event_slug": null,
+      "event_order": null
+    },
+    "lifecycle": {
+      "state": "no_event_available",
+      "display_label": "No event available",
+      "reason": "no_eligible_monitoring_event"
+    },
+    "summary_kpis": {}
+  }
+}

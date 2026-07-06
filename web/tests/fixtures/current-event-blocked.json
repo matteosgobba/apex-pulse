@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "current_event",
+  "generated_at_utc": "2026-07-06T12:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "partial",
+  "data": {
+    "event_identity": {
+      "season": 2026,
+      "event": "Belgium",
+      "event_slug": "belgium",
+      "event_order": 13
+    },
+    "lifecycle": {
+      "state": "blocked",
+      "display_label": "Blocked",
+      "reason": "preflight_blocked"
+    },
+    "monitoring_protocol": {
+      "checkpoint": "after_fp2",
+      "monitor_season": 2026,
+      "policy_recommendation": "season_aware_candidate_requires_more_evidence",
+      "protocol_fingerprint": "blocked123",
+      "protocol_name": "season_2026_v1",
+      "protocol_version": "1.0",
+      "train_seasons": [2023, 2024, 2025]
+    },
+    "registry_lineage": {
+      "eligible_for_valid_prospective_evidence": true,
+      "event_order_lineage_status": "valid",
+      "legacy_noncanonical": false
+    },
+    "preflight": {
+      "available": true,
+      "blocking_check_count": 2,
+      "forecast_allowed": false,
+      "next_required_command": "review prospective_monitoring_preflight_runbook.md",
+      "preflight_run_id": "blocked-run",
+      "runbook_path": "reports/metrics/prospective_monitoring_preflight_runbook.md",
+      "status": "missing_required_practice_sessions",
+      "warning_check_count": 0
+    },
+    "forecast_status": {
+      "available": false,
+      "checkpoint": null,
+      "forecast_created_at_utc": null,
+      "forecasted_driver_count": null
+    },
+    "settlement_status": {
+      "available": false,
+      "excluded_driver_count": null,
+      "scored_driver_count": null,
+      "settled_at_utc": null,
+      "settlement_valid": null
+    },
+    "legacy_status": {
+      "display_label": null,
+      "eligible_for_valid_prospective_evidence": true,
+      "legacy_noncanonical": false,
+      "reason": null
+    },
+    "summary_kpis": {}
+  }
+}

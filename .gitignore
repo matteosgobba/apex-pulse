@@ -41,6 +41,14 @@ reports/dashboard/*
 !reports/dashboard/.gitkeep
 .matplotlib-cache/
 
+# Frontend generated files
+web/node_modules/
+web/.next/
+web/out/
+web/coverage/
+web/.env.local
+web/tsconfig.tsbuildinfo
+
 # Private/local project documentation
 /AGENTS.md
 /PROJECT_HANDOFF.md

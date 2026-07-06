@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "current_event",
+  "generated_at_utc": "2026-07-06T12:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "complete",
+  "data": {
+    "event_identity": {
+      "season": 2026,
+      "event": "Great Britain",
+      "event_slug": "great-britain",
+      "event_order": 9
+    },
+    "lifecycle": {
+      "state": "legacy_descriptive_only",
+      "display_label": "Legacy descriptive only",
+      "reason": "event_order_lineage_is_legacy_noncanonical"
+    },
+    "monitoring_protocol": {
+      "checkpoint": "after_fp3",
+      "monitor_season": 2026,
+      "policy_recommendation": "season_aware_candidate_requires_more_evidence",
+      "protocol_fingerprint": "legacy123",
+      "protocol_name": "season_2026_v1",
+      "protocol_version": "1.0",
+      "train_seasons": [2023, 2024, 2025]
+    },
+    "registry_lineage": {
+      "eligible_for_valid_prospective_evidence": false,
+      "event_order": 9,
+      "event_order_lineage_status": "legacy_noncanonical_event_order",
+      "legacy_noncanonical": true,
+      "reconciliation_action": "exclude_from_prior_monitoring_evidence",
+      "reconciliation_reason": "event_order_lineage_mismatch_or_unsettled"
+    },
+    "preflight": {
+      "available": true,
+      "blocking_check_count": 6,
+      "forecast_allowed": false,
+      "next_required_command": "review prospective_monitoring_preflight_runbook.md",
+      "preflight_run_id": "legacy-run",
+      "runbook_path": "reports/metrics/prospective_monitoring_preflight_runbook.md",
+      "status": "invalid_registry_lineage",
+      "warning_check_count": 1
+    },
+    "forecast_status": {
+      "available": true,
+      "checkpoint": "after_fp3",
+      "forecast_created_at_utc": "2026-07-06T11:30:00+00:00",
+      "forecasted_driver_count": 28
+    },
+    "settlement_status": {
+      "available": true,
+      "excluded_driver_count": 6,
+      "scored_driver_count": 22,
+      "settled_at_utc": "2026-07-06T12:10:00+00:00",
+      "settlement_valid": true
+    },
+    "legacy_status": {
+      "display_label": "Legacy descriptive only",
+      "eligible_for_valid_prospective_evidence": false,
+      "legacy_noncanonical": true,
+      "reason": "event_order_lineage_is_legacy_noncanonical"
+    },
+    "summary_kpis": {
+      "actual_pole_driver": "RUS",
+      "forecast_checkpoint": "after_fp3",
+      "forecasted_driver_count": 28,
+      "interval_availability_rate": 0,
+      "predicted_pole_driver": "ANT",
+      "settlement_mae_gap_sec": 0.4034454016992953
+    }
+  }
+}
