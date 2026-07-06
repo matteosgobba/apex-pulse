@@ -36,13 +36,18 @@ NEXT_PUBLIC_APEX_PULSE_API_BASE_URL=http://127.0.0.1:8000
 /
 /forecast
 /practice
+/settlement
+/monitoring-history
 /methodology
 ```
 
 `/` shows the current monitored event with compact forecast and practice previews. `/forecast`
 shows the exported qualifying forecast leaderboard. `/practice` shows FP1, FP2, FP3, and Q
-artifact availability plus workflow readiness. `/methodology` explains the prediction lifecycle and
-public-data limits.
+artifact availability plus workflow readiness. `/settlement` compares an exported pre-qualifying
+forecast against qualifying outcomes when settlement data exists. `/monitoring-history` keeps valid
+prospective monitoring evidence, legacy descriptive records, and historical backtest context
+visually and analytically separate. `/methodology` explains the prediction lifecycle and public-data
+limits.
 
 ## Scope
 
@@ -53,6 +58,6 @@ other ML workflow operation.
 Dashboard freshness depends on regenerated dashboard artifacts and the separately running read-only
 Python API. The frontend does not poll, schedule refreshes, or claim live telemetry.
 
-Milestone 40D includes the dashboard shell, Current Event page, Forecast leaderboard page, Practice
-Status page, and static Methodology page. Settlement comparison, historical monitoring, deployment,
+Milestone 40E includes the dashboard shell, Current Event page, Forecast leaderboard page, Practice
+Status page, Settlement page, Monitoring History page, and static Methodology page. Deployment,
 polling, websockets, and live updates are intentionally out of scope.

@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "event_settlement",
+  "generated_at_utc": "2026-07-06T13:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "complete",
+  "data": {
+    "event_identity": {
+      "season": 2026,
+      "event": "Italy",
+      "event_slug": "italy",
+      "event_order": 14
+    },
+    "lifecycle_state": "settled",
+    "settlement_metadata": {
+      "checkpoint": "after_fp3",
+      "protocol_fingerprint": "abc123",
+      "protocol_name": "season_2026_v1",
+      "settled_at_utc": "2026-07-06T12:50:00+00:00",
+      "settlement_valid": true
+    },
+    "summary_metrics": {
+      "actual_pole_driver": "NOR",
+      "driver_count": 2,
+      "mae_gap_sec": 0.117,
+      "rmse_gap_sec": 0.130,
+      "median_absolute_gap_error_sec": 0.117,
+      "mean_absolute_position_error": 0.5,
+      "top_3_agreement": 1,
+      "top_5_agreement": 1,
+      "top_10_agreement": 1,
+      "scored_driver_count": 2
+    },
+    "interval_diagnostics": {
+      "available": false,
+      "reason": "intervals_not_available",
+      "value": null
+    },
+    "driver_comparison": [
+      {
+        "predicted_position": 1,
+        "actual_position": 1,
+        "absolute_position_error": 0,
+        "driver": "NOR",
+        "driver_code": "NOR",
+        "predicted_gap_to_pole_sec": 0,
+        "actual_gap_to_pole_sec": 0,
+        "absolute_gap_error_sec": 0,
+        "included_in_metrics": true,
+        "settlement_evaluable": true,
+        "settlement_exclusion_reason": ""
+      },
+      {
+        "predicted_position": 2,
+        "actual_position": 3,
+        "absolute_position_error": 1,
+        "driver": "VER",
+        "driver_code": "VER",
+        "predicted_gap_to_pole_sec": 0.234,
+        "actual_gap_to_pole_sec": 0.468,
+        "absolute_gap_error_sec": 0.234,
+        "included_in_metrics": true,
+        "settlement_evaluable": true,
+        "settlement_exclusion_reason": ""
+      }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+import { AppShell } from "@/components/app-shell";
+import { MonitoringHistoryPageView } from "@/components/monitoring-history-page";
+import { loadMonitoringHistoryPageData } from "@/lib/api";
+
+export default async function MonitoringHistoryPage() {
+  const data = await loadMonitoringHistoryPageData();
+  return (
+    <AppShell
+      health={data.health}
+      generatedAt={data.historicalMonitoring?.generated_at_utc ?? null}
+    >
+      <MonitoringHistoryPageView data={data} />
+    </AppShell>
+  );
+}

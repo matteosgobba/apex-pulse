@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "historical_monitoring_summary",
+  "generated_at_utc": "2026-07-06T13:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "empty",
+  "data": {
+    "valid_prospective_monitoring": {
+      "event_count": 0,
+      "forecasted_event_count": 0,
+      "settled_event_count": 0,
+      "aggregate_metrics": {
+        "available": false,
+        "reason": "no_valid_prospective_settlements",
+        "value": null
+      },
+      "events": []
+    },
+    "legacy_descriptive_records": [],
+    "backtest_context": {
+      "available": false,
+      "champion_selection_mode": null,
+      "n_events": null,
+      "n_folds_successful": null,
+      "preferred_backtest_strategy": null
+    }
+  }
+}

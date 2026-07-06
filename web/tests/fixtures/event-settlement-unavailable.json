@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "event_settlement",
+  "generated_at_utc": "2026-07-06T13:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "empty",
+  "data": {
+    "event_identity": {
+      "season": 2026,
+      "event": "Italy",
+      "event_slug": "italy",
+      "event_order": 14
+    },
+    "lifecycle_state": "ready_to_forecast",
+    "settlement_metadata": null,
+    "summary_metrics": {},
+    "interval_diagnostics": {
+      "available": false,
+      "reason": "settlement_not_available",
+      "value": null
+    },
+    "driver_comparison": []
+  }
+}

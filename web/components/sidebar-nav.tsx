@@ -7,6 +7,8 @@ const NAV_ITEMS = [
   { href: "/", label: "Current Event" },
   { href: "/forecast", label: "Forecast" },
   { href: "/practice", label: "Practice Status" },
+  { href: "/settlement", label: "Settlement" },
+  { href: "/monitoring-history", label: "Monitoring History" },
   { href: "/methodology", label: "Methodology" }
 ];
 

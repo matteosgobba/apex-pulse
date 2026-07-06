@@ -22,6 +22,10 @@ export function formatInteger(value: number | null | undefined): string {
     : "Not available";
 }
 
+export function formatDecimal(value: number | null | undefined, digits = 2): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "Not available";
+}
+
 export function formatSeconds(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value)
     ? `${value.toFixed(3)} sec`

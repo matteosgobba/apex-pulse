@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "model_summary",
+  "generated_at_utc": "2026-07-06T13:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "complete",
+  "data": {
+    "backtest_summary": {
+      "dataset_rows": 2634,
+      "checkpoints": ["after_fp1", "after_fp2", "after_fp3"]
+    },
+    "current_policy_summary": {},
+    "limitations": [],
+    "model_status": {},
+    "supported_forecast_outputs": {
+      "predicted_gap_to_pole": true,
+      "predicted_ranking": true,
+      "probability_metrics": false
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "event_settlement",
+  "generated_at_utc": "2026-07-06T13:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "complete",
+  "data": {
+    "event_identity": {
+      "season": 2026,
+      "event": "Great Britain",
+      "event_slug": "great-britain",
+      "event_order": 9
+    },
+    "lifecycle_state": "legacy_descriptive_only",
+    "settlement_metadata": {
+      "checkpoint": "after_fp3",
+      "protocol_fingerprint": "legacy123",
+      "protocol_name": "season_2026_v1",
+      "settled_at_utc": "2026-07-06T12:50:00+00:00",
+      "settlement_valid": true
+    },
+    "summary_metrics": {
+      "actual_pole_driver": "RUS",
+      "driver_count": 1,
+      "mae_gap_sec": 0.4,
+      "scored_driver_count": 1
+    },
+    "interval_diagnostics": {
+      "available": false,
+      "reason": "intervals_not_available",
+      "value": null
+    },
+    "driver_comparison": [
+      {
+        "predicted_position": 1,
+        "actual_position": 4,
+        "absolute_position_error": 3,
+        "driver": "ANT",
+        "driver_code": "ANT",
+        "predicted_gap_to_pole_sec": 0.164,
+        "actual_gap_to_pole_sec": 0.301,
+        "absolute_gap_error_sec": 0.137,
+        "included_in_metrics": true,
+        "settlement_evaluable": true,
+        "settlement_exclusion_reason": ""
+      }
+    ]
+  }
+}

@@ -16,3 +16,7 @@ vi.mock("next/link", () => ({
     return React.createElement("a", { href, ...props }, children);
   }
 }));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => "/"
+}));

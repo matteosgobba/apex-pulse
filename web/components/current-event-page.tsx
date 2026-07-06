@@ -37,6 +37,12 @@ export function CurrentEventPageView({ data }: { data: CurrentEventPageData }) {
   const legacy = currentData?.legacy_status;
   const sessions = data.practiceStatus?.data.sessions ?? [];
   const forecastRows = data.forecast?.data.leaderboard ?? [];
+  const isLegacy = state === "legacy_descriptive_only" || Boolean(legacy?.legacy_noncanonical);
+  const settlementMetrics = data.settlement?.data.summary_metrics;
+  const showSettlementPreview =
+    (data.settlement?.data.driver_comparison?.length ?? 0) > 0 && !isLegacy;
+  const validHistory = data.historicalMonitoring?.data.valid_prospective_monitoring;
+  const showHistoryPreview = (validHistory?.event_count ?? 0) > 0;
 
   if (!current || current.status === "empty" || state === "no_event_available") {
     return (
@@ -49,7 +55,7 @@ export function CurrentEventPageView({ data }: { data: CurrentEventPageData }) {
 
   return (
     <div className="space-y-6">
-      {state === "legacy_descriptive_only" || legacy?.legacy_noncanonical ? <LegacyWarning /> : null}
+      {isLegacy ? <LegacyWarning /> : null}
       <section className="overflow-hidden rounded-lg border border-apex-border bg-apex-panel shadow-panel">
         <div className="border-b border-apex-border bg-apex-panelSoft/65 p-5 md:p-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -218,6 +224,41 @@ export function CurrentEventPageView({ data }: { data: CurrentEventPageData }) {
         <KpiCard label="Actual pole" value={formatText(kpis?.actual_pole_driver)} />
         <KpiCard label="Settlement MAE" value={formatSeconds(kpis?.settlement_mae_gap_sec)} />
       </section>
+
+      {showSettlementPreview || showHistoryPreview ? (
+        <section className="grid gap-4 lg:grid-cols-2">
+          {showSettlementPreview ? (
+            <section className="rounded-lg border border-apex-border bg-apex-panel/85 p-5">
+              <h2 className="text-lg font-semibold text-apex-text">Settlement Preview</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                Latest settled MAE: {formatSeconds(settlementMetrics?.mae_gap_sec)}. Scored drivers:{" "}
+                {formatInteger(settlementMetrics?.scored_driver_count)}.
+              </p>
+              <Link
+                href="/settlement"
+                className="mt-4 inline-flex rounded-md border border-apex-accent/50 bg-apex-accent/10 px-4 py-2 text-sm font-semibold text-apex-text transition hover:bg-apex-accent/15"
+              >
+                Open settlement
+              </Link>
+            </section>
+          ) : null}
+          {showHistoryPreview ? (
+            <section className="rounded-lg border border-apex-border bg-apex-panel/85 p-5">
+              <h2 className="text-lg font-semibold text-apex-text">Monitoring History Preview</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                Valid prospective events: {formatInteger(validHistory?.event_count)}. Settled
+                events: {formatInteger(validHistory?.settled_event_count)}.
+              </p>
+              <Link
+                href="/monitoring-history"
+                className="mt-4 inline-flex rounded-md border border-apex-accent/50 bg-apex-accent/10 px-4 py-2 text-sm font-semibold text-apex-text transition hover:bg-apex-accent/15"
+              >
+                Open monitoring history
+              </Link>
+            </section>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="rounded-lg border border-apex-border bg-apex-panel/85 p-5">
         <div className="grid gap-4 md:grid-cols-[1fr_auto] md:items-center">

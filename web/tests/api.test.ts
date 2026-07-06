@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { fetchDashboard, loadForecastPageData, loadPracticePageData } from "@/lib/api";
+import {
+  fetchDashboard,
+  loadForecastPageData,
+  loadMonitoringHistoryPageData,
+  loadPracticePageData,
+  loadSettlementPageData
+} from "@/lib/api";
 import { DEFAULT_API_BASE_URL, getApiBaseUrl } from "@/lib/config";
 
 const originalFetch = global.fetch;
@@ -119,6 +125,61 @@ describe("dashboard API client", () => {
     expect(data.error).toMatchObject({
       code: "dashboard_artifact_invalid",
       artifactType: "event_practice_status"
+    });
+  });
+
+  test("settlement endpoint failure maps to a safe page error", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/health")) {
+        return jsonResponse({ status: "ok", service: "apex-pulse-dashboard-api", api_version: "v1" });
+      }
+      if (url.endsWith("/api/v1/dashboard/current-event")) {
+        return jsonResponse({ schema_version: "1.0", artifact_type: "current_event", data: {} });
+      }
+      return jsonResponse(
+        {
+          detail: {
+            code: "dashboard_artifact_not_found",
+            message: "The requested dashboard artifact is not available.",
+            artifact_type: "event_settlement"
+          }
+        },
+        404
+      );
+    });
+
+    const data = await loadSettlementPageData();
+
+    expect(data.error).toMatchObject({
+      code: "dashboard_artifact_not_found",
+      artifactType: "event_settlement"
+    });
+  });
+
+  test("history endpoint failure maps to a safe page error", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/health")) {
+        return jsonResponse({ status: "ok", service: "apex-pulse-dashboard-api", api_version: "v1" });
+      }
+      return jsonResponse(
+        {
+          detail: {
+            code: "dashboard_artifact_invalid",
+            message: "The requested dashboard artifact failed validation.",
+            artifact_type: "historical_monitoring_summary"
+          }
+        },
+        500
+      );
+    });
+
+    const data = await loadMonitoringHistoryPageData();
+
+    expect(data.error).toMatchObject({
+      code: "dashboard_artifact_invalid",
+      artifactType: "historical_monitoring_summary"
     });
   });
 });

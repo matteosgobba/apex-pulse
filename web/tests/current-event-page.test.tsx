@@ -7,8 +7,10 @@ import type {
   CurrentEventEnvelope,
   CurrentEventPageData,
   ForecastEnvelope,
+  HistoricalMonitoringEnvelope,
   HealthResponse,
-  PracticeStatusEnvelope
+  PracticeStatusEnvelope,
+  SettlementEnvelope
 } from "@/lib/dashboard-types";
 
 import blockedCurrentEvent from "./fixtures/current-event-blocked.json";
@@ -16,6 +18,8 @@ import emptyCurrentEvent from "./fixtures/current-event-empty.json";
 import legacyCurrentEvent from "./fixtures/current-event-legacy.json";
 import readyCurrentEvent from "./fixtures/current-event-ready.json";
 import readyForecast from "./fixtures/event-forecast-ready.json";
+import availableSettlement from "./fixtures/event-settlement-available.json";
+import validHistory from "./fixtures/historical-monitoring-valid-and-legacy.json";
 import readyPracticeStatus from "./fixtures/practice-status-ready.json";
 
 const HEALTH: HealthResponse = {
@@ -92,6 +96,30 @@ describe("CurrentEventPageView", () => {
     expect(screen.getByText("Open practice status")).toBeInTheDocument();
     expect(screen.getAllByText("NOR").length).toBeGreaterThan(0);
   });
+
+  test("home page displays settlement preview only when relevant", () => {
+    renderPage(readyCurrentEvent, {
+      settlement: availableSettlement as SettlementEnvelope
+    });
+
+    expect(screen.getByText("Settlement Preview")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open settlement" })).toHaveAttribute(
+      "href",
+      "/settlement"
+    );
+  });
+
+  test("home page displays monitoring preview only with valid prospective history", () => {
+    renderPage(readyCurrentEvent, {
+      historicalMonitoring: validHistory as HistoricalMonitoringEnvelope
+    });
+
+    expect(screen.getByText("Monitoring History Preview")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open monitoring history" })).toHaveAttribute(
+      "href",
+      "/monitoring-history"
+    );
+  });
 });
 
 describe("MethodologyPage", () => {
@@ -103,16 +131,34 @@ describe("MethodologyPage", () => {
     expect(screen.getByText(/does not claim private team telemetry/i)).toBeInTheDocument();
     expect(screen.getByText(/Legacy Australia and Great Britain/i)).toBeInTheDocument();
   });
+
+  test("navigation includes settlement and monitoring history", () => {
+    render(<MethodologyPage />);
+
+    expect(screen.getByRole("link", { name: "Settlement" })).toHaveAttribute(
+      "href",
+      "/settlement"
+    );
+    expect(screen.getByRole("link", { name: "Monitoring History" })).toHaveAttribute(
+      "href",
+      "/monitoring-history"
+    );
+  });
 });
 
-function renderPage(currentEvent: unknown): void {
+function renderPage(
+  currentEvent: unknown,
+  overrides: Partial<CurrentEventPageData> = {}
+): void {
   const data: CurrentEventPageData = {
     health: HEALTH,
     manifest: null,
     currentEvent: currentEvent as CurrentEventEnvelope,
     practiceStatus: readyPracticeStatus as PracticeStatusEnvelope,
     forecast: readyForecast as ForecastEnvelope,
+    settlement: null,
+    historicalMonitoring: null,
     error: null
   };
-  render(<CurrentEventPageView data={data} />);
+  render(<CurrentEventPageView data={{ ...data, ...overrides }} />);
 }

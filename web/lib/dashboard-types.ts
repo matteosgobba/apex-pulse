@@ -210,6 +210,108 @@ export interface ForecastData extends Record<string, unknown> {
   summary?: ForecastSummary | null;
 }
 
+export interface SettlementMetadata extends Record<string, unknown> {
+  checkpoint?: string | null;
+  protocol_fingerprint?: string | null;
+  protocol_name?: string | null;
+  settled_at_utc?: string | null;
+  settlement_valid?: boolean | null;
+}
+
+export interface SettlementSummaryMetrics extends Record<string, unknown> {
+  actual_pole_driver?: string | null;
+  driver_count?: number | null;
+  mae_gap_sec?: number | null;
+  mean_absolute_position_error?: number | null;
+  median_absolute_gap_error_sec?: number | null;
+  rmse_gap_sec?: number | null;
+  scored_driver_count?: number | null;
+  top_10_agreement?: number | null;
+  top_3_agreement?: number | null;
+  top_5_agreement?: number | null;
+}
+
+export interface SettlementDriverComparisonRow extends Record<string, unknown> {
+  absolute_gap_error_sec?: number | null;
+  absolute_position_error?: number | null;
+  actual_gap_to_pole_sec?: number | null;
+  actual_position?: number | null;
+  driver?: string | null;
+  driver_code?: string | null;
+  included_in_metrics?: boolean | null;
+  predicted_gap_to_pole_sec?: number | null;
+  predicted_position?: number | null;
+  settlement_evaluable?: boolean | null;
+  settlement_exclusion_reason?: string | null;
+}
+
+export interface SettlementData extends Record<string, unknown> {
+  driver_comparison?: SettlementDriverComparisonRow[];
+  event_identity?: EventIdentity | null;
+  interval_diagnostics?: AvailabilityValue<Record<string, unknown>>;
+  lifecycle_state?: LifecycleState | null;
+  settlement_metadata?: SettlementMetadata | null;
+  summary_metrics?: SettlementSummaryMetrics | null;
+}
+
+export type HistoricalMonitoringAggregateMetrics = AvailabilityValue<Record<string, unknown>>;
+
+export interface MonitoringHistoryEvent extends Record<string, unknown> {
+  event_identity?: EventIdentity | null;
+  lifecycle_state?: LifecycleState | null;
+  forecast_available?: boolean | null;
+  settlement_available?: boolean | null;
+  forecast_checkpoint?: string | null;
+  mae_gap_sec?: number | null;
+  interval_availability_rate?: number | null;
+  eligible_for_valid_prospective_evidence?: boolean | null;
+}
+
+export interface ValidProspectiveMonitoring extends Record<string, unknown> {
+  aggregate_metrics?: HistoricalMonitoringAggregateMetrics | null;
+  event_count?: number | null;
+  events?: MonitoringHistoryEvent[];
+  forecasted_event_count?: number | null;
+  settled_event_count?: number | null;
+}
+
+export interface LegacyDescriptiveRecord extends Record<string, unknown> {
+  descriptive_metrics?: {
+    available?: boolean | null;
+    excluded_rows?: number | null;
+    forecast_rows?: number | null;
+    mae_gap_sec?: number | null;
+    scored_rows?: number | null;
+  } | null;
+  eligible_for_valid_prospective_evidence?: boolean | null;
+  event_identity?: EventIdentity | null;
+  exclusion_reason?: string | null;
+  legacy_noncanonical?: boolean | null;
+  lifecycle_state?: LifecycleState | null;
+}
+
+export interface BacktestContext extends Record<string, unknown> {
+  available?: boolean | null;
+  champion_selection_mode?: string | null;
+  n_events?: number | null;
+  n_folds_successful?: number | null;
+  preferred_backtest_strategy?: string | null;
+}
+
+export interface HistoricalMonitoringData extends Record<string, unknown> {
+  valid_prospective_monitoring?: ValidProspectiveMonitoring | null;
+  legacy_descriptive_records?: LegacyDescriptiveRecord[];
+  backtest_context?: BacktestContext | null;
+}
+
+export interface ModelSummaryData extends Record<string, unknown> {
+  backtest_summary?: Record<string, unknown> | null;
+  current_policy_summary?: Record<string, unknown> | null;
+  limitations?: string[];
+  model_status?: Record<string, unknown> | null;
+  supported_forecast_outputs?: Record<string, boolean>;
+}
+
 export interface ManifestData extends Record<string, unknown> {
   current_event_reference?: {
     artifact?: string | null;
@@ -247,6 +349,9 @@ export type CurrentEventEnvelope = DashboardEnvelope<CurrentEventData>;
 export type PracticeStatusEnvelope = DashboardEnvelope<PracticeStatusData>;
 export type ManifestEnvelope = DashboardEnvelope<ManifestData>;
 export type ForecastEnvelope = DashboardEnvelope<ForecastData>;
+export type SettlementEnvelope = DashboardEnvelope<SettlementData>;
+export type HistoricalMonitoringEnvelope = DashboardEnvelope<HistoricalMonitoringData>;
+export type ModelSummaryEnvelope = DashboardEnvelope<ModelSummaryData>;
 
 export interface CurrentEventPageData {
   health: HealthResponse | null;
@@ -254,6 +359,8 @@ export interface CurrentEventPageData {
   currentEvent: CurrentEventEnvelope | null;
   practiceStatus: PracticeStatusEnvelope | null;
   forecast: ForecastEnvelope | null;
+  settlement: SettlementEnvelope | null;
+  historicalMonitoring: HistoricalMonitoringEnvelope | null;
   error: SafeDashboardError | null;
 }
 
@@ -268,6 +375,21 @@ export interface PracticePageData {
   health: HealthResponse | null;
   currentEvent: CurrentEventEnvelope | null;
   practiceStatus: PracticeStatusEnvelope | null;
+  error: SafeDashboardError | null;
+}
+
+export interface SettlementPageData {
+  health: HealthResponse | null;
+  currentEvent: CurrentEventEnvelope | null;
+  forecast: ForecastEnvelope | null;
+  settlement: SettlementEnvelope | null;
+  error: SafeDashboardError | null;
+}
+
+export interface MonitoringHistoryPageData {
+  health: HealthResponse | null;
+  historicalMonitoring: HistoricalMonitoringEnvelope | null;
+  modelSummary: ModelSummaryEnvelope | null;
   error: SafeDashboardError | null;
 }
 

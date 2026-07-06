@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "historical_monitoring_summary",
+  "generated_at_utc": "2026-07-06T13:00:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "complete",
+  "data": {
+    "valid_prospective_monitoring": {
+      "event_count": 1,
+      "forecasted_event_count": 1,
+      "settled_event_count": 1,
+      "aggregate_metrics": {
+        "available": true,
+        "reason": "",
+        "value": {
+          "mae_gap_sec": 0.117
+        }
+      },
+      "events": [
+        {
+          "event_identity": {
+            "season": 2026,
+            "event": "Italy",
+            "event_slug": "italy",
+            "event_order": 14
+          },
+          "lifecycle_state": "settled",
+          "forecast_available": true,
+          "settlement_available": true,
+          "forecast_checkpoint": "after_fp3",
+          "mae_gap_sec": 0.117,
+          "interval_availability_rate": 0.5,
+          "eligible_for_valid_prospective_evidence": true
+        }
+      ]
+    },
+    "legacy_descriptive_records": [
+      {
+        "event_identity": {
+          "season": 2026,
+          "event": "Australia",
+          "event_slug": "australia",
+          "event_order": 1
+        },
+        "lifecycle_state": "legacy_descriptive_only",
+        "legacy_noncanonical": true,
+        "eligible_for_valid_prospective_evidence": false,
+        "exclusion_reason": "event_order_lineage_mismatch_or_unsettled",
+        "descriptive_metrics": {
+          "available": true,
+          "forecast_rows": 22,
+          "scored_rows": 19,
+          "excluded_rows": 3,
+          "mae_gap_sec": 0.6
+        }
+      },
+      {
+        "event_identity": {
+          "season": 2026,
+          "event": "Great Britain",
+          "event_slug": "great-britain",
+          "event_order": 9
+        },
+        "lifecycle_state": "legacy_descriptive_only",
+        "legacy_noncanonical": true,
+        "eligible_for_valid_prospective_evidence": false,
+        "exclusion_reason": "event_order_lineage_mismatch_or_unsettled",
+        "descriptive_metrics": {
+          "available": true,
+          "forecast_rows": 28,
+          "scored_rows": 22,
+          "excluded_rows": 6,
+          "mae_gap_sec": 0.4
+        }
+      }
+    ],
+    "backtest_context": {
+      "available": true,
+      "champion_selection_mode": "season_aware_nested_guarded",
+      "n_events": 44,
+      "n_folds_successful": 39,
+      "preferred_backtest_strategy": "walk_forward"
+    }
+  }
+}

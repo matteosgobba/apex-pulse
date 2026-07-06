@@ -5,11 +5,16 @@ import type {
   DashboardApiErrorPayload,
   ForecastEnvelope,
   ForecastPageData,
+  HistoricalMonitoringEnvelope,
   HealthResponse,
   ManifestEnvelope,
+  ModelSummaryEnvelope,
+  MonitoringHistoryPageData,
   PracticePageData,
   PracticeStatusEnvelope,
-  SafeDashboardError
+  SafeDashboardError,
+  SettlementEnvelope,
+  SettlementPageData
 } from "@/lib/dashboard-types";
 
 const REQUEST_TIMEOUT_MS = 5000;
@@ -39,12 +44,20 @@ export async function loadCurrentEventPageData(): Promise<CurrentEventPageData> 
     const forecast = await fetchDashboard<ForecastEnvelope>(
       "/api/v1/dashboard/current-event/forecast"
     ).catch(() => null);
+    const settlement = await fetchDashboard<SettlementEnvelope>(
+      "/api/v1/dashboard/current-event/settlement"
+    ).catch(() => null);
+    const historicalMonitoring = await fetchDashboard<HistoricalMonitoringEnvelope>(
+      "/api/v1/dashboard/historical-monitoring"
+    ).catch(() => null);
     return {
       health,
       manifest,
       currentEvent,
       practiceStatus,
       forecast,
+      settlement,
+      historicalMonitoring,
       error: null
     };
   } catch (error) {
@@ -54,6 +67,8 @@ export async function loadCurrentEventPageData(): Promise<CurrentEventPageData> 
       currentEvent: null,
       practiceStatus: null,
       forecast: null,
+      settlement: null,
+      historicalMonitoring: null,
       error: normalizeClientError(error)
     };
   }
@@ -100,6 +115,57 @@ export async function loadPracticePageData(): Promise<PracticePageData> {
       health: null,
       currentEvent: null,
       practiceStatus: null,
+      error: normalizeClientError(error)
+    };
+  }
+}
+
+export async function loadSettlementPageData(): Promise<SettlementPageData> {
+  try {
+    const health = await fetchDashboard<HealthResponse>("/api/v1/health");
+    const [currentEvent, settlement] = await Promise.all([
+      fetchDashboard<CurrentEventEnvelope>("/api/v1/dashboard/current-event"),
+      fetchDashboard<SettlementEnvelope>("/api/v1/dashboard/current-event/settlement")
+    ]);
+    const forecast = await fetchDashboard<ForecastEnvelope>(
+      "/api/v1/dashboard/current-event/forecast"
+    ).catch(() => null);
+    return {
+      health,
+      currentEvent,
+      forecast,
+      settlement,
+      error: null
+    };
+  } catch (error) {
+    return {
+      health: null,
+      currentEvent: null,
+      forecast: null,
+      settlement: null,
+      error: normalizeClientError(error)
+    };
+  }
+}
+
+export async function loadMonitoringHistoryPageData(): Promise<MonitoringHistoryPageData> {
+  try {
+    const health = await fetchDashboard<HealthResponse>("/api/v1/health");
+    const [historicalMonitoring, modelSummary] = await Promise.all([
+      fetchDashboard<HistoricalMonitoringEnvelope>("/api/v1/dashboard/historical-monitoring"),
+      fetchDashboard<ModelSummaryEnvelope>("/api/v1/dashboard/model-summary")
+    ]);
+    return {
+      health,
+      historicalMonitoring,
+      modelSummary,
+      error: null
+    };
+  } catch (error) {
+    return {
+      health: null,
+      historicalMonitoring: null,
+      modelSummary: null,
       error: normalizeClientError(error)
     };
   }
