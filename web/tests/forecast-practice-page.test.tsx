@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import { ForecastLeaderboard } from "@/components/forecast-leaderboard";
 import { ForecastPageView } from "@/components/forecast-page";
 import { PracticePageView } from "@/components/practice-page";
+import { dashboardRows } from "@/lib/dashboard-collections";
 import type {
   CurrentEventEnvelope,
   ForecastEnvelope,
@@ -48,6 +49,15 @@ describe("ForecastPageView", () => {
     expect(screen.getByText("Forecast leaderboard unavailable.")).toBeInTheDocument();
   });
 
+  test("forecast-only FP participant is shown separately from the public leaderboard", () => {
+    renderForecastPage();
+
+    expect(screen.getByText("Forecast-Only Audit Rows")).toBeInTheDocument();
+    expect(screen.getByText("ARO")).toBeInTheDocument();
+    expect(screen.getByText("No Qualifying Lap Rows")).toBeInTheDocument();
+    expect(screen.queryByText("Predicted P3")).not.toBeInTheDocument();
+  });
+
   test("settlement-only columns are absent before settlement", () => {
     renderForecastPage();
 
@@ -65,7 +75,11 @@ describe("ForecastPageView", () => {
   });
 
   test("mobile-oriented leaderboard rendering preserves essential fields", () => {
-    render(<ForecastLeaderboard rows={(readyForecast as ForecastEnvelope).data.leaderboard ?? []} />);
+    render(
+      <ForecastLeaderboard
+        rows={dashboardRows((readyForecast as ForecastEnvelope).data.leaderboard)}
+      />
+    );
 
     expect(screen.getByText("Predicted P1")).toBeInTheDocument();
     expect(screen.getAllByText("NOR").length).toBeGreaterThan(0);

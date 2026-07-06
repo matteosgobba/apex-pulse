@@ -33,6 +33,8 @@ export interface AvailabilityValue<TValue> {
   value: TValue | null;
 }
 
+export type DashboardRows<TRow> = TRow[] | AvailabilityValue<TRow[]>;
+
 export interface EventIdentity {
   season: number | null;
   event: string | null;
@@ -81,6 +83,7 @@ export interface ForecastStatus {
   checkpoint?: string | null;
   forecast_created_at_utc?: string | null;
   forecasted_driver_count?: number | null;
+  forecast_only_driver_count?: number | null;
 }
 
 export interface SettlementStatus {
@@ -193,20 +196,29 @@ export interface ForecastLeaderboardRow extends Record<string, unknown> {
   actual_position?: number | null;
   actual_gap_to_pole_sec?: number | null;
   absolute_gap_error_sec?: number | null;
+  forecast_eligible_driver?: boolean | null;
+  forecast_only_driver?: boolean | null;
+  forecast_only_reason?: string | null;
+  settlement_evaluable_driver?: boolean | null;
 }
 
 export interface ForecastSummary extends Record<string, unknown> {
   checkpoint?: string | null;
   forecasted_driver_count?: number | null;
+  forecast_only_driver_count?: number | null;
   interval_availability_rate?: number | null;
   predicted_pole_driver?: string | null;
+  settlement_evaluable_driver_count?: number | null;
 }
 
 export interface ForecastData extends Record<string, unknown> {
   event_identity?: EventIdentity | null;
   lifecycle_state?: LifecycleState | null;
   forecast_metadata?: ForecastMetadata | null;
-  leaderboard?: ForecastLeaderboardRow[];
+  leaderboard?: DashboardRows<ForecastLeaderboardRow>;
+  qualifying_eligible_forecast_rows?: DashboardRows<ForecastLeaderboardRow>;
+  forecast_only_rows?: DashboardRows<ForecastLeaderboardRow>;
+  settlement_evaluable_rows?: DashboardRows<ForecastLeaderboardRow>;
   summary?: ForecastSummary | null;
 }
 
@@ -226,6 +238,8 @@ export interface SettlementSummaryMetrics extends Record<string, unknown> {
   median_absolute_gap_error_sec?: number | null;
   rmse_gap_sec?: number | null;
   scored_driver_count?: number | null;
+  settlement_evaluable_driver_count?: number | null;
+  excluded_driver_count?: number | null;
   top_10_agreement?: number | null;
   top_3_agreement?: number | null;
   top_5_agreement?: number | null;
@@ -243,14 +257,18 @@ export interface SettlementDriverComparisonRow extends Record<string, unknown> {
   predicted_position?: number | null;
   settlement_evaluable?: boolean | null;
   settlement_exclusion_reason?: string | null;
+  team?: string | null;
+  team_key?: string | null;
 }
 
 export interface SettlementData extends Record<string, unknown> {
-  driver_comparison?: SettlementDriverComparisonRow[];
+  driver_comparison?: DashboardRows<SettlementDriverComparisonRow>;
   event_identity?: EventIdentity | null;
   interval_diagnostics?: AvailabilityValue<Record<string, unknown>>;
   lifecycle_state?: LifecycleState | null;
   settlement_metadata?: SettlementMetadata | null;
+  settlement_evaluable_rows?: DashboardRows<SettlementDriverComparisonRow>;
+  forecast_only_rows?: DashboardRows<SettlementDriverComparisonRow>;
   summary_metrics?: SettlementSummaryMetrics | null;
 }
 

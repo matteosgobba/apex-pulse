@@ -85,6 +85,7 @@ class SourceReadResult:
     live_policy_summary: pd.DataFrame
     shadow_candidate_summary: pd.DataFrame
     manifests: dict[tuple[int, str], dict[str, Any]]
+    target_coverages: dict[tuple[int, str], pd.DataFrame]
     issues: tuple[str, ...]
 
 
@@ -98,6 +99,7 @@ class EventContext:
     reconciliation_rows: pd.DataFrame
     forecast_rows: pd.DataFrame
     settlement_rows: pd.DataFrame
+    target_coverage_rows: pd.DataFrame
     event_metric_rows: pd.DataFrame
     preflight_summary: dict[str, Any] | None
     lifecycle: LifecycleState
@@ -319,6 +321,7 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
     )
     forecasts = _matching_rows(sources.forecasts, season=identity.season, event_slug=slug)
     settlements = _matching_rows(sources.settlements, season=identity.season, event_slug=slug)
+    target_coverage = sources.target_coverages.get((identity.season or -1, slug), pd.DataFrame())
     metrics = _matching_rows(sources.event_metrics, season=identity.season, event_slug=slug)
     preflight = (
         sources.preflight_summary
@@ -344,6 +347,7 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
         reconciliation_rows=reconciliation,
         forecast_rows=forecasts,
         settlement_rows=settlements,
+        target_coverage_rows=target_coverage,
         event_metric_rows=metrics,
         preflight_summary=preflight,
         lifecycle=lifecycle,
@@ -428,7 +432,7 @@ def _select_current_event(
             }
         ]
         return (active or clean)[-1]
-    return contexts[-1]
+    return None
 
 
 def _manifest_data(
@@ -508,6 +512,9 @@ def _forecast_data(current_event: EventContext | None) -> dict[str, Any]:
             "lifecycle_state": "no_event_available",
             "forecast_metadata": unavailable("no_event_available"),
             "leaderboard": unavailable("forecast_not_available"),
+            "qualifying_eligible_forecast_rows": unavailable("forecast_not_available"),
+            "forecast_only_rows": unavailable("forecast_not_available"),
+            "settlement_evaluable_rows": unavailable("forecast_not_available"),
             "summary": unavailable("forecast_not_available"),
         }
     live = _live_rows(current_event.forecast_rows)
@@ -517,17 +524,36 @@ def _forecast_data(current_event: EventContext | None) -> dict[str, Any]:
             "lifecycle_state": current_event.lifecycle.state,
             "forecast_metadata": unavailable("forecast_not_available"),
             "leaderboard": unavailable("forecast_not_available"),
+            "qualifying_eligible_forecast_rows": unavailable("forecast_not_available"),
+            "forecast_only_rows": unavailable("forecast_not_available"),
+            "settlement_evaluable_rows": unavailable("forecast_not_available"),
             "summary": unavailable("forecast_not_available"),
         }
-    leaderboard = _forecast_leaderboard(current_event, live)
+    qualifying_rows = _forecast_leaderboard(
+        current_event,
+        _forecast_population_rows(current_event, live, "qualifying_eligible"),
+    )
+    forecast_only_rows = _forecast_leaderboard(
+        current_event,
+        _forecast_population_rows(current_event, live, "forecast_only"),
+    )
+    settlement_evaluable_rows = _forecast_leaderboard(
+        current_event,
+        _forecast_population_rows(current_event, live, "settlement_evaluable"),
+    )
     return {
         "event_identity": current_event.identity.to_dict(),
         "lifecycle_state": current_event.lifecycle.state,
         "forecast_metadata": _forecast_metadata(current_event, live),
-        "leaderboard": leaderboard,
+        "leaderboard": qualifying_rows,
+        "qualifying_eligible_forecast_rows": qualifying_rows,
+        "forecast_only_rows": forecast_only_rows,
+        "settlement_evaluable_rows": settlement_evaluable_rows,
         "summary": {
-            "forecasted_driver_count": len(leaderboard),
-            "predicted_pole_driver": leaderboard[0]["driver_code"] if leaderboard else None,
+            "forecasted_driver_count": len(qualifying_rows),
+            "predicted_pole_driver": qualifying_rows[0]["driver_code"] if qualifying_rows else None,
+            "forecast_only_driver_count": len(forecast_only_rows),
+            "settlement_evaluable_driver_count": len(settlement_evaluable_rows),
             "checkpoint": _first_non_null(live, "checkpoint"),
             "interval_availability_rate": _interval_availability_rate(live),
         },
@@ -554,7 +580,8 @@ def _settlement_data(current_event: EventContext | None) -> dict[str, Any]:
             "driver_comparison": unavailable("settlement_not_available"),
             "interval_diagnostics": unavailable("intervals_not_available"),
         }
-    comparison = _settlement_comparison(live)
+    comparison = _settlement_comparison(_settlement_evaluable_rows(live))
+    audit_rows = _settlement_comparison(live)
     return {
         "event_identity": current_event.identity.to_dict(),
         "lifecycle_state": current_event.lifecycle.state,
@@ -565,8 +592,12 @@ def _settlement_data(current_event: EventContext | None) -> dict[str, Any]:
             "checkpoint": _first_non_null(live, "checkpoint"),
             "settlement_valid": _all_truthy(live, "settlement_valid"),
         },
-        "summary_metrics": _settlement_metrics(comparison),
+        "summary_metrics": _settlement_metrics(comparison, total_rows=len(live)),
         "driver_comparison": comparison,
+        "settlement_evaluable_rows": comparison,
+        "forecast_only_rows": [
+            row for row in audit_rows if not bool(row.get("settlement_evaluable"))
+        ],
         "interval_diagnostics": unavailable("intervals_not_available"),
     }
 
@@ -769,6 +800,9 @@ def _build_source_artifacts(config: DataConfig) -> tuple[SourceArtifact, ...]:
     paths.extend(
         sorted((root / "data/processed/monitoring").glob("*/*/monitoring_event_manifest.json"))
     )
+    paths.extend(
+        sorted((root / "data/processed/monitoring").glob("*/*/monitoring_target_coverage.csv"))
+    )
     artifacts = []
     for path in paths:
         available_on_disk = path.is_file()
@@ -817,6 +851,10 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
         metrics / "prospective_monitoring_shadow_candidate_summary.csv", issues
     )
     manifests = _read_manifests(config.project_root / "data/processed/monitoring", issues)
+    target_coverages = _read_target_coverages(
+        config.project_root / "data/processed/monitoring",
+        issues,
+    )
     return SourceReadResult(
         protocol=protocol,
         registry=registry,
@@ -836,6 +874,7 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
         live_policy_summary=live_policy_summary,
         shadow_candidate_summary=shadow_candidate_summary,
         manifests=manifests,
+        target_coverages=target_coverages,
         issues=tuple(issues),
     )
 
@@ -882,6 +921,22 @@ def _read_manifests(base_dir: Path, issues: list[str]) -> dict[tuple[int, str], 
     return manifests
 
 
+def _read_target_coverages(
+    base_dir: Path,
+    issues: list[str],
+) -> dict[tuple[int, str], pd.DataFrame]:
+    coverages: dict[tuple[int, str], pd.DataFrame] = {}
+    for path in sorted(base_dir.glob("*/*/monitoring_target_coverage.csv")):
+        frame = _read_csv(path, issues)
+        if frame.empty:
+            continue
+        season = _optional_int(frame["season"].iloc[0]) if "season" in frame else None
+        slug = _optional_str(frame["event_slug"].iloc[0]) if "event_slug" in frame else None
+        if season is not None and slug:
+            coverages[(season, slug)] = frame
+    return coverages
+
+
 def _forecast_leaderboard(
     context: EventContext,
     live_forecasts: pd.DataFrame,
@@ -899,6 +954,7 @@ def _forecast_leaderboard(
         lower = _row_value(row, "prediction_interval_low_sec")
         upper = _row_value(row, "prediction_interval_high_sec")
         interval_available = lower is not None and upper is not None
+        population = _driver_population(context, driver_key)
         rows.append(
             {
                 "predicted_position": index + 1,
@@ -921,9 +977,88 @@ def _forecast_leaderboard(
                 "actual_position": actual.get("actual_position"),
                 "actual_gap_to_pole_sec": actual.get("actual_gap_to_pole_sec"),
                 "absolute_gap_error_sec": actual.get("absolute_gap_error_sec"),
+                "forecast_eligible_driver": population["forecast_eligible_driver"],
+                "forecast_only_driver": population["forecast_only_driver"],
+                "forecast_only_reason": population["forecast_only_reason"],
+                "settlement_evaluable_driver": population["settlement_evaluable_driver"],
             }
         )
     return rows
+
+
+def _forecast_population_rows(
+    context: EventContext,
+    live_forecasts: pd.DataFrame,
+    population: str,
+) -> pd.DataFrame:
+    if live_forecasts.empty:
+        return live_forecasts
+    rows = []
+    for _, row in live_forecasts.iterrows():
+        driver_population = _driver_population(context, _driver_key(row))
+        if population == "qualifying_eligible" and driver_population["forecast_eligible_driver"]:
+            rows.append(row)
+        elif population == "forecast_only" and driver_population["forecast_only_driver"]:
+            rows.append(row)
+        elif (
+            population == "settlement_evaluable"
+            and driver_population["settlement_evaluable_driver"]
+        ):
+            rows.append(row)
+    return pd.DataFrame(rows, columns=live_forecasts.columns)
+
+
+def _driver_population(context: EventContext, driver_key: str) -> dict[str, Any]:
+    coverage = _coverage_lookup(context).get(driver_key)
+    settlement = _settlement_lookup(context).get(driver_key)
+    if coverage is not None:
+        target_evaluable = _truthy(coverage.get("target_evaluable"))
+        reason = _first_text(
+            coverage.get("target_missing_reason"),
+            coverage.get("settlement_exclusion_reason"),
+        )
+    elif settlement is not None:
+        target_evaluable = _truthy(settlement.get("settlement_evaluable"))
+        reason = _first_text(settlement.get("settlement_exclusion_reason"))
+    else:
+        target_evaluable = True
+        reason = ""
+    settlement_evaluable = bool(
+        settlement is not None and _truthy(settlement.get("settlement_evaluable"))
+    )
+    return {
+        "forecast_eligible_driver": bool(target_evaluable),
+        "forecast_only_driver": bool(not target_evaluable),
+        "forecast_only_reason": reason if not target_evaluable else "",
+        "settlement_evaluable_driver": settlement_evaluable,
+    }
+
+
+def _coverage_lookup(context: EventContext) -> dict[str, dict[str, Any]]:
+    frame = context.target_coverage_rows
+    if frame.empty:
+        return {}
+    return {
+        _normalized_driver_key(row.get("driver_key") or row.get("driver")): row.to_dict()
+        for _, row in frame.iterrows()
+    }
+
+
+def _settlement_lookup(context: EventContext) -> dict[str, dict[str, Any]]:
+    live = _live_rows(context.settlement_rows)
+    if live.empty:
+        return {}
+    return {
+        _normalized_driver_key(row.get("driver_key") or row.get("driver")): row.to_dict()
+        for _, row in live.iterrows()
+    }
+
+
+def _settlement_evaluable_rows(live_settlements: pd.DataFrame) -> pd.DataFrame:
+    if live_settlements.empty or "settlement_evaluable" not in live_settlements:
+        return live_settlements
+    mask = live_settlements["settlement_evaluable"].map(_truthy)
+    return live_settlements[mask]
 
 
 def _settlement_comparison(live_settlements: pd.DataFrame) -> list[dict[str, Any]]:
@@ -958,7 +1093,11 @@ def _settlement_comparison(live_settlements: pd.DataFrame) -> list[dict[str, Any
     return rows
 
 
-def _settlement_metrics(comparison: list[dict[str, Any]]) -> dict[str, Any]:
+def _settlement_metrics(
+    comparison: list[dict[str, Any]],
+    *,
+    total_rows: int | None = None,
+) -> dict[str, Any]:
     scored = [row for row in comparison if row.get("included_in_metrics")]
     errors = [
         row["absolute_gap_error_sec"] for row in scored if row["absolute_gap_error_sec"] is not None
@@ -974,8 +1113,10 @@ def _settlement_metrics(comparison: list[dict[str, Any]]) -> dict[str, Any]:
         default={},
     )
     return {
-        "driver_count": len(comparison),
+        "driver_count": total_rows if total_rows is not None else len(comparison),
         "scored_driver_count": len(scored),
+        "settlement_evaluable_driver_count": len(comparison),
+        "excluded_driver_count": max((total_rows or len(comparison)) - len(comparison), 0),
         "mae_gap_sec": _mean(errors),
         "rmse_gap_sec": _rmse(errors),
         "median_absolute_gap_error_sec": _median(errors),
@@ -988,7 +1129,7 @@ def _settlement_metrics(comparison: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _settlement_actual_lookup(settlement_rows: pd.DataFrame) -> dict[str, dict[str, Any]]:
-    live = _live_rows(settlement_rows)
+    live = _settlement_evaluable_rows(_live_rows(settlement_rows))
     if live.empty:
         return {}
     comparison = _settlement_comparison(live)
@@ -1029,8 +1170,18 @@ def _forecast_metadata(context: EventContext, live: pd.DataFrame) -> dict[str, A
 def _summary_kpis(context: EventContext) -> dict[str, Any]:
     live_forecasts = _live_rows(context.forecast_rows)
     live_settlements = _live_rows(context.settlement_rows)
-    leaderboard = _forecast_leaderboard(context, live_forecasts) if not live_forecasts.empty else []
-    comparison = _settlement_comparison(live_settlements) if not live_settlements.empty else []
+    eligible_forecasts = _forecast_population_rows(
+        context,
+        live_forecasts,
+        "qualifying_eligible",
+    )
+    leaderboard = (
+        _forecast_leaderboard(context, eligible_forecasts) if not eligible_forecasts.empty else []
+    )
+    evaluable_settlements = _settlement_evaluable_rows(live_settlements)
+    comparison = (
+        _settlement_comparison(evaluable_settlements) if not evaluable_settlements.empty else []
+    )
     settlement_metrics = _settlement_metrics(comparison) if comparison else {}
     return {
         "forecasted_driver_count": len(leaderboard) if leaderboard else None,
@@ -1101,9 +1252,12 @@ def _forecast_status_block(context: EventContext) -> dict[str, Any]:
     live = _live_rows(context.forecast_rows)
     if live.empty:
         return unavailable("forecast_not_available")
+    eligible = _forecast_population_rows(context, live, "qualifying_eligible")
+    forecast_only = _forecast_population_rows(context, live, "forecast_only")
     return {
         "available": True,
-        "forecasted_driver_count": int(live["driver"].nunique()) if "driver" in live else len(live),
+        "forecasted_driver_count": int(len(eligible)),
+        "forecast_only_driver_count": int(len(forecast_only)),
         "forecast_created_at_utc": _first_non_null(live, "forecast_created_at_utc"),
         "checkpoint": _first_non_null(live, "checkpoint"),
     }
@@ -1441,7 +1595,7 @@ def _first_non_null(frame: pd.DataFrame, column: str) -> Any:
 def _all_truthy(frame: pd.DataFrame, column: str) -> bool | None:
     if frame.empty or column not in frame:
         return None
-    return bool(frame[column].fillna(False).astype(bool).all())
+    return bool(frame[column].map(_truthy).all())
 
 
 def _optional_str(value: Any) -> str | None:
@@ -1494,6 +1648,19 @@ def _bool_or_none(value: Any) -> bool | None:
         return bool(value)
     except TypeError:
         return None
+
+
+def _truthy(value: Any) -> bool:
+    parsed = _bool_or_none(value)
+    return bool(parsed) if parsed is not None else False
+
+
+def _first_text(*values: Any) -> str:
+    for value in values:
+        text = _optional_str(value)
+        if text:
+            return text
+    return ""
 
 
 def _clean_scalar(value: Any) -> Any:

@@ -7,7 +7,13 @@ export function SettlementSummary({ settlement }: { settlement: SettlementData |
   return (
     <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <KpiCard label="Forecasted drivers" value={formatInteger(metrics?.driver_count)} />
-      <KpiCard label="Scored drivers" value={formatInteger(metrics?.scored_driver_count)} />
+      <KpiCard
+        label="Settlement-evaluable drivers"
+        value={formatInteger(
+          metrics?.settlement_evaluable_driver_count ?? metrics?.scored_driver_count
+        )}
+      />
+      <KpiCard label="Excluded drivers" value={formatInteger(metrics?.excluded_driver_count)} />
       <KpiCard label="MAE gap to pole" value={formatSeconds(metrics?.mae_gap_sec)} />
       <KpiCard label="RMSE gap to pole" value={formatSeconds(metrics?.rmse_gap_sec)} />
       <KpiCard

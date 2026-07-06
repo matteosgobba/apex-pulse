@@ -20,8 +20,12 @@ export function ForecastSummaryPanel({ forecast }: { forecast: ForecastData | nu
         hint="Exported snapshot time"
       />
       <KpiCard
-        label="Forecasted drivers"
+        label="Qualifying-eligible drivers"
         value={formatInteger(summary?.forecasted_driver_count)}
+      />
+      <KpiCard
+        label="Forecast-only audit rows"
+        value={formatInteger(summary?.forecast_only_driver_count)}
       />
       <KpiCard
         label="Interval coverage"

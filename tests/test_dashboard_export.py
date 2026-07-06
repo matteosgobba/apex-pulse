@@ -75,6 +75,56 @@ def test_forecast_available_exports_ranked_leaderboard(tmp_path: Path) -> None:
     assert rows[0]["interval_available"] is False
 
 
+def test_forecast_only_driver_is_exported_separately_from_primary_views(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(config, [_registry_event("Bahrain", 1, target_artifact_present=True)])
+    _write_target_coverage(
+        config,
+        "Bahrain",
+        [
+            ("NOR", True, True, ""),
+            ("ARO", False, False, "no_qualifying_lap_rows"),
+        ],
+    )
+    _write_forecasts(
+        config,
+        "Bahrain",
+        [("NOR", "McLaren", 0.1), ("ARO", "Sauber", 0.4)],
+    )
+    _write_settlements(
+        config,
+        "Bahrain",
+        [
+            ("NOR", 0.2, 0.1),
+            ("ARO", None, 0.4, False, "no_qualifying_lap_rows"),
+        ],
+    )
+
+    export_dashboard_artifacts(config)
+    forecast = _read_dashboard(config, "event_forecast.json")
+    settlement = _read_dashboard(config, "event_settlement.json")
+
+    assert [row["driver_code"] for row in forecast["data"]["leaderboard"]] == ["NOR"]
+    eligible_codes = [
+        row["driver_code"] for row in forecast["data"]["qualifying_eligible_forecast_rows"]
+    ]
+    assert eligible_codes == ["NOR"]
+    assert [row["driver_code"] for row in forecast["data"]["forecast_only_rows"]] == ["ARO"]
+    assert forecast["data"]["forecast_only_rows"][0]["forecast_only_reason"] == (
+        "no_qualifying_lap_rows"
+    )
+    assert [row["driver_code"] for row in settlement["data"]["driver_comparison"]] == ["NOR"]
+    assert [row["driver_code"] for row in settlement["data"]["settlement_evaluable_rows"]] == [
+        "NOR"
+    ]
+    assert [row["driver_code"] for row in settlement["data"]["forecast_only_rows"]] == ["ARO"]
+    assert settlement["data"]["summary_metrics"]["settlement_evaluable_driver_count"] == 1
+    assert settlement["data"]["summary_metrics"]["excluded_driver_count"] == 1
+
+
 def test_settled_event_exports_driver_comparison_and_metrics(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_protocol(config)
@@ -168,6 +218,34 @@ def test_legacy_australia_and_great_britain_are_labeled_descriptive_only(
     }
     assert all(row["legacy_noncanonical"] is True for row in legacy)
     assert all(row["eligible_for_valid_prospective_evidence"] is False for row in legacy)
+
+
+def test_legacy_only_records_do_not_become_default_current_event(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(config, [_registry_event("Australia", 1), _registry_event("Great Britain", 9)])
+    _write_forecasts(config, "Great Britain", [("NOR", "McLaren", 0.2)])
+    _write_settlements(config, "Great Britain", [("NOR", 0.3, 0.2)])
+    _write_reconciliation(config, [("australia", 44, 1), ("great-britain", 44, 9)])
+
+    export_dashboard_artifacts(config)
+    current = _read_dashboard(config, "current_event.json")
+    manifest = _read_dashboard(config, "dashboard_manifest.json")
+    historical = _read_dashboard(config, "historical_monitoring_summary.json")
+
+    assert current["data"]["lifecycle"]["state"] == "no_event_available"
+    assert manifest["data"]["current_event_reference"]["available"] is False
+    assert manifest["data"]["current_event_reference"]["reason"] == "no_event_available"
+    legacy_slugs = {
+        row["event_identity"]["event_slug"]
+        for row in historical["data"]["legacy_descriptive_records"]
+    }
+    assert legacy_slugs == {
+        "australia",
+        "great-britain",
+    }
 
 
 def test_legacy_records_are_excluded_from_valid_aggregates(tmp_path: Path) -> None:
@@ -485,11 +563,18 @@ def _write_forecasts(
 def _write_settlements(
     config: DataConfig,
     event: str,
-    rows: list[tuple[str, float, float]],
+    rows: list[tuple[str, float | None, float] | tuple[str, float | None, float, bool, str]],
 ) -> None:
     path = config.metrics_output_dir / "prospective_monitoring_settlements.parquet"
-    frame = pd.DataFrame(
-        [
+    records = []
+    for row in rows:
+        driver, actual_gap, predicted_gap = row[:3]
+        evaluable = bool(row[3]) if len(row) > 3 else True
+        exclusion_reason = str(row[4]) if len(row) > 4 else ""
+        absolute_error = (
+            abs(predicted_gap - actual_gap) if evaluable and actual_gap is not None else None
+        )
+        records.append(
             {
                 "protocol_name": "season_2026_v1",
                 "protocol_fingerprint": "abc123",
@@ -508,22 +593,51 @@ def _write_settlements(
                 "diagnostic_only": False,
                 "prediction_gap_sec": predicted_gap,
                 "actual_gap_sec": actual_gap,
-                "absolute_error_sec": abs(predicted_gap - actual_gap),
-                "target_evaluable": True,
-                "included_in_metrics": True,
-                "settlement_evaluable": True,
-                "settlement_exclusion_reason": "",
-                "settlement_valid": True,
+                "absolute_error_sec": absolute_error,
+                "target_evaluable": evaluable,
+                "included_in_metrics": evaluable,
+                "settlement_evaluable": evaluable,
+                "settlement_exclusion_reason": exclusion_reason,
+                "settlement_valid": evaluable,
                 "forecast_preexisted_settlement": True,
                 "forecast_fingerprint_valid": True,
                 "forecast_mutation_detected": False,
-                "eligible_for_future_prior_evidence": True,
+                "eligible_for_future_prior_evidence": evaluable,
             }
-            for driver, actual_gap, predicted_gap in rows
-        ]
-    )
+        )
+    frame = pd.DataFrame(records)
     path.parent.mkdir(parents=True, exist_ok=True)
     frame.to_parquet(path, index=False)
+
+
+def _write_target_coverage(
+    config: DataConfig,
+    event: str,
+    rows: list[tuple[str, bool, bool, str]],
+) -> None:
+    slug = event.lower().replace(" ", "-")
+    path = (
+        config.project_root
+        / "data/processed/monitoring/2026"
+        / slug
+        / "monitoring_target_coverage.csv"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "season": 2026,
+                "event": event,
+                "event_slug": slug,
+                "driver": driver,
+                "driver_key": driver.lower(),
+                "qualifying_target_present": target_present,
+                "target_evaluable": target_evaluable,
+                "target_missing_reason": reason,
+            }
+            for driver, target_present, target_evaluable, reason in rows
+        ]
+    ).to_csv(path, index=False)
 
 
 def _write_reconciliation(

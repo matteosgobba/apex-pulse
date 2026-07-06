@@ -73,6 +73,12 @@ from f1_prediction.modeling.diagnostics import DiagnosticsReportSummary
 from f1_prediction.modeling.diagnostics import create_diagnostics_report as run_diagnostics_report
 from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
 from f1_prediction.modeling.evaluate_baselines import evaluate_baselines as run_baseline_evaluation
+from f1_prediction.modeling.monitoring_data_integrity_audit import (
+    MonitoringDataIntegrityAuditSummary,
+)
+from f1_prediction.modeling.monitoring_data_integrity_audit import (
+    create_monitoring_data_integrity_audit as run_monitoring_data_integrity_audit,
+)
 from f1_prediction.modeling.policy_simulation import PolicySimulationSummary
 from f1_prediction.modeling.policy_simulation import (
     create_policy_simulation_report as run_policy_simulation_report,
@@ -1398,6 +1404,25 @@ def monitoring_data_readiness_report_command(
     _print_monitoring_onboarding_summary(summary, data_config.project_root)
 
 
+@app.command("monitoring-data-integrity-audit")
+def monitoring_data_integrity_audit_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Audit monitored-event forecast, target, settlement, and dashboard integrity."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_monitoring_data_integrity_audit(data_config)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_monitoring_data_integrity_audit_summary(summary, data_config.project_root)
+
+
 @app.command(
     "prospective-monitoring-init",
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
@@ -2238,6 +2263,23 @@ def _print_monitoring_onboarding_summary(
         typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
     if summary.generation_issues:
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_monitoring_data_integrity_audit_summary(
+    summary: MonitoringDataIntegrityAuditSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Monitoring data integrity audit complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Events audited: {summary.events_audited}")
+    typer.echo(f"Events with blocking failures: {summary.events_with_blocking_integrity_failures}")
+    typer.echo(f"Events with warnings: {summary.events_with_warnings}")
+    typer.echo(f"Dashboard safe for public display: {summary.dashboard_safe_for_public_display}")
+    typer.echo(f"Recommended action: {summary.recommended_operator_action}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Checks: {_display_path(summary.checks_path, project_root)}")
+    typer.echo(f"Driver populations: {_display_path(summary.population_path, project_root)}")
+    typer.echo(f"Runbook: {_display_path(summary.runbook_path, project_root)}")
 
 
 def _print_dashboard_export_summary(summary: DashboardExportSummary, project_root: Path) -> None:

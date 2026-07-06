@@ -4,7 +4,8 @@ import { ForecastSummaryPanel } from "@/components/forecast-summary";
 import { LegacyWarning } from "@/components/legacy-warning";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { TableEmptyState } from "@/components/table-empty-state";
-import type { ForecastPageData } from "@/lib/dashboard-types";
+import { dashboardRows } from "@/lib/dashboard-collections";
+import type { ForecastLeaderboardRow, ForecastPageData } from "@/lib/dashboard-types";
 import { formatDateTime, formatText, humanizeToken } from "@/lib/formatters";
 
 export function ForecastPageView({ data }: { data: ForecastPageData }) {
@@ -19,7 +20,10 @@ export function ForecastPageView({ data }: { data: ForecastPageData }) {
   const identity = forecastData?.event_identity ?? currentData?.event_identity;
   const lifecycleState = forecastData?.lifecycle_state ?? currentData?.lifecycle?.state;
   const lifecycleLabel = currentData?.lifecycle?.display_label ?? humanizeToken(lifecycleState);
-  const rows = forecastData?.leaderboard ?? [];
+  const rows = dashboardRows(
+    forecastData?.qualifying_eligible_forecast_rows ?? forecastData?.leaderboard
+  );
+  const forecastOnlyRows = dashboardRows(forecastData?.forecast_only_rows);
   const metadata = forecastData?.forecast_metadata;
   const legacy =
     lifecycleState === "legacy_descriptive_only" || currentData?.legacy_status?.legacy_noncanonical;
@@ -63,6 +67,37 @@ export function ForecastPageView({ data }: { data: ForecastPageData }) {
       </section>
       <ForecastSummaryPanel forecast={forecastData} />
       <ForecastLeaderboard rows={rows} />
+      {forecastOnlyRows.length > 0 ? <ForecastOnlyAuditRows rows={forecastOnlyRows} /> : null}
     </div>
+  );
+}
+
+function ForecastOnlyAuditRows({
+  rows
+}: {
+  rows: ForecastLeaderboardRow[];
+}) {
+  return (
+    <section className="rounded-lg border border-amber-300/35 bg-amber-300/10 p-5">
+      <h2 className="text-lg font-semibold text-apex-text">Forecast-Only Audit Rows</h2>
+      <p className="mt-2 text-sm leading-6 text-amber-50">
+        These FP participants are preserved for auditability but excluded from the public qualifying
+        leaderboard because they are not settlement-evaluable qualifying drivers.
+      </p>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {rows.map((row) => (
+          <div
+            key={`${row.driver_code ?? row.driver}-${row.forecast_only_reason}`}
+            className="rounded-md border border-amber-200/25 bg-apex-bg/35 p-3"
+          >
+            <p className="font-semibold text-apex-text">{formatText(row.driver_code ?? row.driver)}</p>
+            <p className="text-sm text-slate-300">{formatText(row.team)}</p>
+            <p className="mt-1 text-xs text-amber-100">
+              {humanizeToken(row.forecast_only_reason)}
+            </p>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

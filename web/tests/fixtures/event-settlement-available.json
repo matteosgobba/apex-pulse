@@ -30,7 +30,9 @@
       "top_3_agreement": 1,
       "top_5_agreement": 1,
       "top_10_agreement": 1,
-      "scored_driver_count": 2
+      "scored_driver_count": 2,
+      "settlement_evaluable_driver_count": 2,
+      "excluded_driver_count": 1
     },
     "interval_diagnostics": {
       "available": false,
@@ -44,6 +46,8 @@
         "absolute_position_error": 0,
         "driver": "NOR",
         "driver_code": "NOR",
+        "team": "McLaren",
+        "team_key": "mclaren",
         "predicted_gap_to_pole_sec": 0,
         "actual_gap_to_pole_sec": 0,
         "absolute_gap_error_sec": 0,
@@ -57,12 +61,63 @@
         "absolute_position_error": 1,
         "driver": "VER",
         "driver_code": "VER",
+        "team": "Red Bull Racing",
+        "team_key": "red_bull",
         "predicted_gap_to_pole_sec": 0.234,
         "actual_gap_to_pole_sec": 0.468,
         "absolute_gap_error_sec": 0.234,
         "included_in_metrics": true,
         "settlement_evaluable": true,
         "settlement_exclusion_reason": ""
+      }
+    ],
+    "settlement_evaluable_rows": [
+      {
+        "predicted_position": 1,
+        "actual_position": 1,
+        "absolute_position_error": 0,
+        "driver": "NOR",
+        "driver_code": "NOR",
+        "team": "McLaren",
+        "team_key": "mclaren",
+        "predicted_gap_to_pole_sec": 0,
+        "actual_gap_to_pole_sec": 0,
+        "absolute_gap_error_sec": 0,
+        "included_in_metrics": true,
+        "settlement_evaluable": true,
+        "settlement_exclusion_reason": ""
+      },
+      {
+        "predicted_position": 2,
+        "actual_position": 3,
+        "absolute_position_error": 1,
+        "driver": "VER",
+        "driver_code": "VER",
+        "team": "Red Bull Racing",
+        "team_key": "red_bull",
+        "predicted_gap_to_pole_sec": 0.234,
+        "actual_gap_to_pole_sec": 0.468,
+        "absolute_gap_error_sec": 0.234,
+        "included_in_metrics": true,
+        "settlement_evaluable": true,
+        "settlement_exclusion_reason": ""
+      }
+    ],
+    "forecast_only_rows": [
+      {
+        "predicted_position": 3,
+        "actual_position": null,
+        "absolute_position_error": null,
+        "driver": "ARO",
+        "driver_code": "ARO",
+        "team": "Sauber",
+        "team_key": "sauber",
+        "predicted_gap_to_pole_sec": 0.456,
+        "actual_gap_to_pole_sec": null,
+        "absolute_gap_error_sec": null,
+        "included_in_metrics": false,
+        "settlement_evaluable": false,
+        "settlement_exclusion_reason": "no_qualifying_lap_rows"
       }
     ]
   }

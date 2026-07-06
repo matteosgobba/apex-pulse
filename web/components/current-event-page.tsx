@@ -8,6 +8,7 @@ import { LegacyWarning } from "@/components/legacy-warning";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { SessionStatusRow } from "@/components/session-status-row";
 import { StatusCard } from "@/components/status-card";
+import { dashboardRows } from "@/lib/dashboard-collections";
 import type { CurrentEventPageData, LifecycleState } from "@/lib/dashboard-types";
 import {
   formatDateTime,
@@ -36,19 +37,24 @@ export function CurrentEventPageView({ data }: { data: CurrentEventPageData }) {
   const lineage = currentData?.registry_lineage;
   const legacy = currentData?.legacy_status;
   const sessions = data.practiceStatus?.data.sessions ?? [];
-  const forecastRows = data.forecast?.data.leaderboard ?? [];
+  const forecastRows = dashboardRows(
+    data.forecast?.data.qualifying_eligible_forecast_rows ?? data.forecast?.data.leaderboard
+  );
   const isLegacy = state === "legacy_descriptive_only" || Boolean(legacy?.legacy_noncanonical);
   const settlementMetrics = data.settlement?.data.summary_metrics;
+  const settlementRows = dashboardRows(
+    data.settlement?.data.settlement_evaluable_rows ?? data.settlement?.data.driver_comparison
+  );
   const showSettlementPreview =
-    (data.settlement?.data.driver_comparison?.length ?? 0) > 0 && !isLegacy;
+    settlementRows.length > 0 && !isLegacy;
   const validHistory = data.historicalMonitoring?.data.valid_prospective_monitoring;
   const showHistoryPreview = (validHistory?.event_count ?? 0) > 0;
 
   if (!current || current.status === "empty" || state === "no_event_available") {
     return (
       <EmptyState
-        title="No monitored event is currently available."
-        message="The dashboard API is reachable, but the exported dashboard artifacts do not identify an active, forecasted, or settled monitored Grand Prix yet."
+        title="No active eligible monitored event."
+        message="The dashboard API is reachable, but the exported dashboard artifacts do not identify a clean active, forecasted, or settled monitored Grand Prix. Legacy descriptive records remain available only in monitoring history."
       />
     );
   }

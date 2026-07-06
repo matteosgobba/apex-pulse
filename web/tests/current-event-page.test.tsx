@@ -66,10 +66,11 @@ describe("CurrentEventPageView", () => {
   test("empty event renders a useful empty state", () => {
     renderPage(emptyCurrentEvent);
 
-    expect(screen.getByText("No Current Event")).toBeInTheDocument();
     expect(
-      screen.getByText("No monitored event is currently available.")
+      screen.getByText("No active eligible monitored event.")
     ).toBeInTheDocument();
+    expect(screen.getByText(/Legacy descriptive records remain available only in monitoring history/i))
+      .toBeInTheDocument();
   });
 
   test("missing optional KPI values render Not available", () => {

@@ -55,7 +55,11 @@
         },
         "actual_position": null,
         "actual_gap_to_pole_sec": null,
-        "absolute_gap_error_sec": null
+        "absolute_gap_error_sec": null,
+        "forecast_eligible_driver": true,
+        "forecast_only_driver": false,
+        "forecast_only_reason": "",
+        "settlement_evaluable_driver": false
       },
       {
         "predicted_position": 2,
@@ -82,12 +86,116 @@
         },
         "actual_position": null,
         "actual_gap_to_pole_sec": null,
-        "absolute_gap_error_sec": null
+        "absolute_gap_error_sec": null,
+        "forecast_eligible_driver": true,
+        "forecast_only_driver": false,
+        "forecast_only_reason": "",
+        "settlement_evaluable_driver": false
       }
     ],
+    "qualifying_eligible_forecast_rows": [
+      {
+        "predicted_position": 1,
+        "driver": "NOR",
+        "driver_code": "NOR",
+        "team": "McLaren",
+        "team_key": "mclaren",
+        "predicted_gap_to_pole_sec": 0,
+        "interval_lower_sec": -0.05,
+        "interval_upper_sec": 0.08,
+        "interval_available": true,
+        "selected_method": {
+          "family": "ablation",
+          "feature_group": "base_plus_relative",
+          "model_name": "random_forest",
+          "temporal_weighting_policy": "uniform"
+        },
+        "provenance": {
+          "forecast_id": "forecast-fixture",
+          "forecast_integrity_status": "valid",
+          "live_policy_selected": true,
+          "prediction_role": "observed_live_policy",
+          "source_lineage_valid": true
+        },
+        "actual_position": null,
+        "actual_gap_to_pole_sec": null,
+        "absolute_gap_error_sec": null,
+        "forecast_eligible_driver": true,
+        "forecast_only_driver": false,
+        "forecast_only_reason": "",
+        "settlement_evaluable_driver": false
+      },
+      {
+        "predicted_position": 2,
+        "driver": "VER",
+        "driver_code": "VER",
+        "team": "Red Bull Racing",
+        "team_key": "red_bull",
+        "predicted_gap_to_pole_sec": 0.234,
+        "interval_lower_sec": null,
+        "interval_upper_sec": null,
+        "interval_available": false,
+        "selected_method": {
+          "family": "ablation",
+          "feature_group": "base_plus_relative",
+          "model_name": "random_forest",
+          "temporal_weighting_policy": "uniform"
+        },
+        "provenance": {
+          "forecast_id": "forecast-fixture",
+          "forecast_integrity_status": "valid",
+          "live_policy_selected": true,
+          "prediction_role": "observed_live_policy",
+          "source_lineage_valid": true
+        },
+        "actual_position": null,
+        "actual_gap_to_pole_sec": null,
+        "absolute_gap_error_sec": null,
+        "forecast_eligible_driver": true,
+        "forecast_only_driver": false,
+        "forecast_only_reason": "",
+        "settlement_evaluable_driver": false
+      }
+    ],
+    "forecast_only_rows": [
+      {
+        "predicted_position": 3,
+        "driver": "ARO",
+        "driver_code": "ARO",
+        "team": "Sauber",
+        "team_key": "sauber",
+        "predicted_gap_to_pole_sec": 0.456,
+        "interval_lower_sec": null,
+        "interval_upper_sec": null,
+        "interval_available": false,
+        "selected_method": {
+          "family": "ablation",
+          "feature_group": "base_plus_relative",
+          "model_name": "random_forest",
+          "temporal_weighting_policy": "uniform"
+        },
+        "provenance": {
+          "forecast_id": "forecast-fixture",
+          "forecast_integrity_status": "valid",
+          "live_policy_selected": true,
+          "prediction_role": "observed_live_policy",
+          "source_lineage_valid": true
+        },
+        "actual_position": null,
+        "actual_gap_to_pole_sec": null,
+        "absolute_gap_error_sec": null,
+        "forecast_eligible_driver": false,
+        "forecast_only_driver": true,
+        "forecast_only_reason": "no_qualifying_lap_rows",
+        "settlement_evaluable_driver": false
+      }
+    ],
+    "settlement_evaluable_rows": [],
     "summary": {
       "checkpoint": "after_fp3",
       "forecasted_driver_count": 2,
+      "forecast_only_driver_count": 1,
+      "settlement_evaluable_driver_count": 0,
       "interval_availability_rate": 0.5,
       "predicted_pole_driver": "NOR"
     }

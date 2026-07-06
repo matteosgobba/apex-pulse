@@ -4,8 +4,9 @@ import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { SettlementComparisonTable } from "@/components/settlement-comparison-table";
 import { SettlementSummary } from "@/components/settlement-summary";
 import { TableEmptyState } from "@/components/table-empty-state";
+import { dashboardRows } from "@/lib/dashboard-collections";
 import type { SettlementPageData } from "@/lib/dashboard-types";
-import { formatDateTime, formatText, humanizeToken } from "@/lib/formatters";
+import { formatDateTime, formatInteger, formatText, humanizeToken } from "@/lib/formatters";
 
 export function SettlementPageView({ data }: { data: SettlementPageData }) {
   if (data.error) {
@@ -15,8 +16,15 @@ export function SettlementPageView({ data }: { data: SettlementPageData }) {
   const current = data.currentEvent?.data;
   const settlement = data.settlement;
   const settlementData = settlement?.data;
-  const rows = settlementData?.driver_comparison ?? [];
-  const forecastRows = data.forecast?.data.leaderboard ?? [];
+  const rows = dashboardRows(
+    settlementData?.settlement_evaluable_rows ?? settlementData?.driver_comparison
+  );
+  const forecastRows = dashboardRows(
+    data.forecast?.data.settlement_evaluable_rows
+      ?? data.forecast?.data.qualifying_eligible_forecast_rows
+      ?? data.forecast?.data.leaderboard
+  );
+  const forecastOnlyRows = dashboardRows(settlementData?.forecast_only_rows);
   const identity = settlementData?.event_identity ?? current?.event_identity;
   const lifecycleState = settlementData?.lifecycle_state ?? current?.lifecycle?.state;
   const legacy =
@@ -59,6 +67,16 @@ export function SettlementPageView({ data }: { data: SettlementPageData }) {
           </div>
         </div>
       </section>
+      {forecastOnlyRows.length > 0 ? (
+        <section className="rounded-lg border border-amber-300/35 bg-amber-300/10 p-5">
+          <h2 className="text-lg font-semibold text-apex-text">Partial Settlement Coverage</h2>
+          <p className="mt-2 text-sm leading-6 text-amber-50">
+            {formatInteger(rows.length)} settlement-evaluable drivers are shown in the main
+            comparison. {formatInteger(forecastOnlyRows.length)} forecast-only rows are retained as
+            audit-only records because they do not have evaluable qualifying targets.
+          </p>
+        </section>
+      ) : null}
       <SettlementSummary settlement={settlementData} />
       <SettlementComparisonTable rows={rows} forecastRows={forecastRows} />
       <SettlementInterpretation legacy={Boolean(legacy)} />

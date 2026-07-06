@@ -73,7 +73,7 @@ export function SettlementComparisonTable({
                     </div>
                   </Td>
                   <Td>
-                    <TeamLabel forecast={forecast} />
+                    <TeamLabel forecast={forecast} settlement={row} />
                   </Td>
                   <Td numeric>{formatSignedGap(row.predicted_gap_to_pole_sec)}</Td>
                   <Td numeric>{formatSignedGap(row.actual_gap_to_pole_sec)}</Td>
@@ -111,7 +111,7 @@ export function SettlementComparisonTable({
                     {formatText(row.driver_code ?? row.driver)}
                   </h3>
                   <div className="mt-1 text-sm text-slate-300">
-                    <TeamLabel forecast={forecast} />
+                    <TeamLabel forecast={forecast} settlement={row} />
                   </div>
                 </div>
                 <div className="text-right text-sm">
@@ -148,15 +148,23 @@ export function SettlementComparisonTable({
   );
 }
 
-function TeamLabel({ forecast }: { forecast?: ForecastLeaderboardRow | null }) {
+function TeamLabel({
+  forecast,
+  settlement
+}: {
+  forecast?: ForecastLeaderboardRow | null;
+  settlement?: SettlementDriverComparisonRow | null;
+}) {
+  const teamKey = forecast?.team_key ?? settlement?.team_key;
+  const team = forecast?.team ?? settlement?.team;
   return (
     <span className="inline-flex items-center gap-2">
       <span
         className="h-2.5 w-2.5 rounded-full"
-        style={{ backgroundColor: teamAccent(forecast?.team_key) }}
+        style={{ backgroundColor: teamAccent(teamKey) }}
         aria-hidden="true"
       />
-      <span>{formatText(forecast?.team)}</span>
+      <span>{formatText(team)}</span>
     </span>
   );
 }

@@ -32,6 +32,8 @@ describe("SettlementPageView", () => {
     expect(screen.getAllByText("0.117 sec").length).toBeGreaterThan(0);
     expect(screen.getByText("Top-3 agreement")).toBeInTheDocument();
     expect(screen.getAllByText("100%").length).toBeGreaterThan(0);
+    expect(screen.getByText("Settlement-evaluable drivers")).toBeInTheDocument();
+    expect(screen.getByText("Excluded drivers")).toBeInTheDocument();
   });
 
   test("renders driver predicted-versus-actual comparison", () => {
@@ -48,6 +50,18 @@ describe("SettlementPageView", () => {
 
     expect(screen.getAllByText("1 worse").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Matched prediction").length).toBeGreaterThan(0);
+  });
+
+  test("partial target coverage is shown as audit-only settlement rows", () => {
+    renderSettlementPage();
+
+    expect(screen.getByText("Partial Settlement Coverage")).toBeInTheDocument();
+    expect(screen.getByText(/2 settlement-evaluable drivers are shown/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 forecast-only rows are retained as audit-only records/i))
+      .toBeInTheDocument();
+    const comparison = screen.getByText("Driver Comparison").closest("section");
+    expect(comparison).not.toBeNull();
+    expect(within(comparison as HTMLElement).queryByText("ARO")).not.toBeInTheDocument();
   });
 
   test("unavailable settlement renders an informative state", () => {
