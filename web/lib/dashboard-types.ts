@@ -151,6 +151,65 @@ export interface PracticeStatusData extends Record<string, unknown> {
   notes?: string[];
 }
 
+export interface ForecastMethodIdentity extends Record<string, unknown> {
+  family?: string | null;
+  feature_group?: string | null;
+  model_name?: string | null;
+  temporal_weighting_policy?: string | null;
+}
+
+export interface ForecastProvenance extends Record<string, unknown> {
+  forecast_id?: string | null;
+  forecast_integrity_status?: string | null;
+  live_policy_selected?: boolean | null;
+  prediction_role?: string | null;
+  source_lineage_valid?: boolean | null;
+}
+
+export interface ForecastMetadata extends Record<string, unknown> {
+  candidate_or_policy_identity?: ForecastMethodIdentity | null;
+  checkpoint?: string | null;
+  forecast_timestamp?: string | null;
+  prediction_target?: string | null;
+  preflight_run_id?: string | null;
+  preflight_status?: string | null;
+  protocol_fingerprint?: string | null;
+  protocol_name?: string | null;
+  uncertainty_method?: string | null;
+}
+
+export interface ForecastLeaderboardRow extends Record<string, unknown> {
+  predicted_position?: number | null;
+  driver?: string | null;
+  driver_code?: string | null;
+  team?: string | null;
+  team_key?: string | null;
+  predicted_gap_to_pole_sec?: number | null;
+  interval_lower_sec?: number | null;
+  interval_upper_sec?: number | null;
+  interval_available?: boolean | null;
+  selected_method?: ForecastMethodIdentity | null;
+  provenance?: ForecastProvenance | null;
+  actual_position?: number | null;
+  actual_gap_to_pole_sec?: number | null;
+  absolute_gap_error_sec?: number | null;
+}
+
+export interface ForecastSummary extends Record<string, unknown> {
+  checkpoint?: string | null;
+  forecasted_driver_count?: number | null;
+  interval_availability_rate?: number | null;
+  predicted_pole_driver?: string | null;
+}
+
+export interface ForecastData extends Record<string, unknown> {
+  event_identity?: EventIdentity | null;
+  lifecycle_state?: LifecycleState | null;
+  forecast_metadata?: ForecastMetadata | null;
+  leaderboard?: ForecastLeaderboardRow[];
+  summary?: ForecastSummary | null;
+}
+
 export interface ManifestData extends Record<string, unknown> {
   current_event_reference?: {
     artifact?: string | null;
@@ -187,10 +246,26 @@ export interface DashboardApiErrorPayload {
 export type CurrentEventEnvelope = DashboardEnvelope<CurrentEventData>;
 export type PracticeStatusEnvelope = DashboardEnvelope<PracticeStatusData>;
 export type ManifestEnvelope = DashboardEnvelope<ManifestData>;
+export type ForecastEnvelope = DashboardEnvelope<ForecastData>;
 
 export interface CurrentEventPageData {
   health: HealthResponse | null;
   manifest: ManifestEnvelope | null;
+  currentEvent: CurrentEventEnvelope | null;
+  practiceStatus: PracticeStatusEnvelope | null;
+  forecast: ForecastEnvelope | null;
+  error: SafeDashboardError | null;
+}
+
+export interface ForecastPageData {
+  health: HealthResponse | null;
+  currentEvent: CurrentEventEnvelope | null;
+  forecast: ForecastEnvelope | null;
+  error: SafeDashboardError | null;
+}
+
+export interface PracticePageData {
+  health: HealthResponse | null;
   currentEvent: CurrentEventEnvelope | null;
   practiceStatus: PracticeStatusEnvelope | null;
   error: SafeDashboardError | null;

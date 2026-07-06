@@ -1,11 +1,17 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Current Event", active: true },
-  { href: "/methodology", label: "Methodology", active: false }
+  { href: "/", label: "Current Event" },
+  { href: "/forecast", label: "Forecast" },
+  { href: "/practice", label: "Practice Status" },
+  { href: "/methodology", label: "Methodology" }
 ];
 
 export function SidebarNav() {
+  const pathname = usePathname();
   return (
     <aside className="border-b border-apex-border bg-apex-panel/80 px-4 py-4 lg:min-h-dvh lg:w-72 lg:border-b-0 lg:border-r lg:px-5">
       <div className="flex items-center justify-between gap-4 lg:block">
@@ -22,7 +28,7 @@ export function SidebarNav() {
             key={item.href}
             href={item.href}
             className={`whitespace-nowrap rounded-md border px-3 py-2 text-sm font-medium transition ${
-              item.active
+              pathname === item.href
                 ? "border-apex-accent/50 bg-apex-accent/10 text-apex-text"
                 : "border-transparent text-apex-muted hover:border-apex-border hover:text-apex-text"
             }`}

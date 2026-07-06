@@ -30,12 +30,29 @@ Override it with:
 NEXT_PUBLIC_APEX_PULSE_API_BASE_URL=http://127.0.0.1:8000
 ```
 
+## Routes
+
+```text
+/
+/forecast
+/practice
+/methodology
+```
+
+`/` shows the current monitored event with compact forecast and practice previews. `/forecast`
+shows the exported qualifying forecast leaderboard. `/practice` shows FP1, FP2, FP3, and Q
+artifact availability plus workflow readiness. `/methodology` explains the prediction lifecycle and
+public-data limits.
+
 ## Scope
 
 This app is a read-only consumer of validated dashboard JSON. It does not trigger ingestion,
 preflight, forecast generation, target ingestion, settlement, model training, FastF1 calls, or any
 other ML workflow operation.
 
-Milestone 40C includes only the dashboard shell, the Current Event page, and the static Methodology
-page. Forecast leaderboards, practice evolution charts, settlement comparison, historical monitoring,
-deployment, polling, and live updates are intentionally out of scope.
+Dashboard freshness depends on regenerated dashboard artifacts and the separately running read-only
+Python API. The frontend does not poll, schedule refreshes, or claim live telemetry.
+
+Milestone 40D includes the dashboard shell, Current Event page, Forecast leaderboard page, Practice
+Status page, and static Methodology page. Settlement comparison, historical monitoring, deployment,
+polling, websockets, and live updates are intentionally out of scope.

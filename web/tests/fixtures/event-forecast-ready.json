@@ -1,0 +1,95 @@
+{
+  "schema_version": "1.0",
+  "artifact_type": "event_forecast",
+  "generated_at_utc": "2026-07-06T12:05:00+00:00",
+  "source_artifacts": [],
+  "source_fingerprints": {},
+  "status": "complete",
+  "data": {
+    "event_identity": {
+      "season": 2026,
+      "event": "Italy",
+      "event_slug": "italy",
+      "event_order": 14
+    },
+    "lifecycle_state": "forecast_available",
+    "forecast_metadata": {
+      "candidate_or_policy_identity": {
+        "family": "ablation",
+        "feature_group": "base_plus_relative",
+        "model_name": "random_forest",
+        "temporal_weighting_policy": "uniform"
+      },
+      "checkpoint": "after_fp3",
+      "forecast_timestamp": "2026-07-06T12:04:00+00:00",
+      "prediction_target": "quali_gap_to_pole_sec",
+      "preflight_run_id": "ready-run",
+      "preflight_status": "ready_to_forecast",
+      "protocol_fingerprint": "abc123",
+      "protocol_name": "season_2026_v1",
+      "uncertainty_method": "synthetic_interval_fixture"
+    },
+    "leaderboard": [
+      {
+        "predicted_position": 1,
+        "driver": "NOR",
+        "driver_code": "NOR",
+        "team": "McLaren",
+        "team_key": "mclaren",
+        "predicted_gap_to_pole_sec": 0,
+        "interval_lower_sec": -0.05,
+        "interval_upper_sec": 0.08,
+        "interval_available": true,
+        "selected_method": {
+          "family": "ablation",
+          "feature_group": "base_plus_relative",
+          "model_name": "random_forest",
+          "temporal_weighting_policy": "uniform"
+        },
+        "provenance": {
+          "forecast_id": "forecast-fixture",
+          "forecast_integrity_status": "valid",
+          "live_policy_selected": true,
+          "prediction_role": "observed_live_policy",
+          "source_lineage_valid": true
+        },
+        "actual_position": null,
+        "actual_gap_to_pole_sec": null,
+        "absolute_gap_error_sec": null
+      },
+      {
+        "predicted_position": 2,
+        "driver": "VER",
+        "driver_code": "VER",
+        "team": "Red Bull Racing",
+        "team_key": "red_bull",
+        "predicted_gap_to_pole_sec": 0.234,
+        "interval_lower_sec": null,
+        "interval_upper_sec": null,
+        "interval_available": false,
+        "selected_method": {
+          "family": "ablation",
+          "feature_group": "base_plus_relative",
+          "model_name": "random_forest",
+          "temporal_weighting_policy": "uniform"
+        },
+        "provenance": {
+          "forecast_id": "forecast-fixture",
+          "forecast_integrity_status": "valid",
+          "live_policy_selected": true,
+          "prediction_role": "observed_live_policy",
+          "source_lineage_valid": true
+        },
+        "actual_position": null,
+        "actual_gap_to_pole_sec": null,
+        "absolute_gap_error_sec": null
+      }
+    ],
+    "summary": {
+      "checkpoint": "after_fp3",
+      "forecasted_driver_count": 2,
+      "interval_availability_rate": 0.5,
+      "predicted_pole_driver": "NOR"
+    }
+  }
+}

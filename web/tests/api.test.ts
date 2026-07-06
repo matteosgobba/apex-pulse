@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { fetchDashboard } from "@/lib/api";
+import { fetchDashboard, loadForecastPageData, loadPracticePageData } from "@/lib/api";
 import { DEFAULT_API_BASE_URL, getApiBaseUrl } from "@/lib/config";
 
 const originalFetch = global.fetch;
@@ -63,4 +63,69 @@ describe("dashboard API client", () => {
 
     expect(getApiBaseUrl()).toBe(DEFAULT_API_BASE_URL);
   });
+
+  test("forecast endpoint failure maps to a safe page error", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/health")) {
+        return jsonResponse({ status: "ok", service: "apex-pulse-dashboard-api", api_version: "v1" });
+      }
+      if (url.endsWith("/api/v1/dashboard/current-event")) {
+        return jsonResponse({ schema_version: "1.0", artifact_type: "current_event", data: {} });
+      }
+      return jsonResponse(
+        {
+          detail: {
+            code: "dashboard_artifact_not_found",
+            message: "The requested dashboard artifact is not available.",
+            artifact_type: "event_forecast"
+          }
+        },
+        404
+      );
+    });
+
+    const data = await loadForecastPageData();
+
+    expect(data.error).toMatchObject({
+      code: "dashboard_artifact_not_found",
+      artifactType: "event_forecast"
+    });
+  });
+
+  test("practice endpoint failure maps to a safe page error", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/health")) {
+        return jsonResponse({ status: "ok", service: "apex-pulse-dashboard-api", api_version: "v1" });
+      }
+      if (url.endsWith("/api/v1/dashboard/current-event")) {
+        return jsonResponse({ schema_version: "1.0", artifact_type: "current_event", data: {} });
+      }
+      return jsonResponse(
+        {
+          detail: {
+            code: "dashboard_artifact_invalid",
+            message: "The requested dashboard artifact failed validation.",
+            artifact_type: "event_practice_status"
+          }
+        },
+        500
+      );
+    });
+
+    const data = await loadPracticePageData();
+
+    expect(data.error).toMatchObject({
+      code: "dashboard_artifact_invalid",
+      artifactType: "event_practice_status"
+    });
+  });
 });
+
+function jsonResponse(payload: unknown, status = 200): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}

@@ -6,6 +6,7 @@ import { CurrentEventPageView } from "@/components/current-event-page";
 import type {
   CurrentEventEnvelope,
   CurrentEventPageData,
+  ForecastEnvelope,
   HealthResponse,
   PracticeStatusEnvelope
 } from "@/lib/dashboard-types";
@@ -14,6 +15,7 @@ import blockedCurrentEvent from "./fixtures/current-event-blocked.json";
 import emptyCurrentEvent from "./fixtures/current-event-empty.json";
 import legacyCurrentEvent from "./fixtures/current-event-legacy.json";
 import readyCurrentEvent from "./fixtures/current-event-ready.json";
+import readyForecast from "./fixtures/event-forecast-ready.json";
 import readyPracticeStatus from "./fixtures/practice-status-ready.json";
 
 const HEALTH: HealthResponse = {
@@ -81,6 +83,15 @@ describe("CurrentEventPageView", () => {
     expect(screen.getByRole("heading", { name: "Q" })).toBeInTheDocument();
     expect(screen.getByText(/Target Artifact Not Available/i)).toBeInTheDocument();
   });
+
+  test("home-page compact preview renders only when forecast rows exist", () => {
+    renderPage(readyCurrentEvent);
+
+    expect(screen.getByText("Forecast Preview")).toBeInTheDocument();
+    expect(screen.getByText("Open forecast")).toBeInTheDocument();
+    expect(screen.getByText("Open practice status")).toBeInTheDocument();
+    expect(screen.getAllByText("NOR").length).toBeGreaterThan(0);
+  });
 });
 
 describe("MethodologyPage", () => {
@@ -100,6 +111,7 @@ function renderPage(currentEvent: unknown): void {
     manifest: null,
     currentEvent: currentEvent as CurrentEventEnvelope,
     practiceStatus: readyPracticeStatus as PracticeStatusEnvelope,
+    forecast: readyForecast as ForecastEnvelope,
     error: null
   };
   render(<CurrentEventPageView data={data} />);

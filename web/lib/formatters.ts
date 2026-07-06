@@ -28,6 +28,15 @@ export function formatSeconds(value: number | null | undefined): string {
     : "Not available";
 }
 
+export function formatSignedGap(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "Not available";
+  }
+  const normalized = Math.abs(value) < 0.0005 ? 0 : value;
+  const sign = normalized >= 0 ? "+" : "-";
+  return `${sign}${Math.abs(normalized).toFixed(3)}s`;
+}
+
 export function formatPercent(value: number | null | undefined): string {
   return typeof value === "number" && Number.isFinite(value)
     ? `${(value * 100).toFixed(0)}%`

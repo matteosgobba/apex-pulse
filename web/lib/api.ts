@@ -3,8 +3,11 @@ import type {
   CurrentEventEnvelope,
   CurrentEventPageData,
   DashboardApiErrorPayload,
+  ForecastEnvelope,
+  ForecastPageData,
   HealthResponse,
   ManifestEnvelope,
+  PracticePageData,
   PracticeStatusEnvelope,
   SafeDashboardError
 } from "@/lib/dashboard-types";
@@ -33,9 +36,61 @@ export async function loadCurrentEventPageData(): Promise<CurrentEventPageData> 
       fetchDashboard<CurrentEventEnvelope>("/api/v1/dashboard/current-event"),
       fetchDashboard<PracticeStatusEnvelope>("/api/v1/dashboard/current-event/practice-status")
     ]);
+    const forecast = await fetchDashboard<ForecastEnvelope>(
+      "/api/v1/dashboard/current-event/forecast"
+    ).catch(() => null);
     return {
       health,
       manifest,
+      currentEvent,
+      practiceStatus,
+      forecast,
+      error: null
+    };
+  } catch (error) {
+    return {
+      health: null,
+      manifest: null,
+      currentEvent: null,
+      practiceStatus: null,
+      forecast: null,
+      error: normalizeClientError(error)
+    };
+  }
+}
+
+export async function loadForecastPageData(): Promise<ForecastPageData> {
+  try {
+    const health = await fetchDashboard<HealthResponse>("/api/v1/health");
+    const [currentEvent, forecast] = await Promise.all([
+      fetchDashboard<CurrentEventEnvelope>("/api/v1/dashboard/current-event"),
+      fetchDashboard<ForecastEnvelope>("/api/v1/dashboard/current-event/forecast")
+    ]);
+    return {
+      health,
+      currentEvent,
+      forecast,
+      error: null
+    };
+  } catch (error) {
+    return {
+      health: null,
+      currentEvent: null,
+      forecast: null,
+      error: normalizeClientError(error)
+    };
+  }
+}
+
+export async function loadPracticePageData(): Promise<PracticePageData> {
+  try {
+    const health = await fetchDashboard<HealthResponse>("/api/v1/health");
+    const [currentEvent, practiceStatus] = await Promise.all([
+      fetchDashboard<CurrentEventEnvelope>("/api/v1/dashboard/current-event"),
+      fetchDashboard<PracticeStatusEnvelope>("/api/v1/dashboard/current-event/practice-status")
+    ]);
+    return {
+      health,
       currentEvent,
       practiceStatus,
       error: null
@@ -43,7 +98,6 @@ export async function loadCurrentEventPageData(): Promise<CurrentEventPageData> 
   } catch (error) {
     return {
       health: null,
-      manifest: null,
       currentEvent: null,
       practiceStatus: null,
       error: normalizeClientError(error)

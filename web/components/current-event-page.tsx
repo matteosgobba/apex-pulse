@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
+import { ForecastLeaderboard } from "@/components/forecast-leaderboard";
 import { KpiCard } from "@/components/kpi-card";
 import { LegacyWarning } from "@/components/legacy-warning";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
@@ -35,6 +36,7 @@ export function CurrentEventPageView({ data }: { data: CurrentEventPageData }) {
   const lineage = currentData?.registry_lineage;
   const legacy = currentData?.legacy_status;
   const sessions = data.practiceStatus?.data.sessions ?? [];
+  const forecastRows = data.forecast?.data.leaderboard ?? [];
 
   if (!current || current.status === "empty" || state === "no_event_available") {
     return (
@@ -175,6 +177,35 @@ export function CurrentEventPageView({ data }: { data: CurrentEventPageData }) {
       </section>
 
       <SessionStatusRow sessions={sessions} />
+
+      <section className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-start">
+        <div>
+          {forecastRows.length > 0 ? (
+            <ForecastLeaderboard rows={forecastRows} compact />
+          ) : (
+            <section className="rounded-lg border border-apex-border bg-apex-panel/85 p-5">
+              <h2 className="text-lg font-semibold text-apex-text">Forecast Preview</h2>
+              <p className="mt-2 text-sm leading-6 text-slate-300">
+                No forecast leaderboard rows are available in the current dashboard artifact.
+              </p>
+            </section>
+          )}
+        </div>
+        <div className="grid gap-3 lg:w-56">
+          <Link
+            href="/forecast"
+            className="inline-flex justify-center rounded-md border border-apex-accent/50 bg-apex-accent/10 px-4 py-2 text-sm font-semibold text-apex-text transition hover:bg-apex-accent/15"
+          >
+            Open forecast
+          </Link>
+          <Link
+            href="/practice"
+            className="inline-flex justify-center rounded-md border border-apex-border bg-apex-panelSoft px-4 py-2 text-sm font-semibold text-apex-text transition hover:border-apex-accent/50"
+          >
+            Open practice status
+          </Link>
+        </div>
+      </section>
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
         <KpiCard label="Forecasted drivers" value={formatInteger(kpis?.forecasted_driver_count)} />
