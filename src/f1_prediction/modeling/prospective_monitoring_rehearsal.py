@@ -165,7 +165,11 @@ def create_prospective_monitoring_rehearsal(
         ),
         (
             "dashboard_published",
-            lambda: _export_dashboard(config, event_slug=event_slug),
+            lambda: _export_dashboard(
+                config,
+                event_slug=event_slug,
+                synthetic_rehearsal=synthetic,
+            ),
         ),
     ):
         if output.blocked:
@@ -663,12 +667,40 @@ def _run_audits(
     }
 
 
-def _export_dashboard(config: DataConfig, *, event_slug: str) -> dict[str, Any]:
+def _export_dashboard(
+    config: DataConfig,
+    *,
+    event_slug: str,
+    synthetic_rehearsal: bool,
+) -> dict[str, Any]:
     summary = export_dashboard_artifacts(config)
     current_path = config.metrics_output_dir.parent / "dashboard/current_event.json"
     current = json.loads(current_path.read_text(encoding="utf-8"))
     current_slug = current.get("data", {}).get("event_identity", {}).get("event_slug")
     lifecycle = current.get("data", {}).get("lifecycle", {}).get("state")
+    if synthetic_rehearsal:
+        if current_slug == event_slug:
+            raise ValueError("Synthetic rehearsal event was selected as Dashboard Current Event.")
+        if not current.get("generated_at_utc"):
+            raise ValueError("Dashboard current event freshness timestamp is missing.")
+        historical_path = (
+            config.metrics_output_dir.parent / "dashboard/historical_monitoring_summary.json"
+        )
+        historical = json.loads(historical_path.read_text(encoding="utf-8"))
+        synthetic_rows = historical.get("data", {}).get("synthetic_rehearsal_records", [])
+        if not any(
+            row.get("event_identity", {}).get("event_slug") == event_slug
+            for row in synthetic_rows
+        ):
+            raise ValueError(
+                "Synthetic rehearsal event is missing from dashboard internal history."
+            )
+        return {
+            "artifact_paths": summary.artifact_paths,
+            "dashboard_status": summary.status,
+            "dashboard_current_event": summary.current_event,
+            "reason": "Dashboard export kept the synthetic rehearsal out of Current Event.",
+        }
     if current_slug != event_slug:
         raise ValueError(f"Dashboard current event is {current_slug}, expected {event_slug}.")
     if lifecycle != "settled":
@@ -806,6 +838,34 @@ def _add_dashboard_checks(output: _Recorder) -> None:
         )
     )
     current_slug = current.get("data", {}).get("event_identity", {}).get("event_slug")
+    if output.synthetic_rehearsal:
+        output.check(
+            "dashboard_published",
+            "synthetic_rehearsal_excluded_from_current_event",
+            "passed" if current_slug != output.event_slug else "failed",
+            True,
+            current_slug or "no_event_available",
+            "not selected as Current Event",
+            "Keep synthetic rehearsals out of the public Current Event selection.",
+        )
+        historical_path = (
+            output.config.metrics_output_dir.parent / "dashboard/historical_monitoring_summary.json"
+        )
+        historical = json.loads(historical_path.read_text(encoding="utf-8"))
+        synthetic_rows = historical.get("data", {}).get("synthetic_rehearsal_records", [])
+        synthetic_slugs = {
+            row.get("event_identity", {}).get("event_slug") for row in synthetic_rows
+        }
+        output.check(
+            "dashboard_published",
+            "synthetic_rehearsal_recorded_as_internal_history",
+            "passed" if output.event_slug in synthetic_slugs else "failed",
+            True,
+            len(synthetic_rows),
+            "synthetic rehearsal recorded outside Current Event",
+            "Retain synthetic rehearsal records only in internal dashboard history.",
+        )
+        return
     output.check(
         "dashboard_published",
         "dashboard_current_event_is_clean_rehearsal_event",

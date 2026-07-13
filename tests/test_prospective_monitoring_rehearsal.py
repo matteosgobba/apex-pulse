@@ -45,9 +45,12 @@ def test_complete_clean_synthetic_event_reaches_dashboard_published(tmp_path: Pa
     assert payload["synthetic_rehearsal"] is True
     assert payload["valid_prospective_evidence"] is False
     assert stages.loc[stages["stage"].eq("dashboard_published"), "status"].iloc[0] == "complete"
-    assert current["data"]["event_identity"]["event_slug"] == "synthetic-clean-gp"
-    assert current["data"]["lifecycle"]["state"] == "settled"
+    assert current["data"]["lifecycle"]["state"] == "no_event_available"
     assert historical["data"]["valid_prospective_monitoring"]["event_count"] == 0
+    assert (
+        historical["data"]["synthetic_rehearsal_records"][0]["event_identity"]["event_slug"]
+        == "synthetic-clean-gp"
+    )
     assert payload["driver_population_counts"]["feature_participant_count"] == 4
     assert payload["driver_population_counts"]["forecast_only_driver_count"] == 0
     assert len(population) == 4

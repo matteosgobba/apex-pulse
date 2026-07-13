@@ -116,7 +116,7 @@ export function CurrentEventPageView({ data }: { data: CurrentEventPageData }) {
               ? `Preflight status: ${humanizeToken(preflight.status)}.`
               : "Preflight did not approve this event for forecasting."}{" "}
             {preflight?.next_required_command
-              ? `Next operator action: ${preflight.next_required_command}.`
+              ? "Next operator action: review the exported preflight runbook."
               : "Review the exported monitoring artifacts before continuing."}
           </p>
         </section>
@@ -159,7 +159,7 @@ export function CurrentEventPageView({ data }: { data: CurrentEventPageData }) {
           title="Preflight"
           status={preflight?.status}
           tone={preflight?.forecast_allowed ? "good" : "danger"}
-          detail={preflight?.next_required_command}
+          detail={operatorActionDetail(preflight?.next_required_command)}
           items={[
             { label: "Allowed", value: preflight?.forecast_allowed },
             { label: "Blocking", value: preflight?.blocking_check_count },
@@ -301,4 +301,8 @@ function lifecycleExplanation(state: LifecycleState): string {
     legacy_descriptive_only: "This event is descriptive legacy context only."
   };
   return descriptions[state];
+}
+
+function operatorActionDetail(command: string | null | undefined): string | null {
+  return command ? "Next operator action is available in the exported preflight runbook." : null;
 }

@@ -46,10 +46,10 @@ describe("CurrentEventPageView", () => {
     expect(screen.getByText("Forecast generation is blocked")).toBeInTheDocument();
     expect(screen.getByText(/Missing Required Practice Sessions/i)).toBeInTheDocument();
     expect(
-      screen.getAllByText(/review prospective_monitoring_preflight_runbook.md/i)
+      screen.getAllByText(/exported preflight runbook/i)
     ).toHaveLength(2);
     expect(
-      screen.getByText(/Next operator action: review prospective_monitoring_preflight_runbook.md/i)
+      screen.getByText(/Next operator action: review the exported preflight runbook/i)
     ).toBeInTheDocument();
   });
 

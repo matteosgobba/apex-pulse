@@ -126,7 +126,7 @@ describe("PracticePageView", () => {
 
     expect(screen.getByText(/Preflight blocked the forecast workflow/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/review prospective_monitoring_preflight_runbook.md/i)
+      screen.getByText(/exported preflight runbook/i)
     ).toBeInTheDocument();
   });
 

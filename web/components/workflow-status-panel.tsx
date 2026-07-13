@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { StatusCard } from "@/components/status-card";
 import type { CurrentEventData, LifecycleState, PracticeStatusData } from "@/lib/dashboard-types";
-import { formatDateTime, formatInteger, formatText } from "@/lib/formatters";
+import { formatDateTime, formatInteger } from "@/lib/formatters";
 
 export function WorkflowStatusPanel({
   currentEvent,
@@ -122,5 +122,5 @@ function blockedDetail(state: LifecycleState, command: string | null | undefined
   if (state !== "blocked" && state !== "legacy_descriptive_only") {
     return null;
   }
-  return command ? `Next operator context: ${formatText(command)}` : null;
+  return command ? "Next operator context is available in the exported preflight runbook." : null;
 }

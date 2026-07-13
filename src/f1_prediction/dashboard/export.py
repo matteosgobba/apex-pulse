@@ -429,13 +429,17 @@ def _select_current_event(
 ) -> EventContext | None:
     if not contexts:
         return None
+    public_contexts = [
+        context
+        for context in contexts
+        if not context.legacy_noncanonical and not context.synthetic_rehearsal
+    ]
     if season is not None or event is not None:
-        return contexts[-1]
-    clean = [context for context in contexts if not context.legacy_noncanonical]
-    if clean:
+        return public_contexts[-1] if public_contexts else None
+    if public_contexts:
         active = [
             context
-            for context in clean
+            for context in public_contexts
             if context.lifecycle.state
             in {
                 "practice_in_progress",
@@ -445,7 +449,7 @@ def _select_current_event(
                 "blocked",
             }
         ]
-        return (active or clean)[-1]
+        return (active or public_contexts)[-1]
     return None
 
 

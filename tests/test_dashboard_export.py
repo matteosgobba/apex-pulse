@@ -302,9 +302,9 @@ def test_synthetic_rehearsal_current_event_is_excluded_from_valid_history(
     manifest = _read_dashboard(config, "dashboard_manifest.json")
     historical = _read_dashboard(config, "historical_monitoring_summary.json")
 
-    assert current["data"]["event_identity"]["event_slug"] == "synthetic-clean-gp"
-    assert current["data"]["synthetic_rehearsal"] is True
-    assert current["data"]["valid_prospective_evidence"] is False
+    assert current["data"]["lifecycle"]["state"] == "no_event_available"
+    assert manifest["data"]["current_event_reference"]["available"] is False
+    assert manifest["data"]["current_event_reference"]["reason"] == "no_event_available"
     assert manifest["data"]["eligible_prospective_event_count"] == 0
     assert manifest["data"]["synthetic_rehearsal_event_count"] == 1
     assert historical["data"]["valid_prospective_monitoring"]["event_count"] == 0
@@ -314,6 +314,30 @@ def test_synthetic_rehearsal_current_event_is_excluded_from_valid_history(
         ]
         is False
     )
+
+
+def test_real_event_is_selected_ahead_of_newer_synthetic_rehearsal(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(
+        config,
+        [
+            _registry_event("Monza", 2, target_artifact_present=True),
+            _registry_event("Synthetic Clean GP", 9, target_artifact_present=True),
+        ],
+    )
+    _write_forecasts(config, "Monza", [("NOR", "McLaren", 0.2)])
+    _write_forecasts(config, "Synthetic Clean GP", [("PIA", "McLaren", 0.1)], append=True)
+
+    export_dashboard_artifacts(config)
+    current = _read_dashboard(config, "current_event.json")
+    manifest = _read_dashboard(config, "dashboard_manifest.json")
+
+    assert current["data"]["event_identity"]["event_slug"] == "monza"
+    assert current["data"]["synthetic_rehearsal"] is False
+    assert manifest["data"]["synthetic_rehearsal_event_count"] == 1
 
 
 def test_event_selection_is_deterministic_and_registry_order_aware(tmp_path: Path) -> None:
