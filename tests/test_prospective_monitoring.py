@@ -594,6 +594,31 @@ def test_forecast_snapshot_mutation_blocks_settlement(tmp_path: Path) -> None:
         )
 
 
+def test_settlement_blocks_when_raw_identity_validation_fails(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    create_prospective_monitoring_forecast(
+        config,
+        load_model_config(),
+        load_feature_config(),
+        protocol_name="season_2026_v1",
+        event="Bahrain",
+    )
+    _write_target_artifact(config, dataset_path, "Bahrain")
+    metadata_path = config.session_metadata_output_dir / "2026/bahrain/q_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["event_name"] = "Austrian Grand Prix"
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Raw Q identity verification"):
+        create_prospective_monitoring_settlement(
+            config,
+            protocol_name="season_2026_v1",
+            event="Bahrain",
+        )
+
+
 def test_only_settled_earlier_event_evidence_reaches_later_forecast(tmp_path: Path) -> None:
     config = _config(tmp_path)
     dataset_path = _write_dataset(config)
@@ -711,6 +736,60 @@ def test_reconciliation_flags_legacy_noncanonical_event_order() -> None:
     assert bool(row["affected_by_prior_evidence_lineage"]) is True
     assert bool(row["eligible_for_future_prior_evidence_after_reconciliation"]) is False
     assert row["reconciliation_action"] == "exclude_from_prior_monitoring_evidence"
+
+
+def test_synthetic_rehearsal_settlement_is_excluded_from_future_prior_evidence() -> None:
+    protocol = {
+        "protocol_name": "season_2026_v1",
+        "monitor_season": 2026,
+        "protocol_fingerprint": "abc",
+    }
+    registry = pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "monitor_season": 2026,
+                "event_slug": "synthetic-clean-gp",
+                "event_order": 3,
+            }
+        ]
+    )
+    forecasts = pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "event_slug": "synthetic-clean-gp",
+                "forecast_id": "synthetic",
+                "event_order": 3,
+                "forecast_created_at_utc": "2026-07-04T10:00:00+00:00",
+            }
+        ]
+    )
+    settlements = pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "event_slug": "synthetic-clean-gp",
+                "forecast_id": "synthetic",
+                "event_order": 3,
+                "settled_at_utc": "2026-07-04T12:00:00+00:00",
+                "eligible_for_future_prior_evidence": True,
+            }
+        ]
+    )
+
+    reconciliation = build_event_order_reconciliation(
+        protocol,
+        registry,
+        forecasts,
+        settlements,
+        pd.DataFrame(),
+    )
+    row = reconciliation.iloc[0]
+
+    assert row["event_order_lineage_status"] == "valid_registry_lineage"
+    assert bool(row["eligible_for_future_prior_evidence_after_reconciliation"]) is False
+    assert row["reconciliation_reason"] == "synthetic_rehearsal_excluded_from_prior_evidence"
 
 
 def test_legacy_noncanonical_rows_are_excluded_without_mutating_forecast(
@@ -951,6 +1030,46 @@ def _write_target_artifact(config: DataConfig, dataset_path: Path, event: str) -
     event_dir = config.project_root / "data/processed/monitoring/2026" / slug
     target_path = event_dir / "monitoring_qualifying_targets.parquet"
     coverage_path = event_dir / "monitoring_target_coverage.csv"
+    raw_q_path = config.lap_output_dir / "2026" / slug / "q_laps.parquet"
+    raw_q_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "Driver": event_rows["driver"].tolist(),
+            "Team": event_rows["team"].tolist(),
+            "LapNumber": [1.0] * len(event_rows),
+            "Stint": [1.0] * len(event_rows),
+            "Compound": ["SOFT"] * len(event_rows),
+            "TyreLife": [2.0] * len(event_rows),
+            "LapTime": pd.to_timedelta(
+                event_rows["quali_best_lap_time_sec"].astype(float).tolist(),
+                unit="s",
+            ),
+            "Sector1Time": pd.to_timedelta([25.0] * len(event_rows), unit="s"),
+            "Sector2Time": pd.to_timedelta([29.0] * len(event_rows), unit="s"),
+            "Sector3Time": pd.to_timedelta([25.0] * len(event_rows), unit="s"),
+            "IsAccurate": [True] * len(event_rows),
+            "Deleted": [False] * len(event_rows),
+            "PitOutTime": [pd.NaT] * len(event_rows),
+            "PitInTime": [pd.NaT] * len(event_rows),
+        }
+    ).to_parquet(raw_q_path, index=False)
+    metadata_path = config.session_metadata_output_dir / "2026" / slug / "q_metadata.json"
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "season": 2026,
+                "event_input": event,
+                "event_name": f"{event} Grand Prix",
+                "event_slug": slug,
+                "session_input": "Q",
+                "session_name": "Qualifying",
+                "session_slug": "q",
+                "status": "success",
+            }
+        ),
+        encoding="utf-8",
+    )
     targets = event_rows[
         [
             "season",
@@ -1002,6 +1121,27 @@ def _write_target_artifact(config: DataConfig, dataset_path: Path, event: str) -
             "target_coverage_status": "target_coverage_complete",
             "partial_target_coverage": False,
             "settlement_metric_status": "scorable",
+            "raw_session_identity_status": "identity_verified",
+            "raw_session_identity_verified": True,
+            "raw_session_identity_blocking": False,
+            "raw_session_identity_reason": (
+                "Raw session path and metadata identities match the requested event."
+            ),
+            "raw_session_identity_recommended_action": (
+                "Target onboarding and settlement may proceed when other monitoring gates pass."
+            ),
+            "raw_session_identity_raw_laps_path": _portable(raw_q_path, config.project_root),
+            "raw_session_identity_metadata_path": _portable(metadata_path, config.project_root),
+            "raw_session_identity_metadata_event_name": f"{event} Grand Prix",
+            "raw_session_identity_metadata_event_slug": slug,
+            "raw_session_identity_metadata_official_event_name": f"{event} Grand Prix",
+            "raw_session_identity_metadata_season": 2026,
+            "raw_session_identity_metadata_session": "Q",
+            "raw_session_identity_path_event_slug": slug,
+            "quarantine_status": "clear",
+            "quarantine_reason": "",
+            "legacy_noncanonical": False,
+            "quarantined_for_prospective_evidence": False,
         }
     )
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")

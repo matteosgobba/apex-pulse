@@ -104,6 +104,12 @@ from f1_prediction.modeling.prospective_monitoring import (
 from f1_prediction.modeling.prospective_monitoring import (
     create_prospective_monitoring_settlement as run_prospective_monitoring_settlement,
 )
+from f1_prediction.modeling.prospective_monitoring_rehearsal import (
+    ProspectiveMonitoringRehearsalSummary,
+)
+from f1_prediction.modeling.prospective_monitoring_rehearsal import (
+    create_prospective_monitoring_rehearsal as run_prospective_monitoring_rehearsal,
+)
 from f1_prediction.modeling.prospective_policy_evaluation import (
     ProspectivePolicyEvaluationSummary,
 )
@@ -1638,6 +1644,64 @@ def prospective_monitoring_forecast_command(
     _print_prospective_monitoring_summary(summary, data_config.project_root)
 
 
+@app.command("prospective-monitoring-rehearsal")
+def prospective_monitoring_rehearsal_command(
+    protocol_name: Annotated[str, typer.Option("--protocol-name", help="Frozen protocol name.")],
+    season: Annotated[int, typer.Option("--season", min=1950, help="Monitored season.")],
+    event: Annotated[str, typer.Option("--event", help="Clean rehearsal event name.")],
+    event_order: Annotated[
+        int | None,
+        typer.Option("--event-order", help="Stable registry order for newly registered event."),
+    ] = None,
+    synthetic_rehearsal: Annotated[
+        bool | None,
+        typer.Option(
+            "--synthetic-rehearsal/--real-rehearsal",
+            help="Override automatic synthetic-event detection.",
+        ),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Run a guarded end-to-end monitoring rehearsal from local artifacts only."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_prospective_monitoring_rehearsal(
+            data_config,
+            model_config,
+            feature_config,
+            protocol_name=protocol_name,
+            season=season,
+            event=event,
+            event_order=event_order,
+            synthetic_rehearsal=synthetic_rehearsal,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_prospective_monitoring_rehearsal_summary(summary, data_config.project_root)
+
+
 @app.command("prospective-monitoring-settle")
 def prospective_monitoring_settle_command(
     protocol_name: Annotated[str, typer.Option("--protocol-name", help="Frozen protocol name.")],
@@ -2332,6 +2396,29 @@ def _print_prospective_monitoring_summary(
         typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
     if summary.generation_issues:
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_prospective_monitoring_rehearsal_summary(
+    summary: ProspectiveMonitoringRehearsalSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Prospective monitoring rehearsal complete")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Event: {summary.event} ({summary.event_slug})")
+    typer.echo(f"Synthetic rehearsal: {summary.synthetic_rehearsal}")
+    typer.echo(f"Valid prospective evidence: {summary.valid_prospective_evidence}")
+    typer.echo(f"Blocking failures: {summary.blocking_failure_count}")
+    typer.echo(f"Warnings: {summary.warning_count}")
+    typer.echo("Artifacts:")
+    for path in (
+        summary.summary_path,
+        summary.stages_path,
+        summary.checks_path,
+        summary.failures_path,
+        summary.driver_population_path,
+        summary.runbook_path,
+    ):
+        typer.echo(f"  - {_display_path(path, project_root)}")
 
 
 def _print_monitoring_onboarding_summary(

@@ -23,6 +23,7 @@ from f1_prediction.dashboard.schema import (
     validate_dashboard_document,
     validate_lifecycle_state,
 )
+from f1_prediction.modeling.prospective_monitoring import synthetic_rehearsal_event_slug
 from f1_prediction.utils.paths import ensure_directory, slugify
 
 DASHBOARD_FILES: tuple[str, ...] = (
@@ -108,6 +109,7 @@ class EventContext:
     preflight_summary: dict[str, Any] | None
     lifecycle: LifecycleState
     legacy_noncanonical: bool
+    synthetic_rehearsal: bool
     eligible_for_valid_prospective_evidence: bool
 
 
@@ -338,7 +340,8 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
         else None
     )
     legacy = _is_legacy_noncanonical(identity, reconciliation)
-    eligible = not legacy
+    synthetic_rehearsal = _is_synthetic_rehearsal(identity, registry_row)
+    eligible = not legacy and not synthetic_rehearsal
     lifecycle = _resolve_lifecycle(
         identity=identity,
         registry_row=registry_row,
@@ -362,6 +365,7 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
         preflight_summary=preflight,
         lifecycle=lifecycle,
         legacy_noncanonical=legacy,
+        synthetic_rehearsal=synthetic_rehearsal,
         eligible_for_valid_prospective_evidence=eligible,
     )
 
@@ -450,7 +454,7 @@ def _manifest_data(
     current_event: EventContext | None,
     sources: SourceReadResult,
 ) -> dict[str, Any]:
-    eligible = [context for context in contexts if not context.legacy_noncanonical]
+    eligible = [context for context in contexts if context.eligible_for_valid_prospective_evidence]
     legacy = [context for context in contexts if context.legacy_noncanonical]
     current_ref = (
         {
@@ -474,6 +478,7 @@ def _manifest_data(
         "event_count": len(contexts),
         "eligible_prospective_event_count": len(eligible),
         "legacy_descriptive_event_count": len(legacy),
+        "synthetic_rehearsal_event_count": sum(context.synthetic_rehearsal for context in contexts),
         "dashboard_contract_capabilities": {
             "forecast_leaderboard": any(
                 _has_live_rows(context.forecast_rows) for context in contexts
@@ -512,6 +517,8 @@ def _current_event_data(
         "forecast_status": _forecast_status_block(current_event),
         "settlement_status": _settlement_status_block(current_event),
         "legacy_status": _legacy_status_block(current_event),
+        "synthetic_rehearsal": current_event.synthetic_rehearsal,
+        "valid_prospective_evidence": current_event.eligible_for_valid_prospective_evidence,
         "summary_kpis": _summary_kpis(current_event),
     }
 
@@ -651,8 +658,9 @@ def _historical_monitoring_data(
     contexts: list[EventContext],
     sources: SourceReadResult,
 ) -> dict[str, Any]:
-    valid = [context for context in contexts if not context.legacy_noncanonical]
+    valid = [context for context in contexts if context.eligible_for_valid_prospective_evidence]
     legacy = [context for context in contexts if context.legacy_noncanonical]
+    synthetic = [context for context in contexts if context.synthetic_rehearsal]
     return {
         "valid_prospective_monitoring": {
             "event_count": len(valid),
@@ -665,6 +673,9 @@ def _historical_monitoring_data(
             "aggregate_metrics": _valid_aggregate_metrics(valid),
             "events": [_historical_event_row(context) for context in valid],
         },
+        "synthetic_rehearsal_records": [
+            _synthetic_rehearsal_event_row(context) for context in synthetic
+        ],
         "legacy_descriptive_records": [_legacy_event_row(context) for context in legacy],
         "backtest_context": {
             "available": bool(sources.backtest_report),
@@ -1422,8 +1433,23 @@ def _historical_event_row(context: EventContext) -> dict[str, Any]:
         "lifecycle_state": context.lifecycle.state,
         "forecasted": _has_live_rows(context.forecast_rows),
         "settled": _has_live_rows(context.settlement_rows),
-        "eligible_for_valid_prospective_evidence": True,
+        "eligible_for_valid_prospective_evidence": (
+            context.eligible_for_valid_prospective_evidence
+        ),
         "metrics": _event_metric_summary(context),
+    }
+
+
+def _synthetic_rehearsal_event_row(context: EventContext) -> dict[str, Any]:
+    return {
+        "event_identity": context.identity.to_dict(),
+        "lifecycle_state": context.lifecycle.state,
+        "synthetic_rehearsal": True,
+        "eligible_for_valid_prospective_evidence": False,
+        "forecasted": _has_live_rows(context.forecast_rows),
+        "settled": _has_live_rows(context.settlement_rows),
+        "exclusion_reason": "synthetic_rehearsal_not_real_prospective_evidence",
+        "descriptive_metrics": _event_metric_summary(context),
     }
 
 
@@ -1568,6 +1594,12 @@ def _is_legacy_noncanonical(identity: EventIdentity, reconciliation: pd.DataFram
     if reconciliation.empty or "event_order_lineage_status" not in reconciliation:
         return False
     return reconciliation["event_order_lineage_status"].astype(str).eq(LEGACY_LINEAGE_STATUS).any()
+
+
+def _is_synthetic_rehearsal(identity: EventIdentity, registry_row: dict[str, Any]) -> bool:
+    if _bool_or_none(registry_row.get("synthetic_rehearsal")):
+        return True
+    return synthetic_rehearsal_event_slug(identity.event_slug)
 
 
 def _registry_blocked(row: dict[str, Any]) -> bool:

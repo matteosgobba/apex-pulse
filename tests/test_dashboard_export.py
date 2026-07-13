@@ -284,6 +284,38 @@ def test_clean_event_is_selected_ahead_of_legacy_artifacts(tmp_path: Path) -> No
     assert current["data"]["lifecycle"]["state"] == "ready_to_forecast"
 
 
+def test_synthetic_rehearsal_current_event_is_excluded_from_valid_history(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(
+        config,
+        [_registry_event("Synthetic Clean GP", 3, target_artifact_present=True)],
+    )
+    _write_forecasts(config, "Synthetic Clean GP", [("NOR", "McLaren", 0.1)])
+    _write_settlements(config, "Synthetic Clean GP", [("NOR", 0.2, 0.1)])
+    _write_event_metrics(config, "Synthetic Clean GP", 0.1)
+
+    export_dashboard_artifacts(config)
+    current = _read_dashboard(config, "current_event.json")
+    manifest = _read_dashboard(config, "dashboard_manifest.json")
+    historical = _read_dashboard(config, "historical_monitoring_summary.json")
+
+    assert current["data"]["event_identity"]["event_slug"] == "synthetic-clean-gp"
+    assert current["data"]["synthetic_rehearsal"] is True
+    assert current["data"]["valid_prospective_evidence"] is False
+    assert manifest["data"]["eligible_prospective_event_count"] == 0
+    assert manifest["data"]["synthetic_rehearsal_event_count"] == 1
+    assert historical["data"]["valid_prospective_monitoring"]["event_count"] == 0
+    assert (
+        historical["data"]["synthetic_rehearsal_records"][0][
+            "eligible_for_valid_prospective_evidence"
+        ]
+        is False
+    )
+
+
 def test_event_selection_is_deterministic_and_registry_order_aware(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_protocol(config)

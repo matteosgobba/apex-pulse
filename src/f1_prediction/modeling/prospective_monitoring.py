@@ -88,6 +88,7 @@ EVENT_ORDER_LEGACY_STATUS = "legacy_noncanonical_event_order"
 EVENT_ORDER_MISSING_STATUS = "missing_registry_event_order"
 EVENT_ORDER_DUPLICATE_STATUS = "duplicate_registry_event_order"
 EVENT_ORDER_INVALID_STATUS = "invalid_registry_event_order"
+SYNTHETIC_REHEARSAL_PREFIX = "synthetic-"
 
 
 @dataclass(frozen=True)
@@ -3738,7 +3739,10 @@ def build_event_order_reconciliation(
             status = EVENT_ORDER_LEGACY_STATUS
         has_settlement = bool(event.get("has_settlement", False))
         has_future_eligible = bool(event.get("artifact_future_eligible", False))
-        eligible_after = bool(match and has_settlement and has_future_eligible)
+        synthetic_rehearsal = synthetic_rehearsal_event_slug(slug)
+        eligible_after = bool(
+            match and has_settlement and has_future_eligible and not synthetic_rehearsal
+        )
         action = (
             "retain_for_prior_monitoring_evidence"
             if eligible_after
@@ -3747,6 +3751,8 @@ def build_event_order_reconciliation(
         reason = (
             "registry_event_order_matches_artifact"
             if eligible_after
+            else "synthetic_rehearsal_excluded_from_prior_evidence"
+            if synthetic_rehearsal
             else "event_order_lineage_mismatch_or_unsettled"
         )
         rows.append(
@@ -3836,6 +3842,12 @@ def event_order_reconciliation_columns() -> list[str]:
         "reconciliation_action",
         "reconciliation_reason",
     ]
+
+
+def synthetic_rehearsal_event_slug(event_slug: object) -> bool:
+    """Return whether an event slug is explicitly reserved for synthetic rehearsal."""
+    slug = str(event_slug or "").strip().lower()
+    return slug == "synthetic" or slug.startswith(SYNTHETIC_REHEARSAL_PREFIX)
 
 
 def settled_event_keys(
