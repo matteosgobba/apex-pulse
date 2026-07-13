@@ -327,6 +327,44 @@ def test_source_paths_are_project_relative_and_no_absolute_paths_are_exported(
         assert all(not Path(path).is_absolute() for path in payload["source_artifacts"])
 
 
+def test_dashboard_export_carries_raw_identity_status_for_clean_event(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(config, [_registry_event("Bahrain", 1)])
+    _write_raw_identity_checks(config, [("Bahrain", "identity_verified", True, False)])
+
+    export_dashboard_artifacts(config)
+    current = _read_dashboard(config, "current_event.json")
+
+    assert current["data"]["raw_session_identity"]["raw_session_identity_status"] == (
+        "identity_verified"
+    )
+    assert current["data"]["raw_session_identity"]["raw_session_identity_verified"] is True
+    assert current["data"]["raw_session_identity"]["quarantine_status"] == "clear"
+
+
+def test_dashboard_legacy_history_carries_great_britain_raw_mismatch(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(config, [_registry_event("Great Britain", 9)])
+    _write_reconciliation(config, [("great-britain", 44, 9)])
+    _write_raw_identity_checks(
+        config,
+        [("Great Britain", "legacy_known_mismatch", False, True)],
+    )
+
+    export_dashboard_artifacts(config)
+    historical = _read_dashboard(config, "historical_monitoring_summary.json")
+    legacy = historical["data"]["legacy_descriptive_records"][0]
+
+    assert legacy["event_identity"]["event_slug"] == "great-britain"
+    assert legacy["raw_session_identity_status"] == "legacy_known_mismatch"
+    assert legacy["raw_source_mismatch"] is True
+    assert legacy["quarantine_status"] == "quarantined"
+
+
 def test_schema_version_and_envelope_validation_are_enforced(tmp_path: Path) -> None:
     config = _config(tmp_path)
     export_dashboard_artifacts(config)
@@ -663,6 +701,40 @@ def _write_reconciliation(
                 "reconciliation_reason": "event_order_lineage_mismatch_or_unsettled",
             }
             for slug, artifact_order, registry_order in rows
+        ]
+    ).to_csv(path, index=False)
+
+
+def _write_raw_identity_checks(
+    config: DataConfig,
+    rows: list[tuple[str, str, bool, bool]],
+) -> None:
+    path = config.metrics_output_dir / "raw_session_identity_validation_checks.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    slugs = [
+        (event, event.lower().replace(" ", "-"), status, match, blocking)
+        for event, status, match, blocking in rows
+    ]
+    pd.DataFrame(
+        [
+            {
+                "season": 2026,
+                "requested_event": event,
+                "requested_event_slug": slug,
+                "requested_session": "Q",
+                "raw_laps_path": f"data/raw/laps/2026/{slug}/q_laps.parquet",
+                "raw_metadata_path": (f"data/raw/session_metadata/2026/{slug}/q_metadata.json"),
+                "metadata_event_name": f"{event} Grand Prix",
+                "expected_event": event,
+                "identity_status": status,
+                "identity_match": match,
+                "blocking": blocking,
+                "quarantined": blocking,
+                "quarantine_reason": "synthetic quarantine" if blocking else "",
+                "reason": "synthetic identity result",
+                "recommended_action": "synthetic action",
+            }
+            for event, slug, status, match, blocking in slugs
         ]
     ).to_csv(path, index=False)
 

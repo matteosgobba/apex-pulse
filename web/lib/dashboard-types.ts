@@ -99,6 +99,18 @@ export interface LegacyStatus {
   eligible_for_valid_prospective_evidence?: boolean | null;
   legacy_noncanonical?: boolean | null;
   reason?: string | null;
+  raw_session_identity_status?: string | null;
+  raw_source_mismatch?: boolean | null;
+}
+
+export interface RawSessionIdentityStatus {
+  available?: boolean | null;
+  raw_session_identity_status?: string | null;
+  raw_session_identity_verified?: boolean | null;
+  quarantine_status?: string | null;
+  quarantine_reason?: string | null;
+  reason?: string | null;
+  recommended_action?: string | null;
 }
 
 export interface FreshnessInfo {
@@ -122,6 +134,7 @@ export interface CurrentEventData extends Record<string, unknown> {
   monitoring_protocol?: MonitoringProtocol | null;
   registry_lineage?: RegistryLineage | null;
   preflight?: PreflightStatus | null;
+  raw_session_identity?: RawSessionIdentityStatus | null;
   forecast_status?: ForecastStatus | null;
   settlement_status?: SettlementStatus | null;
   legacy_status?: LegacyStatus | null;
@@ -306,6 +319,10 @@ export interface LegacyDescriptiveRecord extends Record<string, unknown> {
   exclusion_reason?: string | null;
   legacy_noncanonical?: boolean | null;
   lifecycle_state?: LifecycleState | null;
+  quarantine_reason?: string | null;
+  quarantine_status?: string | null;
+  raw_session_identity_status?: string | null;
+  raw_source_mismatch?: boolean | null;
 }
 
 export interface BacktestContext extends Record<string, unknown> {

@@ -15,6 +15,13 @@ import pandas as pd
 from f1_prediction.config import DataConfig, FeatureConfig
 from f1_prediction.data.fastf1_loader import build_lap_output_path
 from f1_prediction.data.identity import add_identity_columns
+from f1_prediction.data.raw_session_identity import (
+    IDENTITY_VERIFIED,
+    create_raw_session_identity_validation_report,
+    target_identity_manifest_fields,
+    validate_raw_session_identity,
+    write_raw_identity_target_block,
+)
 from f1_prediction.features.build import (
     DEFAULT_PRACTICE_SESSIONS,
     build_session_features,
@@ -312,6 +319,19 @@ def add_monitoring_targets(
     q_path = build_lap_output_path(config.lap_output_dir, season, event, "Q")
     if not q_path.is_file():
         raise FileNotFoundError(f"Local qualifying lap artifact is missing: {q_path}")
+    identity = validate_raw_session_identity(config, season=season, event=event, session="Q")
+    create_raw_session_identity_validation_report(
+        config,
+        season=season,
+        event=event,
+        session="Q",
+    )
+    if identity.blocking or identity.quarantined_for_prospective_evidence:
+        write_raw_identity_target_block(config, identity)
+        raise ValueError(
+            "Raw Q identity validation blocks target onboarding for "
+            f"{season} {event}: {identity.identity_status}. {identity.recommended_action}"
+        )
     forecast_path = config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
     before_forecast_fingerprint = (
         artifact_fingerprint(forecast_path) if forecast_path.is_file() else None
@@ -347,6 +367,7 @@ def add_monitoring_targets(
             "target_coverage_artifact_path": portable_path(coverage_path, config.project_root),
             "target_coverage_artifact_fingerprint": artifact_fingerprint(coverage_path),
             "target_source_paths": {"Q": portable_path(q_path, config.project_root)},
+            **target_identity_manifest_fields(identity, project_root=config.project_root),
             "target_availability_status": "available",
             "target_created_at_utc": utc_now(),
             "feature_unchanged_after_target_creation": True,
@@ -899,6 +920,35 @@ def validate_target_artifact(
         return False, str(exc)
     if targets.empty:
         return False, "target_coverage_empty"
+    return True, ""
+
+
+def validate_target_raw_identity(
+    config: DataConfig,
+    season: int,
+    event: str,
+) -> tuple[bool, str]:
+    """Require target artifacts to carry fresh verified raw-Q identity state."""
+    manifest = read_json_if_exists(event_manifest_path(config, season, event)) or {}
+    result = validate_raw_session_identity(config, season=season, event=event, session="Q")
+    if result.blocking:
+        return False, f"raw_session_identity_{result.identity_status}"
+    if result.quarantined_for_prospective_evidence:
+        return False, "raw_session_identity_quarantined_for_prospective_evidence"
+    if manifest.get("raw_session_identity_status") != IDENTITY_VERIFIED:
+        return False, "raw_session_identity_validation_missing"
+    if not bool(manifest.get("raw_session_identity_verified", False)):
+        return False, "raw_session_identity_not_verified"
+    expected_laps = portable_path(result.raw_laps_path, config.project_root)
+    expected_metadata = portable_path(result.raw_metadata_path, config.project_root)
+    if manifest.get("raw_session_identity_raw_laps_path") != expected_laps:
+        return False, "raw_session_identity_laps_path_stale"
+    if manifest.get("raw_session_identity_metadata_path") != expected_metadata:
+        return False, "raw_session_identity_metadata_path_stale"
+    if manifest.get("raw_session_identity_metadata_event_name") != result.metadata_event_name:
+        return False, "raw_session_identity_metadata_event_stale"
+    if int(manifest.get("raw_session_identity_metadata_season", -1)) != int(season):
+        return False, "raw_session_identity_metadata_season_stale"
     return True, ""
 
 

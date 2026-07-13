@@ -20,6 +20,7 @@ from f1_prediction.data.monitoring_onboarding import (
     utc_now,
     write_json,
 )
+from f1_prediction.data.raw_session_identity import validate_raw_session_identity
 from f1_prediction.features.lap_cleaning import clean_session_laps
 from f1_prediction.utils.paths import ensure_directory, slugify
 
@@ -368,7 +369,6 @@ def _build_checks(
         targets = _stored_targets(config, event)
         settlements = _settlement_actuals(sources, event)
         dashboard = _dashboard_actuals(sources, event)
-        metadata = _raw_q_metadata(config, event)
         raw_path = build_lap_output_path(
             config.lap_output_dir,
             event["season"],
@@ -390,7 +390,7 @@ def _build_checks(
                 "Run ingestion locally before parity audit." if not raw_available else "",
             )
         )
-        rows.append(_raw_identity_check(event, metadata))
+        rows.append(_raw_identity_check(config, event))
         rows.extend(_raw_quality_checks(event, raw))
         rows.extend(_target_checks(event, raw, targets, event_rows))
         rows.extend(_settlement_checks(event, targets, settlements, event_rows))
@@ -399,41 +399,22 @@ def _build_checks(
     return pd.DataFrame(rows, columns=_check_columns())
 
 
-def _raw_identity_check(event: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
-    if not metadata:
-        return _check(
-            event,
-            "raw_q_session_identity_matches_event",
-            "unavailable",
-            False,
-            "metadata_missing",
-            event["event_slug"],
-            "Raw Q metadata is missing; path identity was used.",
-            "Inspect local session metadata if available.",
-        )
-    observed = {
-        "season": metadata.get("season"),
-        "event_input": metadata.get("event_input"),
-        "event_name": metadata.get("event_name"),
-        "event_slug": metadata.get("event_slug"),
-        "session_slug": metadata.get("session_slug"),
-    }
-    slug_ok = _text_or_none(metadata.get("event_slug")) == event["event_slug"]
-    season_ok = _int_or_none(metadata.get("season")) == event["season"]
-    session_ok = str(metadata.get("session_slug", "")).lower() == "q"
-    name_ok = _event_name_compatible(event["event_slug"], metadata.get("event_name"))
-    ok = slug_ok and season_ok and session_ok and name_ok
+def _raw_identity_check(config: DataConfig, event: dict[str, Any]) -> dict[str, Any]:
+    result = validate_raw_session_identity(
+        config,
+        season=int(event["season"]),
+        event=str(event["event"]),
+        session="Q",
+    )
     return _check(
         event,
         "raw_q_session_identity_matches_event",
-        "passed" if ok else "failed",
-        not ok,
-        json.dumps(observed, sort_keys=True),
+        "passed" if result.identity_match else "failed",
+        bool(result.blocking),
+        json.dumps(result.to_record(config.project_root), sort_keys=True),
         f"season={event['season']};event_slug={event['event_slug']};session=q",
-        "Raw Q metadata matches the monitored event."
-        if ok
-        else "Raw Q metadata indicates a possible event/session identity mismatch.",
-        "Verify local raw Q artifact was written from the intended event." if not ok else "",
+        "Raw Q metadata matches the monitored event." if result.identity_match else result.reason,
+        result.recommended_action if result.blocking else "",
     )
 
 

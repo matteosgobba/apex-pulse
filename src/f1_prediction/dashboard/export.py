@@ -74,6 +74,9 @@ class SourceReadResult:
     preflight_summary: dict[str, Any]
     preflight_checks: pd.DataFrame
     preflight_failures: pd.DataFrame
+    raw_identity_summary: dict[str, Any]
+    raw_identity_checks: pd.DataFrame
+    raw_identity_quarantine: pd.DataFrame
     forecasts: pd.DataFrame
     settlements: pd.DataFrame
     monitoring_summary: dict[str, Any]
@@ -101,6 +104,7 @@ class EventContext:
     settlement_rows: pd.DataFrame
     target_coverage_rows: pd.DataFrame
     event_metric_rows: pd.DataFrame
+    raw_identity_row: dict[str, Any]
     preflight_summary: dict[str, Any] | None
     lifecycle: LifecycleState
     legacy_noncanonical: bool
@@ -323,6 +327,11 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
     settlements = _matching_rows(sources.settlements, season=identity.season, event_slug=slug)
     target_coverage = sources.target_coverages.get((identity.season or -1, slug), pd.DataFrame())
     metrics = _matching_rows(sources.event_metrics, season=identity.season, event_slug=slug)
+    raw_identity = _matching_raw_identity(
+        sources.raw_identity_checks,
+        season=identity.season,
+        event_slug=slug,
+    )
     preflight = (
         sources.preflight_summary
         if _preflight_matches(sources.preflight_summary, identity)
@@ -349,6 +358,7 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
         settlement_rows=settlements,
         target_coverage_rows=target_coverage,
         event_metric_rows=metrics,
+        raw_identity_row=raw_identity,
         preflight_summary=preflight,
         lifecycle=lifecycle,
         legacy_noncanonical=legacy,
@@ -498,6 +508,7 @@ def _current_event_data(
         "monitoring_protocol": _monitoring_protocol(sources.protocol),
         "registry_lineage": _registry_lineage(current_event),
         "preflight": _preflight_block(current_event),
+        "raw_session_identity": _raw_session_identity_block(current_event),
         "forecast_status": _forecast_status_block(current_event),
         "settlement_status": _settlement_status_block(current_event),
         "legacy_status": _legacy_status_block(current_event),
@@ -785,6 +796,9 @@ def _build_source_artifacts(config: DataConfig) -> tuple[SourceArtifact, ...]:
         config.metrics_output_dir / "prospective_monitoring_preflight_summary.json",
         config.metrics_output_dir / "prospective_monitoring_preflight_checks.csv",
         config.metrics_output_dir / "prospective_monitoring_preflight_failures.csv",
+        config.metrics_output_dir / "raw_session_identity_validation_summary.json",
+        config.metrics_output_dir / "raw_session_identity_validation_checks.csv",
+        config.metrics_output_dir / "raw_session_identity_quarantine.csv",
         config.metrics_output_dir / "prospective_monitoring_forecasts.parquet",
         config.metrics_output_dir / "prospective_monitoring_settlements.parquet",
         config.metrics_output_dir / "prospective_monitoring_summary.json",
@@ -836,6 +850,11 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
     preflight_failures = _read_csv(
         metrics / "prospective_monitoring_preflight_failures.csv", issues
     )
+    raw_identity_summary = _read_json(
+        metrics / "raw_session_identity_validation_summary.json", issues
+    )
+    raw_identity_checks = _read_csv(metrics / "raw_session_identity_validation_checks.csv", issues)
+    raw_identity_quarantine = _read_csv(metrics / "raw_session_identity_quarantine.csv", issues)
     forecasts = _read_parquet(metrics / "prospective_monitoring_forecasts.parquet", issues)
     settlements = _read_parquet(metrics / "prospective_monitoring_settlements.parquet", issues)
     monitoring_summary = _read_json(metrics / "prospective_monitoring_summary.json", issues)
@@ -863,6 +882,9 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
         preflight_summary=preflight_summary,
         preflight_checks=preflight_checks,
         preflight_failures=preflight_failures,
+        raw_identity_summary=raw_identity_summary,
+        raw_identity_checks=raw_identity_checks,
+        raw_identity_quarantine=raw_identity_quarantine,
         forecasts=forecasts,
         settlements=settlements,
         monitoring_summary=monitoring_summary,
@@ -1248,6 +1270,33 @@ def _preflight_block(context: EventContext) -> dict[str, Any]:
     }
 
 
+def _raw_session_identity_block(context: EventContext) -> dict[str, Any]:
+    row = context.raw_identity_row
+    if not row:
+        manifest_status = context.manifest.get("raw_session_identity_status")
+        if not manifest_status:
+            return unavailable("raw_session_identity_validation_not_available")
+        row = {
+            "identity_status": manifest_status,
+            "identity_match": context.manifest.get("raw_session_identity_verified"),
+            "blocking": context.manifest.get("raw_session_identity_blocking"),
+            "quarantined": context.manifest.get("quarantined_for_prospective_evidence"),
+            "reason": context.manifest.get("raw_session_identity_reason"),
+            "recommended_action": context.manifest.get("raw_session_identity_recommended_action"),
+            "quarantine_reason": context.manifest.get("quarantine_reason"),
+        }
+    quarantined = _truthy(row.get("quarantined")) or _truthy(row.get("blocking"))
+    return {
+        "available": True,
+        "raw_session_identity_status": row.get("identity_status"),
+        "raw_session_identity_verified": row.get("identity_match"),
+        "quarantine_status": "quarantined" if quarantined else "clear",
+        "quarantine_reason": row.get("quarantine_reason") or row.get("reason"),
+        "reason": row.get("reason"),
+        "recommended_action": row.get("recommended_action"),
+    }
+
+
 def _forecast_status_block(context: EventContext) -> dict[str, Any]:
     live = _live_rows(context.forecast_rows)
     if live.empty:
@@ -1283,6 +1332,9 @@ def _legacy_status_block(context: EventContext) -> dict[str, Any]:
         "eligible_for_valid_prospective_evidence": context.eligible_for_valid_prospective_evidence,
         "display_label": "Legacy descriptive only" if context.legacy_noncanonical else "Canonical",
         "reason": context.lifecycle.reason if context.legacy_noncanonical else "",
+        "raw_session_identity_status": context.raw_identity_row.get("identity_status"),
+        "raw_source_mismatch": context.raw_identity_row.get("identity_status")
+        == "legacy_known_mismatch",
     }
 
 
@@ -1376,11 +1428,17 @@ def _historical_event_row(context: EventContext) -> dict[str, Any]:
 
 
 def _legacy_event_row(context: EventContext) -> dict[str, Any]:
+    raw_identity = _raw_session_identity_block(context)
     return {
         "event_identity": context.identity.to_dict(),
         "lifecycle_state": "legacy_descriptive_only",
         "legacy_noncanonical": True,
         "eligible_for_valid_prospective_evidence": False,
+        "raw_session_identity_status": context.raw_identity_row.get("identity_status"),
+        "raw_source_mismatch": context.raw_identity_row.get("identity_status")
+        == "legacy_known_mismatch",
+        "quarantine_status": raw_identity.get("quarantine_status"),
+        "quarantine_reason": raw_identity.get("quarantine_reason"),
         "exclusion_reason": _first_non_null(
             context.reconciliation_rows,
             "reconciliation_reason",
@@ -1425,6 +1483,7 @@ def _empty_event_data(reason: str) -> dict[str, Any]:
         "monitoring_protocol": unavailable("protocol_not_available"),
         "registry_lineage": unavailable("registry_not_available"),
         "preflight": unavailable("preflight_not_available"),
+        "raw_session_identity": unavailable("raw_session_identity_validation_not_available"),
         "forecast_status": unavailable("forecast_not_available"),
         "settlement_status": unavailable("settlement_not_available"),
         "legacy_status": {"legacy_noncanonical": False},
@@ -1455,6 +1514,23 @@ def _matching_row(
     season_column: str = "season",
 ) -> dict[str, Any]:
     rows = _matching_rows(frame, season=season, event_slug=event_slug, season_column=season_column)
+    return rows.iloc[0].to_dict() if not rows.empty else {}
+
+
+def _matching_raw_identity(
+    frame: pd.DataFrame,
+    *,
+    season: int | None,
+    event_slug: str,
+) -> dict[str, Any]:
+    if frame.empty or not event_slug:
+        return {}
+    slug_column = "event_slug" if "event_slug" in frame else "requested_event_slug"
+    if slug_column not in frame:
+        return {}
+    rows = frame[frame[slug_column].astype(str).eq(str(event_slug))].copy()
+    if season is not None and "season" in rows:
+        rows = rows[pd.to_numeric(rows["season"], errors="coerce").eq(int(season))]
     return rows.iloc[0].to_dict() if not rows.empty else {}
 
 

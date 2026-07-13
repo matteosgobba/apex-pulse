@@ -1,7 +1,7 @@
 """Command-line interface for data ingestion workflows."""
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -27,6 +27,9 @@ from f1_prediction.data.monitoring_onboarding import (
 )
 from f1_prediction.data.monitoring_onboarding import (
     register_monitoring_event as run_monitoring_register_event,
+)
+from f1_prediction.data.raw_session_identity import (
+    create_raw_session_identity_validation_report as run_raw_session_identity_validation,
 )
 from f1_prediction.data.season_builder import SeasonDatasetBuildSummary, resolve_event_selection
 from f1_prediction.data.season_builder import build_season_dataset as run_season_dataset_build
@@ -1410,6 +1413,50 @@ def monitoring_data_readiness_report_command(
     _print_monitoring_onboarding_summary(summary, data_config.project_root)
 
 
+@app.command("raw-session-identity-validate")
+def raw_session_identity_validate_command(
+    season: Annotated[
+        int | None,
+        typer.Option("--season", min=1950, help="Optional season to validate."),
+    ] = None,
+    event: Annotated[
+        str | None,
+        typer.Option("--event", help="Optional event name or slug to validate."),
+    ] = None,
+    session: Annotated[
+        str,
+        typer.Option("--session", help="Session identifier to validate. Defaults to Q."),
+    ] = "Q",
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Validate raw session path and metadata identity without fetching data."""
+    configure_logging(verbose=verbose)
+    if (season is None) != (event is None):
+        typer.echo("Error: --season and --event must be supplied together.", err=True)
+        raise typer.Exit(code=1)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary, checks, _failures, _quarantine, runbook_path = run_raw_session_identity_validation(
+            data_config,
+            season=season,
+            event=event,
+            session=session,
+        )
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_raw_session_identity_validation_summary(
+        summary,
+        checks,
+        runbook_path,
+        data_config.project_root,
+    )
+
+
 @app.command("monitoring-data-integrity-audit")
 def monitoring_data_integrity_audit_command(
     config_path: Annotated[
@@ -2300,6 +2347,40 @@ def _print_monitoring_onboarding_summary(
         typer.echo(f"Missing inputs: {', '.join(summary.missing_inputs)}")
     if summary.generation_issues:
         typer.echo(f"Generation issues: {len(summary.generation_issues)}")
+
+
+def _print_raw_session_identity_validation_summary(
+    summary: dict[str, object],
+    checks: Any,
+    runbook_path: Path,
+    project_root: Path,
+) -> None:
+    typer.echo("Raw session identity validation")
+    if not checks.empty:
+        requested = checks.iloc[0]
+        if summary.get("requested_event_slug") is not None:
+            matches = checks[
+                checks["requested_event_slug"]
+                .astype(str)
+                .eq(str(summary.get("requested_event_slug")))
+            ]
+            if not matches.empty:
+                requested = matches.iloc[0]
+        typer.echo(f"Season: {requested['season']}")
+        typer.echo(f"Event: {requested['requested_event']}")
+        typer.echo(f"Session: {requested['requested_session']}")
+        typer.echo(f"Status: {requested['identity_status']}")
+        allowed = not bool(requested["blocking"]) and not bool(
+            requested["quarantined_for_prospective_evidence"]
+        )
+        typer.echo(f"Target onboarding allowed: {allowed}")
+        typer.echo(f"Settlement allowed: {allowed}")
+        typer.echo(f"Recommended action: {requested['recommended_action']}")
+    else:
+        typer.echo("Status: no_raw_q_metadata_discovered")
+    typer.echo("Summary: reports/metrics/raw_session_identity_validation_summary.json")
+    typer.echo("Checks: reports/metrics/raw_session_identity_validation_checks.csv")
+    typer.echo(f"Runbook: {_display_path(runbook_path, project_root)}")
 
 
 def _print_monitoring_data_integrity_audit_summary(

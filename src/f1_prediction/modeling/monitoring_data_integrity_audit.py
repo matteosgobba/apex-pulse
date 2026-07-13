@@ -17,6 +17,7 @@ from f1_prediction.data.monitoring_onboarding import (
     utc_now,
     write_json,
 )
+from f1_prediction.data.raw_session_identity import validate_raw_session_identity
 from f1_prediction.utils.paths import ensure_directory
 
 LEGACY_LINEAGE_STATUS = "legacy_noncanonical_event_order"
@@ -249,6 +250,7 @@ def _build_checks(
         rows.extend(_target_quality_checks(event, artifacts))
         rows.extend(_population_checks(event, event_population))
         rows.extend(_settlement_checks(event, artifacts))
+        rows.append(_raw_session_identity_check(config, event))
         rows.append(
             _check(
                 event,
@@ -307,6 +309,27 @@ def _build_checks(
             )
         )
     return pd.DataFrame(rows, columns=_check_columns())
+
+
+def _raw_session_identity_check(config: DataConfig, event: dict[str, Any]) -> dict[str, Any]:
+    result = validate_raw_session_identity(
+        config,
+        season=int(event["season"]),
+        event=str(event["event"]),
+        session="Q",
+    )
+    missing = result.identity_status in {"raw_artifact_missing", "metadata_missing"}
+    status = "unavailable" if missing else "passed" if result.identity_match else "failed"
+    return _check(
+        event,
+        "raw_q_session_identity_verified",
+        status,
+        bool(result.blocking and not missing),
+        result.identity_status,
+        "identity_verified",
+        result.reason,
+        result.recommended_action if result.blocking else "",
+    )
 
 
 def _identity_checks(

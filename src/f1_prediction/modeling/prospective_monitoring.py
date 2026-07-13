@@ -21,6 +21,7 @@ from f1_prediction.data.monitoring_onboarding import (
     target_artifact_path,
     target_coverage_path,
     validate_target_artifact,
+    validate_target_raw_identity,
 )
 from f1_prediction.data.monitoring_onboarding import (
     artifact_fingerprint as onboarding_artifact_fingerprint,
@@ -1544,6 +1545,13 @@ def validate_settlement_target_artifact(config: DataConfig, event_row: pd.Series
     target_valid, reason = validate_target_artifact(config, season, event)
     if not target_valid:
         raise ValueError(f"Valid separate target artifact is required for settlement: {reason}")
+    identity_valid, identity_reason = validate_target_raw_identity(config, season, event)
+    if not identity_valid:
+        raise ValueError(
+            "Raw Q identity verification is required before settlement: "
+            f"{identity_reason}. Inspect metadata and re-ingest the correct Q session before "
+            "retrying settlement."
+        )
 
 
 def monitoring_target_outcomes(config: DataConfig, event_row: pd.Series) -> pd.DataFrame:
