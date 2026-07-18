@@ -1,5 +1,6 @@
 """Command-line interface for data ingestion workflows."""
 
+import json
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -28,6 +29,12 @@ from f1_prediction.data.monitoring_onboarding import (
 )
 from f1_prediction.data.monitoring_onboarding import (
     register_monitoring_event as run_monitoring_register_event,
+)
+from f1_prediction.data.qualifying_entry_list import (
+    QualifyingEntryListAudit,
+)
+from f1_prediction.data.qualifying_entry_list import (
+    audit_qualifying_entry_list as run_qualifying_entry_list_audit,
 )
 from f1_prediction.data.raw_session_identity import (
     create_raw_session_identity_validation_report as run_raw_session_identity_validation,
@@ -1430,11 +1437,18 @@ def monitoring_data_readiness_report_command(
 def monitoring_before_qualifying_command(
     season: Annotated[int, typer.Option("--season", min=1950, help="Monitored season.")],
     event: Annotated[str, typer.Option("--event", help="Event name or slug.")],
-    event_order: Annotated[int, typer.Option("--event-order", help="Stable registry order.")],
     protocol_name: Annotated[
         str,
         typer.Option("--protocol-name", help="Frozen protocol name."),
     ] = DEFAULT_PROTOCOL_NAME,
+    event_order_override: Annotated[
+        int | None,
+        typer.Option(
+            "--event-order-override",
+            help="Hidden test-only event order override for offline synthetic fixtures.",
+            hidden=True,
+        ),
+    ] = None,
     allow_test_event: Annotated[
         bool,
         typer.Option(
@@ -1475,7 +1489,7 @@ def monitoring_before_qualifying_command(
             feature_config,
             season=season,
             event=event,
-            event_order=event_order,
+            event_order_override=event_order_override,
             protocol_name=protocol_name,
             allow_test_event=allow_test_event,
             progress=typer.echo,
@@ -1485,6 +1499,38 @@ def monitoring_before_qualifying_command(
         raise typer.Exit(code=1) from exc
     _print_monitoring_workflow_summary(summary, data_config.project_root)
     if summary.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@app.command("qualifying-entry-list-audit")
+def qualifying_entry_list_audit_command(
+    season: Annotated[int, typer.Option("--season", min=1950, help="Monitored season.")],
+    event: Annotated[str, typer.Option("--event", help="Event name or slug.")],
+    event_order: Annotated[
+        int | None,
+        typer.Option("--event-order", help="Optional event order for audit metadata."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Resolve and audit the qualifying-entry-list forecast universe."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_qualifying_entry_list_audit(
+            data_config,
+            season=season,
+            event=event,
+            event_order=event_order,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_qualifying_entry_list_audit_summary(summary, data_config.project_root)
+    if not summary.forecast_allowed:
         raise typer.Exit(code=1)
 
 
@@ -2540,9 +2586,27 @@ def _print_monitoring_workflow_summary(
     typer.echo(f"Workflow: {summary.workflow}")
     typer.echo(f"Status: {summary.status}")
     typer.echo(f"Event: {summary.event} ({summary.event_slug})")
+    if summary.event_order is not None:
+        typer.echo(
+            f"Event order: {summary.event_order} "
+            f"({summary.event_order_resolution_source or 'unspecified'})"
+        )
+    if summary.scheduled_event_date:
+        typer.echo(f"Scheduled event date: {summary.scheduled_event_date}")
     typer.echo(f"Completed: {summary.completed}")
     typer.echo(f"Blocking failures: {summary.blocking_failure_count}")
     typer.echo(f"Warnings: {summary.warning_count}")
+    payload = json.loads(summary.summary_path.read_text(encoding="utf-8"))
+    if payload.get("qualifying_entry_list_status") != "not_run":
+        typer.echo(f"Qualifying entry list: {payload.get('qualifying_entry_list_status')}")
+        typer.echo(f"Entry-list source: {payload.get('qualifying_entry_list_source')}")
+        typer.echo(f"Selected source session: {payload.get('selected_source_session') or 'n/a'}")
+        typer.echo(f"Q availability: {payload.get('q_availability_status')}")
+        typer.echo(f"Q data required: {payload.get('q_data_required')}")
+        typer.echo(f"Eligible drivers: {payload.get('eligible_driver_count')}")
+        typer.echo(f"Practice-only exclusions: {payload.get('practice_only_exclusion_count')}")
+        typer.echo(f"Forecast drivers: {payload.get('forecast_driver_count')}")
+        typer.echo(f"Driver-set parity: {payload.get('driver_set_parity_status')}")
     typer.echo(f"Dashboard current event: {summary.dashboard_current_event or 'none'}")
     stages = pd.read_csv(summary.stages_path)
     typer.echo("Stages:")
@@ -2550,6 +2614,33 @@ def _print_monitoring_workflow_summary(
         typer.echo(f"  - {row.stage}: {row.status}")
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Stages: {_display_path(summary.stages_path, project_root)}")
+
+
+def _print_qualifying_entry_list_audit_summary(
+    summary: QualifyingEntryListAudit,
+    project_root: Path,
+) -> None:
+    payload = summary.summary
+    typer.echo("Qualifying entry list audit")
+    typer.echo(f"Status: {payload.get('entry_list_resolution_status')}")
+    typer.echo(f"Source: {payload.get('resolution_source') or 'unresolved'}")
+    typer.echo(f"Selected source session: {payload.get('selected_source_session') or 'n/a'}")
+    typer.echo(f"Source session time: {payload.get('selected_source_session_datetime') or 'n/a'}")
+    typer.echo(
+        "Source session completion: "
+        f"{payload.get('selected_source_session_completion_status') or 'n/a'}"
+    )
+    typer.echo(f"Q availability: {payload.get('q_availability_status')}")
+    typer.echo(f"Q data required: {payload.get('q_data_required')}")
+    typer.echo(f"Eligible drivers: {payload.get('entry_list_driver_count')}")
+    typer.echo(f"Practice-only exclusions: {payload.get('excluded_practice_only_driver_count')}")
+    typer.echo(f"Forecast drivers: {payload.get('forecast_driver_count')}")
+    typer.echo(f"Driver-set parity: {payload.get('driver_set_parity_status')}")
+    typer.echo(f"Forecast allowed: {payload.get('forecast_allowed')}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Drivers: {_display_path(summary.drivers_path, project_root)}")
+    typer.echo(f"Exclusions: {_display_path(summary.exclusions_path, project_root)}")
+    typer.echo(f"Failures: {_display_path(summary.failures_path, project_root)}")
 
 
 def _print_monitoring_onboarding_summary(

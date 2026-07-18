@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
+import fastf1
 import pandas as pd
 
 from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig
@@ -28,6 +30,7 @@ from f1_prediction.data.monitoring_onboarding import (
     validate_target_raw_identity,
     write_json,
 )
+from f1_prediction.data.qualifying_entry_list import audit_qualifying_entry_list
 from f1_prediction.data.raw_session_identity import (
     IDENTITY_VERIFIED,
     create_raw_session_identity_validation_report,
@@ -55,12 +58,14 @@ from f1_prediction.utils.paths import ensure_directory, slugify
 DEFAULT_PROTOCOL_NAME = "season_2026_v1"
 LEGACY_EVENT_SLUGS = {"australia", "great-britain"}
 LIVE_POLICY_ROLE = "observed_live_policy"
+EVENT_ORDER_RESOLUTION_SOURCE = "fastf1_event_schedule"
 
 BEFORE_WORKFLOW = "monitoring_before_qualifying"
 AFTER_WORKFLOW = "monitoring_after_qualifying"
 
 BEFORE_STAGES: tuple[str, ...] = (
     "practice_ingested",
+    "qualifying_entry_list_resolved",
     "event_prepared",
     "event_registered",
     "preflight_ready",
@@ -92,7 +97,90 @@ class MonitoringWorkflowSummary:
     warning_count: int
     event: str
     event_slug: str
+    event_order: int | None
+    scheduled_event_date: str
+    event_order_resolution_source: str
     dashboard_current_event: str | None
+
+
+@dataclass(frozen=True)
+class EventScheduleResolution:
+    """Canonical calendar identity for one monitored event."""
+
+    requested_event: str
+    canonical_event: str
+    event_slug: str
+    event_order: int
+    scheduled_event_date: str
+    event_order_resolution_source: str
+
+
+def resolve_monitoring_event_schedule(
+    *,
+    season: int,
+    event: str,
+    event_order_override: int | None = None,
+    allow_test_event: bool = False,
+) -> EventScheduleResolution:
+    """Resolve a monitored event from the official FastF1 season calendar."""
+    event_slug = slugify(event)
+    if event_order_override is not None and not allow_test_event:
+        raise ValueError(
+            "Event order overrides are test-only. Use the FastF1 schedule-derived order for "
+            "real monitoring operations."
+        )
+    if event_order_override is not None and allow_test_event:
+        if not synthetic_rehearsal_event_slug(event_slug):
+            raise ValueError("Event order overrides are only allowed for synthetic test events.")
+        return EventScheduleResolution(
+            requested_event=event,
+            canonical_event=event,
+            event_slug=event_slug,
+            event_order=int(event_order_override),
+            scheduled_event_date="",
+            event_order_resolution_source="event_order_override_test_only",
+        )
+    _reject_blocked_event(season, event, allow_test_event=allow_test_event)
+    try:
+        schedule = fastf1.get_event_schedule(season, include_testing=False)
+    except Exception as exc:
+        raise ValueError(
+            f"Unable to resolve event order from the FastF1 season schedule before ingestion: {exc}"
+        ) from exc
+    schedule = schedule.copy()
+    if "RoundNumber" not in schedule:
+        raise ValueError("FastF1 season schedule is missing RoundNumber.")
+    schedule["_round_number"] = pd.to_numeric(schedule["RoundNumber"], errors="coerce")
+    schedule = schedule[schedule["_round_number"].fillna(0).astype(int).gt(0)]
+    if schedule.empty:
+        raise ValueError(f"No championship events were found in the {season} FastF1 schedule.")
+    requested_slug = slugify(event)
+    matches = [
+        row for _, row in schedule.iterrows() if requested_slug in _calendar_event_aliases(row)
+    ]
+    valid_names = _calendar_valid_event_names(schedule)
+    if not matches:
+        closest = _closest_event_names(event, valid_names)
+        raise ValueError(
+            f"Event '{event}' was not found unambiguously in the {season} FastF1 schedule. "
+            f"Closest valid event names: {', '.join(closest)}."
+        )
+    if len(matches) > 1:
+        names = [str(_calendar_event_name(row)) for row in matches]
+        raise ValueError(
+            f"Event '{event}' is ambiguous in the {season} FastF1 schedule. "
+            f"Valid matches: {', '.join(names)}."
+        )
+    row = matches[0]
+    canonical_event = _calendar_event_name(row)
+    return EventScheduleResolution(
+        requested_event=event,
+        canonical_event=canonical_event,
+        event_slug=slugify(canonical_event),
+        event_order=int(row["_round_number"]),
+        scheduled_event_date=_calendar_event_date(row),
+        event_order_resolution_source=EVENT_ORDER_RESOLUTION_SOURCE,
+    )
 
 
 def run_monitoring_before_qualifying(
@@ -102,14 +190,38 @@ def run_monitoring_before_qualifying(
     *,
     season: int,
     event: str,
-    event_order: int,
+    event_order_override: int | None = None,
     protocol_name: str = DEFAULT_PROTOCOL_NAME,
     allow_test_event: bool = False,
     progress: Callable[[str], None] | None = None,
 ) -> MonitoringWorkflowSummary:
     """Run the guarded before-qualifying monitoring workflow."""
-    event_slug = slugify(event)
-    recorder = _WorkflowRecorder(config, BEFORE_WORKFLOW, protocol_name, season, event, event_slug)
+    resolution = resolve_monitoring_event_schedule(
+        season=season,
+        event=event,
+        event_order_override=event_order_override,
+        allow_test_event=allow_test_event,
+    )
+    if progress is not None:
+        progress(
+            "RESOLVE calendar: "
+            f"{resolution.canonical_event} "
+            f"(event_order={resolution.event_order}, "
+            f"source={resolution.event_order_resolution_source})"
+        )
+    event = resolution.canonical_event
+    event_slug = resolution.event_slug
+    recorder = _WorkflowRecorder(
+        config,
+        BEFORE_WORKFLOW,
+        protocol_name,
+        season,
+        event,
+        event_slug,
+        event_order=resolution.event_order,
+        scheduled_event_date=resolution.scheduled_event_date,
+        event_order_resolution_source=resolution.event_order_resolution_source,
+    )
     recorder.run(
         BEFORE_STAGES,
         {
@@ -119,6 +231,12 @@ def run_monitoring_before_qualifying(
                 event=event,
                 sessions=("FP1", "FP2", "FP3"),
                 progress=progress,
+            ),
+            "qualifying_entry_list_resolved": lambda: _resolve_entry_list(
+                config,
+                season=season,
+                event=event,
+                event_order=resolution.event_order,
             ),
             "event_prepared": lambda: _prepare_event(
                 config,
@@ -132,7 +250,7 @@ def run_monitoring_before_qualifying(
                 protocol_name=protocol_name,
                 season=season,
                 event=event,
-                event_order=event_order,
+                event_order=resolution.event_order,
             ),
             "preflight_ready": lambda: _run_preflight(
                 config,
@@ -231,6 +349,9 @@ class _WorkflowRecorder:
         season: int,
         event: str,
         event_slug: str,
+        event_order: int | None = None,
+        scheduled_event_date: str = "",
+        event_order_resolution_source: str = "",
     ) -> None:
         self.config = config
         self.workflow = workflow
@@ -238,6 +359,9 @@ class _WorkflowRecorder:
         self.season = int(season)
         self.event = event
         self.event_slug = event_slug
+        self.event_order = event_order
+        self.scheduled_event_date = scheduled_event_date
+        self.event_order_resolution_source = event_order_resolution_source
         self.stage_rows: list[dict[str, Any]] = []
         self.stage_status: dict[str, str] = {}
         self.summary_values: dict[str, Any] = {}
@@ -320,6 +444,9 @@ class _WorkflowRecorder:
                 "season": self.season,
                 "event": self.event,
                 "event_slug": self.event_slug,
+                "event_order": self.event_order,
+                "scheduled_event_date": self.scheduled_event_date,
+                "event_order_resolution_source": self.event_order_resolution_source,
                 "stage": stage,
                 "status": status,
                 "blocking": bool(blocking),
@@ -354,6 +481,9 @@ class _WorkflowRecorder:
             "season": self.season,
             "event": self.event,
             "event_slug": self.event_slug,
+            "event_order": self.event_order,
+            "scheduled_event_date": self.scheduled_event_date,
+            "event_order_resolution_source": self.event_order_resolution_source,
             "completed": completed,
             "blocking_failure_count": blocking_count,
             "warning_count": warning_count,
@@ -374,6 +504,20 @@ class _WorkflowRecorder:
                 "dashboard_export_status",
                 "not_run",
             ),
+            "qualifying_entry_list_status": self.summary_values.get(
+                "qualifying_entry_list_status",
+                "not_run",
+            ),
+            "eligible_driver_count": self.summary_values.get("eligible_driver_count"),
+            "practice_only_exclusion_count": self.summary_values.get(
+                "practice_only_exclusion_count"
+            ),
+            "forecast_driver_count": self.summary_values.get("forecast_driver_count"),
+            "driver_set_parity_status": self.summary_values.get("driver_set_parity_status"),
+            "qualifying_entry_list_source": self.summary_values.get("qualifying_entry_list_source"),
+            "selected_source_session": self.summary_values.get("selected_source_session"),
+            "q_availability_status": self.summary_values.get("q_availability_status"),
+            "q_data_required": self.summary_values.get("q_data_required"),
             "dashboard_current_event": self.summary_values.get("dashboard_current_event"),
             "recommended_operator_action": (
                 "Workflow completed. Continue with the next monitored-event phase."
@@ -402,6 +546,9 @@ class _WorkflowRecorder:
             warning_count=warning_count,
             event=self.event,
             event_slug=self.event_slug,
+            event_order=self.event_order,
+            scheduled_event_date=self.scheduled_event_date,
+            event_order_resolution_source=self.event_order_resolution_source,
             dashboard_current_event=summary["dashboard_current_event"],
         )
 
@@ -465,6 +612,47 @@ def _prepare_event(
     }
 
 
+def _resolve_entry_list(
+    config: DataConfig,
+    *,
+    season: int,
+    event: str,
+    event_order: int,
+) -> dict[str, Any]:
+    audit = audit_qualifying_entry_list(
+        config,
+        season=season,
+        event=event,
+        event_order=event_order,
+    )
+    if not audit.forecast_allowed:
+        reasons = "; ".join(audit.summary.get("blocking_reasons", []))
+        raise ValueError(f"Qualifying entry list blocks forecast workflow: {reasons}")
+    return {
+        "artifact_paths": (
+            audit.summary_path,
+            audit.drivers_path,
+            audit.exclusions_path,
+            audit.failures_path,
+        ),
+        "qualifying_entry_list_status": audit.summary["entry_list_resolution_status"],
+        "qualifying_entry_list_source": audit.summary["resolution_source"],
+        "selected_source_session": audit.summary["selected_source_session"],
+        "q_availability_status": audit.summary["q_availability_status"],
+        "q_data_required": audit.summary["q_data_required"],
+        "eligible_driver_count": audit.summary["entry_list_driver_count"],
+        "practice_only_exclusion_count": audit.summary["excluded_practice_only_driver_count"],
+        "driver_set_parity_status": audit.summary["driver_set_parity_status"],
+        "reason": (
+            "Qualifying entry list resolved for "
+            f"{audit.summary['entry_list_driver_count']} drivers; "
+            f"{audit.summary['excluded_practice_only_driver_count']} practice-only "
+            "drivers excluded; "
+            f"source={audit.summary['resolution_source']}."
+        ),
+    }
+
+
 def _register_event(
     config: DataConfig,
     *,
@@ -521,6 +709,19 @@ def _run_preflight(
             "forecast_status": "forecast_reused",
             "reason": "Preflight reports an existing valid immutable forecast.",
         }
+    if summary.status == PREFLIGHT_ALREADY_FORECASTED and _existing_forecast_has_entry_mismatch(
+        config,
+        protocol_name,
+        event_slug,
+    ):
+        return {
+            "artifact_paths": (summary.summary_path, *summary.table_paths),
+            "forecast_status": "existing_forecast_entry_list_mismatch",
+            "reason": (
+                "Existing forecast snapshot has qualifying-entry-list mismatch; "
+                "a new valid immutable snapshot is required."
+            ),
+        }
     if summary.status != PREFLIGHT_READY or not forecast_allowed:
         raise ValueError(
             f"Preflight blocked forecast creation: status={summary.status}, "
@@ -547,7 +748,12 @@ def _create_or_reuse_forecast(
         raise ValueError("Existing settlement rows block before-qualifying forecast workflow.")
     if target_artifact_path(config, season, event).is_file():
         raise ValueError("Existing target artifact blocks before-qualifying forecast workflow.")
-    if _forecast_rows(config, protocol_name, event_slug).empty:
+    existing_forecasts = _forecast_rows(config, protocol_name, event_slug)
+    if existing_forecasts.empty or _existing_forecast_has_entry_mismatch(
+        config,
+        protocol_name,
+        event_slug,
+    ):
         summary = create_prospective_monitoring_forecast(
             config,
             model_config,
@@ -558,6 +764,12 @@ def _create_or_reuse_forecast(
         return {
             "artifact_paths": summary.table_paths,
             "forecast_status": summary.status,
+            "forecast_driver_count": _latest_live_forecast_driver_count(
+                config,
+                protocol_name,
+                event_slug,
+            ),
+            "driver_set_parity_status": "driver_set_parity_passed",
             "reason": "Immutable forecast snapshot created.",
         }
     if not _existing_forecast_valid(config, protocol_name, event_slug):
@@ -565,6 +777,12 @@ def _create_or_reuse_forecast(
     return {
         "artifact_paths": (config.metrics_output_dir / "prospective_monitoring_forecasts.parquet",),
         "forecast_status": "forecast_reused",
+        "forecast_driver_count": _latest_live_forecast_driver_count(
+            config,
+            protocol_name,
+            event_slug,
+        ),
+        "driver_set_parity_status": "driver_set_parity_passed",
         "reason": "Existing valid immutable forecast snapshot reused.",
     }
 
@@ -760,6 +978,55 @@ def _reject_blocked_event(season: int, event: str, *, allow_test_event: bool) ->
         raise ValueError("Synthetic rehearsal events are not valid operational monitoring events.")
 
 
+def _calendar_event_name(row: pd.Series) -> str:
+    return str(row.get("EventName") or row.get("Location") or "").strip()
+
+
+def _calendar_event_aliases(row: pd.Series) -> set[str]:
+    aliases = {
+        slugify(value)
+        for value in (
+            row.get("EventName"),
+            row.get("Location"),
+            row.get("Country"),
+            row.get("OfficialEventName"),
+        )
+        if str(value or "").strip()
+    }
+    aliases.update(_calendar_event_name_bases(aliases))
+    return aliases
+
+
+def _calendar_event_name_bases(aliases: set[str]) -> set[str]:
+    bases: set[str] = set()
+    for alias in aliases:
+        for suffix in ("-grand-prix", "-gp"):
+            if alias.endswith(suffix):
+                bases.add(alias.removesuffix(suffix))
+    return bases
+
+
+def _calendar_valid_event_names(schedule: pd.DataFrame) -> list[str]:
+    return [name for name in (_calendar_event_name(row) for _, row in schedule.iterrows()) if name]
+
+
+def _closest_event_names(event: str, valid_names: list[str]) -> list[str]:
+    if not valid_names:
+        return []
+    matches = get_close_matches(event, valid_names, n=5, cutoff=0.0)
+    return matches or valid_names[:5]
+
+
+def _calendar_event_date(row: pd.Series) -> str:
+    for column in ("EventDate", "Session5Date", "Session4Date", "Session3Date"):
+        if column not in row:
+            continue
+        value = pd.to_datetime(row.get(column), errors="coerce")
+        if pd.notna(value):
+            return value.date().isoformat()
+    return ""
+
+
 def _registry_row(
     config: DataConfig,
     protocol_name: str,
@@ -840,9 +1107,6 @@ def _existing_forecast_valid(config: DataConfig, protocol_name: str, event_slug:
     forecasts = _forecast_rows(config, protocol_name, event_slug)
     if forecasts.empty:
         return False
-    expected = expected_forecast_hash(config.metrics_output_dir, protocol_name, event_slug)
-    if not expected:
-        return False
     shadow = read_parquet(
         config.metrics_output_dir / "prospective_monitoring_shadow_candidates.parquet"
     )
@@ -851,7 +1115,70 @@ def _existing_forecast_valid(config: DataConfig, protocol_name: str, event_slug:
             shadow["protocol_name"].astype(str).eq(protocol_name)
             & shadow["event_slug"].astype(str).eq(event_slug)
         ].copy()
-    return forecast_snapshot_hash(forecasts, shadow) == expected
+    selection = read_csv(config.metrics_output_dir / "prospective_monitoring_selection_log.csv")
+    if selection.empty or "forecast_snapshot_hash" not in selection:
+        expected = expected_forecast_hash(config.metrics_output_dir, protocol_name, event_slug)
+        return bool(expected and forecast_snapshot_hash(forecasts, shadow) == expected)
+    event_selection = selection[
+        selection["protocol_name"].astype(str).eq(protocol_name)
+        & selection["event_slug"].astype(str).eq(event_slug)
+    ].copy()
+    if event_selection.empty:
+        return False
+    ordered_selection = event_selection.sort_values("forecast_created_at_utc", ascending=False)
+    for _, row in ordered_selection.iterrows():
+        forecast_id = str(row.get("forecast_id"))
+        forecast_group = forecasts[forecasts["forecast_id"].astype(str).eq(forecast_id)].copy()
+        if forecast_group.empty or not _forecast_group_entry_list_valid(forecast_group):
+            continue
+        shadow_group = (
+            shadow[shadow["forecast_id"].astype(str).eq(forecast_id)].copy()
+            if not shadow.empty and "forecast_id" in shadow
+            else pd.DataFrame()
+        )
+        if forecast_snapshot_hash(forecast_group, shadow_group) == str(
+            row["forecast_snapshot_hash"]
+        ):
+            return True
+    return False
+
+
+def _existing_forecast_has_entry_mismatch(
+    config: DataConfig,
+    protocol_name: str,
+    event_slug: str,
+) -> bool:
+    forecasts = _forecast_rows(config, protocol_name, event_slug)
+    if forecasts.empty:
+        return False
+    for _, group in forecasts.groupby("forecast_id", sort=False):
+        if _forecast_group_entry_list_valid(group):
+            return False
+    return True
+
+
+def _forecast_group_entry_list_valid(group: pd.DataFrame) -> bool:
+    if "qualifying_entry_list_status" not in group:
+        return False
+    return bool(
+        group["qualifying_entry_list_status"].astype(str).eq("driver_set_parity_passed").all()
+    )
+
+
+def _latest_live_forecast_driver_count(
+    config: DataConfig,
+    protocol_name: str,
+    event_slug: str,
+) -> int:
+    forecasts = _forecast_rows(config, protocol_name, event_slug)
+    if forecasts.empty:
+        return 0
+    forecasts = forecasts.sort_values("forecast_created_at_utc")
+    forecast_id = str(forecasts["forecast_id"].iloc[-1])
+    group = forecasts[forecasts["forecast_id"].astype(str).eq(forecast_id)]
+    if "diagnostic_only" in group:
+        group = group[~group["diagnostic_only"].astype(bool)]
+    return int(group["driver"].nunique()) if "driver" in group else 0
 
 
 def _validate_existing_settlement(

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from typer.testing import CliRunner
 
 from f1_prediction.cli import app
@@ -11,6 +12,8 @@ from f1_prediction.modeling.monitoring_data_integrity_audit import (
     MonitoringDataIntegrityAuditSummary,
 )
 from f1_prediction.modeling.monitoring_operations import (
+    EVENT_ORDER_RESOLUTION_SOURCE,
+    resolve_monitoring_event_schedule,
     run_monitoring_after_qualifying,
     run_monitoring_before_qualifying,
 )
@@ -18,6 +21,157 @@ from f1_prediction.modeling.prospective_monitoring import (
     ProspectiveMonitoringSummary,
     create_prospective_monitoring_protocol,
 )
+
+
+@pytest.fixture(autouse=True)
+def _fastf1_schedule_fixture(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "f1_prediction.modeling.monitoring_operations.fastf1.get_event_schedule",
+        lambda season, include_testing=False: _schedule_fixture(season),
+    )
+
+
+def test_belgian_grand_prix_resolves_to_calendar_round() -> None:
+    resolution = resolve_monitoring_event_schedule(season=2026, event="Belgian Grand Prix")
+
+    assert resolution.canonical_event == "Belgian Grand Prix"
+    assert resolution.event_slug == "belgian-grand-prix"
+    assert resolution.event_order == 12
+    assert resolution.scheduled_event_date == "2026-07-19"
+    assert resolution.event_order_resolution_source == EVENT_ORDER_RESOLUTION_SOURCE
+
+
+def test_event_order_resolution_ignores_registry_and_legacy_or_synthetic_rows(
+    tmp_path: Path,
+) -> None:
+    config = _configured_workspace(tmp_path, event="Belgian Grand Prix")
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "protocol_name": "season_2026_v1",
+                "monitor_season": 2026,
+                "event_order": 1,
+                "event_slug": "australia",
+            },
+            {
+                "protocol_name": "season_2026_v1",
+                "monitor_season": 2026,
+                "event_order": 9,
+                "event_slug": "great-britain",
+            },
+            {
+                "protocol_name": "season_2026_v1",
+                "monitor_season": 2026,
+                "event_order": 99,
+                "event_slug": "synthetic-clean-gp",
+            },
+        ]
+    ).to_csv(registry_path, index=False)
+
+    summary = run_monitoring_before_qualifying(
+        config,
+        load_model_config(),
+        _features(),
+        season=2026,
+        event="Belgian Grand Prix",
+    )
+    payload = json.loads(summary.summary_path.read_text())
+    stages = pd.read_csv(summary.stages_path)
+
+    assert summary.status == "pass"
+    assert payload["event_order"] == 12
+    assert payload["event_order_resolution_source"] == EVENT_ORDER_RESOLUTION_SOURCE
+    assert stages["event_order"].dropna().astype(int).unique().tolist() == [12]
+
+
+def test_only_strictly_earlier_monitoring_events_feed_later_forecast(tmp_path: Path) -> None:
+    config = _configured_workspace(tmp_path, event="Monza")
+    run_monitoring_before_qualifying(
+        config,
+        load_model_config(),
+        _features(),
+        season=2026,
+        event="Monza",
+    )
+    _write_q_raw(config, 2026, "Monza")
+    run_monitoring_after_qualifying(config, season=2026, event="Monza")
+    _write_practice_raw(config, 2026, "Belgian Grand Prix")
+    _write_entry_list(config, 2026, "Belgian Grand Prix")
+
+    summary = run_monitoring_before_qualifying(
+        config,
+        load_model_config(),
+        _features(),
+        season=2026,
+        event="Belgian Grand Prix",
+    )
+    forecasts = pd.read_parquet(
+        config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    )
+    belgium = forecasts[forecasts["event_slug"].astype(str).eq("belgian-grand-prix")]
+
+    assert summary.status == "pass"
+    assert belgium["event_order"].eq(12).all()
+    assert belgium["prior_monitoring_event_orders"].eq("[3]").all()
+
+
+def test_ambiguous_and_unknown_event_names_fail_before_ingestion(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _configured_workspace(tmp_path)
+    ambiguous_schedule = pd.concat(
+        [
+            _schedule_fixture(2026),
+            pd.DataFrame(
+                [
+                    {
+                        "RoundNumber": 14,
+                        "EventName": "Belgian Grand Prix",
+                        "Location": "Spa Test",
+                        "Country": "Belgium",
+                        "OfficialEventName": "DUPLICATE BELGIAN GRAND PRIX",
+                        "EventDate": "2026-08-02",
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    monkeypatch.setattr(
+        "f1_prediction.modeling.monitoring_operations.fastf1.get_event_schedule",
+        lambda season, include_testing=False: ambiguous_schedule,
+    )
+
+    def unexpected_ingest(*args, **kwargs):
+        raise AssertionError("ingestion should not be reached")
+
+    monkeypatch.setattr(
+        "f1_prediction.modeling.monitoring_operations.ingest_event", unexpected_ingest
+    )
+    with pytest.raises(ValueError, match="ambiguous"):
+        run_monitoring_before_qualifying(
+            config,
+            load_model_config(),
+            _features(),
+            season=2026,
+            event="Belgian Grand Prix",
+        )
+
+    monkeypatch.setattr(
+        "f1_prediction.modeling.monitoring_operations.fastf1.get_event_schedule",
+        lambda season, include_testing=False: _schedule_fixture(season),
+    )
+    with pytest.raises(ValueError, match="Closest valid event names"):
+        run_monitoring_before_qualifying(
+            config,
+            load_model_config(),
+            _features(),
+            season=2026,
+            event="Atlantis Grand Prix",
+        )
 
 
 def test_complete_before_qualifying_workflow_succeeds(tmp_path: Path) -> None:
@@ -29,7 +183,6 @@ def test_complete_before_qualifying_workflow_succeeds(tmp_path: Path) -> None:
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
 
     current = _dashboard_current(config)
@@ -50,7 +203,6 @@ def test_complete_after_qualifying_workflow_succeeds(tmp_path: Path) -> None:
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
     _write_q_raw(config, 2026, "Monza")
 
@@ -72,7 +224,6 @@ def test_before_qualifying_rerun_reuses_existing_forecast(tmp_path: Path) -> Non
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
     before = _fingerprint(config.metrics_output_dir / "prospective_monitoring_forecasts.parquet")
 
@@ -82,7 +233,6 @@ def test_before_qualifying_rerun_reuses_existing_forecast(tmp_path: Path) -> Non
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
 
     assert first.status == "pass"
@@ -102,7 +252,6 @@ def test_after_qualifying_rerun_reuses_existing_settlement(tmp_path: Path) -> No
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
     _write_q_raw(config, 2026, "Monza")
     first = run_monitoring_after_qualifying(config, season=2026, event="Monza")
@@ -148,7 +297,6 @@ def test_blocked_preflight_stops_before_forecast(
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
 
     stages = pd.read_csv(summary.stages_path)
@@ -166,8 +314,11 @@ def test_inconsistent_registration_blocks(tmp_path: Path) -> None:
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path)
+    registry.loc[registry["event_slug"].eq("monza"), "event_order"] = 4
+    registry.to_csv(registry_path, index=False)
 
     summary = run_monitoring_before_qualifying(
         config,
@@ -175,12 +326,11 @@ def test_inconsistent_registration_blocks(tmp_path: Path) -> None:
         _features(),
         season=2026,
         event="Monza",
-        event_order=4,
     )
 
     assert summary.status == "blocked"
     assert (
-        "event_order=3"
+        "event_order=4"
         in json.loads(summary.summary_path.read_text())["recommended_operator_action"]
     )
 
@@ -193,7 +343,6 @@ def test_q_identity_mismatch_blocks_target_ingestion(tmp_path: Path) -> None:
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
     _write_q_raw(config, 2026, "Monza", metadata_event_name="Wrong Grand Prix")
 
@@ -218,27 +367,24 @@ def test_missing_forecast_blocks_after_qualifying(tmp_path: Path) -> None:
 
 def test_synthetic_and_legacy_events_are_rejected(tmp_path: Path) -> None:
     config = _configured_workspace(tmp_path, event="Synthetic Clean GP")
-    synthetic = run_monitoring_before_qualifying(
-        config,
-        load_model_config(),
-        _features(),
-        season=2026,
-        event="Synthetic Clean GP",
-        event_order=3,
-    )
+    with pytest.raises(ValueError, match="Synthetic rehearsal events"):
+        run_monitoring_before_qualifying(
+            config,
+            load_model_config(),
+            _features(),
+            season=2026,
+            event="Synthetic Clean GP",
+        )
 
     legacy_config = _configured_workspace(tmp_path / "legacy", event="Australia")
-    legacy = run_monitoring_before_qualifying(
-        legacy_config,
-        load_model_config(),
-        _features(),
-        season=2026,
-        event="Australia",
-        event_order=1,
-    )
-
-    assert synthetic.status == "blocked"
-    assert legacy.status == "blocked"
+    with pytest.raises(ValueError, match="Legacy Australia"):
+        run_monitoring_before_qualifying(
+            legacy_config,
+            load_model_config(),
+            _features(),
+            season=2026,
+            event="Australia",
+        )
 
 
 def test_event_specific_integrity_passes_with_global_great_britain_failure(
@@ -252,7 +398,6 @@ def test_event_specific_integrity_passes_with_global_great_britain_failure(
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
     _write_q_raw(config, 2026, "Monza")
 
@@ -327,7 +472,6 @@ def test_stage_reports_use_project_relative_paths(tmp_path: Path) -> None:
         _features(),
         season=2026,
         event="Monza",
-        event_order=3,
     )
 
     assert str(tmp_path) not in summary.summary_path.read_text(encoding="utf-8")
@@ -370,8 +514,6 @@ def test_monitoring_workflow_cli_commands_run_against_local_fixture(
             "2026",
             "--event",
             "Monza",
-            "--event-order",
-            "3",
         ],
     )
     _write_q_raw(config, 2026, "Monza")
@@ -396,7 +538,56 @@ def _configured_workspace(tmp_path: Path, *, event: str = "Monza") -> DataConfig
     config = _config(tmp_path)
     _write_protocol(config)
     _write_practice_raw(config, 2026, event)
+    _write_entry_list(config, 2026, event)
     return config
+
+
+def _schedule_fixture(season: int) -> pd.DataFrame:
+    assert season == 2026
+    return pd.DataFrame(
+        [
+            {
+                "RoundNumber": 1,
+                "EventName": "Australian Grand Prix",
+                "Location": "Melbourne",
+                "Country": "Australia",
+                "OfficialEventName": "FORMULA 1 AUSTRALIAN GRAND PRIX 2026",
+                "EventDate": "2026-03-08",
+            },
+            {
+                "RoundNumber": 3,
+                "EventName": "Monza",
+                "Location": "Monza",
+                "Country": "Italy",
+                "OfficialEventName": "FORMULA 1 MONZA GRAND PRIX 2026",
+                "EventDate": "2026-03-29",
+            },
+            {
+                "RoundNumber": 9,
+                "EventName": "British Grand Prix",
+                "Location": "Silverstone",
+                "Country": "Great Britain",
+                "OfficialEventName": "FORMULA 1 BRITISH GRAND PRIX 2026",
+                "EventDate": "2026-07-05",
+            },
+            {
+                "RoundNumber": 12,
+                "EventName": "Belgian Grand Prix",
+                "Location": "Spa-Francorchamps",
+                "Country": "Belgium",
+                "OfficialEventName": "FORMULA 1 BELGIAN GRAND PRIX 2026",
+                "EventDate": "2026-07-19",
+            },
+            {
+                "RoundNumber": 13,
+                "EventName": "Hungarian Grand Prix",
+                "Location": "Budapest",
+                "Country": "Hungary",
+                "OfficialEventName": "FORMULA 1 HUNGARIAN GRAND PRIX 2026",
+                "EventDate": "2026-07-26",
+            },
+        ]
+    )
 
 
 def _config(tmp_path: Path) -> DataConfig:
@@ -487,6 +678,33 @@ def _write_q_raw(
     path = build_lap_output_path(config.lap_output_dir, season, event, "Q")
     _raw_laps(base_time=79.0).to_parquet(path, index=False)
     _write_metadata(config, season, event, "Q", metadata_event_name=metadata_event_name)
+
+
+def _write_entry_list(
+    config: DataConfig,
+    season: int,
+    event: str,
+    *,
+    drivers: tuple[str, ...] = ("VER", "NOR", "LEC", "HAM"),
+    teams: tuple[str, ...] = ("Red Bull", "McLaren", "Ferrari", "Mercedes"),
+) -> None:
+    slug = event.strip().lower().replace(" ", "-")
+    path = (
+        config.project_root
+        / "data/processed/monitoring"
+        / str(season)
+        / slug
+        / "qualifying_entry_list.csv"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "driver": list(drivers),
+            "driver_number": [str(index + 1) for index in range(len(drivers))],
+            "full_name": [f"{driver} Driver" for driver in drivers],
+            "team": list(teams),
+        }
+    ).to_csv(path, index=False)
 
 
 def _write_metadata(
