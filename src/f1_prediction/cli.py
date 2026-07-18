@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Annotated, Any
 
+import pandas as pd
 import typer
 
 from f1_prediction.config import load_data_config, load_feature_config, load_model_config
@@ -81,6 +82,12 @@ from f1_prediction.modeling.monitoring_data_integrity_audit import (
 )
 from f1_prediction.modeling.monitoring_data_integrity_audit import (
     create_monitoring_data_integrity_audit as run_monitoring_data_integrity_audit,
+)
+from f1_prediction.modeling.monitoring_operations import (
+    DEFAULT_PROTOCOL_NAME,
+    MonitoringWorkflowSummary,
+    run_monitoring_after_qualifying,
+    run_monitoring_before_qualifying,
 )
 from f1_prediction.modeling.policy_simulation import PolicySimulationSummary
 from f1_prediction.modeling.policy_simulation import (
@@ -1419,6 +1426,110 @@ def monitoring_data_readiness_report_command(
     _print_monitoring_onboarding_summary(summary, data_config.project_root)
 
 
+@app.command("monitoring-before-qualifying")
+def monitoring_before_qualifying_command(
+    season: Annotated[int, typer.Option("--season", min=1950, help="Monitored season.")],
+    event: Annotated[str, typer.Option("--event", help="Event name or slug.")],
+    event_order: Annotated[int, typer.Option("--event-order", help="Stable registry order.")],
+    protocol_name: Annotated[
+        str,
+        typer.Option("--protocol-name", help="Frozen protocol name."),
+    ] = DEFAULT_PROTOCOL_NAME,
+    allow_test_event: Annotated[
+        bool,
+        typer.Option(
+            "--allow-test-event",
+            help="Allow synthetic event slugs for network-independent tests.",
+            hidden=True,
+        ),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Run the guarded before-qualifying monitored-event workflow."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    model_config = load_model_config(
+        config_path=model_config_path,
+        project_root=data_config.project_root,
+    )
+    feature_config = load_feature_config(
+        config_path=features_config_path,
+        project_root=data_config.project_root,
+    )
+    try:
+        summary = run_monitoring_before_qualifying(
+            data_config,
+            model_config,
+            feature_config,
+            season=season,
+            event=event,
+            event_order=event_order,
+            protocol_name=protocol_name,
+            allow_test_event=allow_test_event,
+            progress=typer.echo,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_monitoring_workflow_summary(summary, data_config.project_root)
+    if summary.status != "pass":
+        raise typer.Exit(code=1)
+
+
+@app.command("monitoring-after-qualifying")
+def monitoring_after_qualifying_command(
+    season: Annotated[int, typer.Option("--season", min=1950, help="Monitored season.")],
+    event: Annotated[str, typer.Option("--event", help="Event name or slug.")],
+    protocol_name: Annotated[
+        str,
+        typer.Option("--protocol-name", help="Frozen protocol name."),
+    ] = DEFAULT_PROTOCOL_NAME,
+    allow_test_event: Annotated[
+        bool,
+        typer.Option(
+            "--allow-test-event",
+            help="Allow synthetic event slugs for network-independent tests.",
+            hidden=True,
+        ),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Run the guarded after-qualifying monitored-event workflow."""
+    configure_logging(verbose=verbose)
+    data_config = load_data_config(config_path=config_path)
+    try:
+        summary = run_monitoring_after_qualifying(
+            data_config,
+            season=season,
+            event=event,
+            protocol_name=protocol_name,
+            allow_test_event=allow_test_event,
+            progress=typer.echo,
+        )
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print_monitoring_workflow_summary(summary, data_config.project_root)
+    if summary.status != "pass":
+        raise typer.Exit(code=1)
+
+
 @app.command("raw-session-identity-validate")
 def raw_session_identity_validate_command(
     season: Annotated[
@@ -2419,6 +2530,26 @@ def _print_prospective_monitoring_rehearsal_summary(
         summary.runbook_path,
     ):
         typer.echo(f"  - {_display_path(path, project_root)}")
+
+
+def _print_monitoring_workflow_summary(
+    summary: MonitoringWorkflowSummary,
+    project_root: Path,
+) -> None:
+    typer.echo("Monitoring workflow complete")
+    typer.echo(f"Workflow: {summary.workflow}")
+    typer.echo(f"Status: {summary.status}")
+    typer.echo(f"Event: {summary.event} ({summary.event_slug})")
+    typer.echo(f"Completed: {summary.completed}")
+    typer.echo(f"Blocking failures: {summary.blocking_failure_count}")
+    typer.echo(f"Warnings: {summary.warning_count}")
+    typer.echo(f"Dashboard current event: {summary.dashboard_current_event or 'none'}")
+    stages = pd.read_csv(summary.stages_path)
+    typer.echo("Stages:")
+    for row in stages.itertuples(index=False):
+        typer.echo(f"  - {row.stage}: {row.status}")
+    typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
+    typer.echo(f"Stages: {_display_path(summary.stages_path, project_root)}")
 
 
 def _print_monitoring_onboarding_summary(

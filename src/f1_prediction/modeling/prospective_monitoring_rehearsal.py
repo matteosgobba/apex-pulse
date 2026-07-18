@@ -689,8 +689,7 @@ def _export_dashboard(
         historical = json.loads(historical_path.read_text(encoding="utf-8"))
         synthetic_rows = historical.get("data", {}).get("synthetic_rehearsal_records", [])
         if not any(
-            row.get("event_identity", {}).get("event_slug") == event_slug
-            for row in synthetic_rows
+            row.get("event_identity", {}).get("event_slug") == event_slug for row in synthetic_rows
         ):
             raise ValueError(
                 "Synthetic rehearsal event is missing from dashboard internal history."
