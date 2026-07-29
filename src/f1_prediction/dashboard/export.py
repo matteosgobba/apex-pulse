@@ -80,6 +80,7 @@ class SourceReadResult:
     raw_identity_quarantine: pd.DataFrame
     forecasts: pd.DataFrame
     settlements: pd.DataFrame
+    targets: pd.DataFrame
     monitoring_summary: dict[str, Any]
     readiness_summary: dict[str, Any]
     backtest_report: dict[str, Any]
@@ -90,6 +91,7 @@ class SourceReadResult:
     shadow_candidate_summary: pd.DataFrame
     manifests: dict[tuple[int, str], dict[str, Any]]
     target_coverages: dict[tuple[int, str], pd.DataFrame]
+    entry_list_summaries: dict[tuple[int, str], dict[str, Any]]
     issues: tuple[str, ...]
 
 
@@ -103,10 +105,14 @@ class EventContext:
     reconciliation_rows: pd.DataFrame
     forecast_rows: pd.DataFrame
     settlement_rows: pd.DataFrame
+    target_rows: pd.DataFrame
     target_coverage_rows: pd.DataFrame
+    raw_forecast_rows: pd.DataFrame
     event_metric_rows: pd.DataFrame
     raw_identity_row: dict[str, Any]
     preflight_summary: dict[str, Any] | None
+    entry_list_summary: dict[str, Any]
+    forecast_driver_universe_mismatch: bool
     lifecycle: LifecycleState
     legacy_noncanonical: bool
     synthetic_rehearsal: bool
@@ -325,8 +331,14 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
         event_slug=slug,
         season_column="monitor_season",
     )
-    forecasts = _matching_rows(sources.forecasts, season=identity.season, event_slug=slug)
+    raw_forecasts = _matching_rows(sources.forecasts, season=identity.season, event_slug=slug)
+    entry_summary = sources.entry_list_summaries.get((identity.season or -1, slug), {})
     settlements = _matching_rows(sources.settlements, season=identity.season, event_slug=slug)
+    targets = _matching_rows(sources.targets, season=identity.season, event_slug=slug)
+    forecasts = _entry_list_valid_forecasts(raw_forecasts, entry_summary)
+    if forecasts.empty:
+        forecasts = _settled_preserved_forecasts(raw_forecasts, settlements, targets)
+    forecast_driver_universe_mismatch = bool(not raw_forecasts.empty and forecasts.empty)
     target_coverage = sources.target_coverages.get((identity.season or -1, slug), pd.DataFrame())
     metrics = _matching_rows(sources.event_metrics, season=identity.season, event_slug=slug)
     raw_identity = _matching_raw_identity(
@@ -349,8 +361,10 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
         reconciliation=reconciliation,
         forecasts=forecasts,
         settlements=settlements,
+        targets=targets,
         preflight=preflight,
         legacy_noncanonical=legacy,
+        forecast_driver_universe_mismatch=forecast_driver_universe_mismatch,
     )
     return EventContext(
         identity=identity,
@@ -358,11 +372,15 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
         manifest=manifest,
         reconciliation_rows=reconciliation,
         forecast_rows=forecasts,
+        raw_forecast_rows=raw_forecasts,
         settlement_rows=settlements,
+        target_rows=targets,
         target_coverage_rows=target_coverage,
         event_metric_rows=metrics,
         raw_identity_row=raw_identity,
         preflight_summary=preflight,
+        entry_list_summary=entry_summary,
+        forecast_driver_universe_mismatch=forecast_driver_universe_mismatch,
         lifecycle=lifecycle,
         legacy_noncanonical=legacy,
         synthetic_rehearsal=synthetic_rehearsal,
@@ -378,8 +396,10 @@ def _resolve_lifecycle(
     reconciliation: pd.DataFrame,
     forecasts: pd.DataFrame,
     settlements: pd.DataFrame,
+    targets: pd.DataFrame,
     preflight: dict[str, Any] | None,
     legacy_noncanonical: bool,
+    forecast_driver_universe_mismatch: bool = False,
 ) -> LifecycleState:
     if legacy_noncanonical:
         return _lifecycle(
@@ -387,7 +407,19 @@ def _resolve_lifecycle(
             "Legacy descriptive only",
             "event_order_lineage_is_legacy_noncanonical",
         )
+    if forecast_driver_universe_mismatch:
+        return _lifecycle(
+            "blocked",
+            "Blocked",
+            "qualifying_entry_list_mismatch",
+        )
     if _has_live_rows(settlements):
+        if _coverage_summary(forecasts, targets)["forecast_coverage_status"] == "partial_coverage":
+            return _lifecycle(
+                "settled_partial_coverage",
+                "Settled partial coverage",
+                "partial_qualifying_entry_coverage",
+            )
         return _lifecycle("settled", "Settled", "forecast_has_post_qualifying_settlement")
     if _has_live_rows(forecasts) and not _target_artifact_present(registry_row, manifest):
         return _lifecycle(
@@ -437,19 +469,22 @@ def _select_current_event(
     if season is not None or event is not None:
         return public_contexts[-1] if public_contexts else None
     if public_contexts:
-        active = [
+        settled = [
             context
             for context in public_contexts
-            if context.lifecycle.state
-            in {
-                "practice_in_progress",
-                "ready_to_forecast",
-                "forecast_available",
-                "awaiting_qualifying_targets",
-                "blocked",
-            }
+            if context.lifecycle.state in {"settled", "settled_partial_coverage"}
         ]
-        return (active or public_contexts)[-1]
+        forecasted = [
+            context
+            for context in public_contexts
+            if context.lifecycle.state in {"forecast_available", "awaiting_qualifying_targets"}
+        ]
+        ready = [
+            context
+            for context in public_contexts
+            if context.lifecycle.state in {"practice_in_progress", "ready_to_forecast", "blocked"}
+        ]
+        return (settled or forecasted or ready or public_contexts)[-1]
     return None
 
 
@@ -604,6 +639,7 @@ def _settlement_data(current_event: EventContext | None) -> dict[str, Any]:
         }
     comparison = _settlement_comparison(_settlement_evaluable_rows(live))
     audit_rows = _settlement_comparison(live)
+    coverage = _coverage_summary(current_event.forecast_rows, current_event.target_rows)
     return {
         "event_identity": current_event.identity.to_dict(),
         "lifecycle_state": current_event.lifecycle.state,
@@ -614,12 +650,16 @@ def _settlement_data(current_event: EventContext | None) -> dict[str, Any]:
             "checkpoint": _first_non_null(live, "checkpoint"),
             "settlement_valid": _all_truthy(live, "settlement_valid"),
         },
-        "summary_metrics": _settlement_metrics(comparison, total_rows=len(live)),
+        "summary_metrics": {
+            **_settlement_metrics(comparison, total_rows=len(live)),
+            **coverage,
+        },
         "driver_comparison": comparison,
         "settlement_evaluable_rows": comparison,
         "forecast_only_rows": [
             row for row in audit_rows if not bool(row.get("settlement_evaluable"))
         ],
+        "unforecasted_actual_entrants": coverage["unforecasted_actual_entrants"],
         "interval_diagnostics": unavailable("intervals_not_available"),
     }
 
@@ -832,6 +872,11 @@ def _build_source_artifacts(config: DataConfig) -> tuple[SourceArtifact, ...]:
     paths.extend(
         sorted((root / "data/processed/monitoring").glob("*/*/monitoring_target_coverage.csv"))
     )
+    paths.extend(
+        sorted(
+            (root / "data/processed/monitoring").glob("*/*/monitoring_qualifying_targets.parquet")
+        )
+    )
     artifacts = []
     for path in paths:
         available_on_disk = path.is_file()
@@ -872,6 +917,7 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
     raw_identity_quarantine = _read_csv(metrics / "raw_session_identity_quarantine.csv", issues)
     forecasts = _read_parquet(metrics / "prospective_monitoring_forecasts.parquet", issues)
     settlements = _read_parquet(metrics / "prospective_monitoring_settlements.parquet", issues)
+    targets = _read_monitoring_targets(config.project_root / "data/processed/monitoring", issues)
     monitoring_summary = _read_json(metrics / "prospective_monitoring_summary.json", issues)
     readiness_summary = _read_json(metrics / "monitoring_data_readiness_summary.json", issues)
     backtest_report = _read_json(metrics / "backtest_report.json", issues)
@@ -889,6 +935,7 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
         config.project_root / "data/processed/monitoring",
         issues,
     )
+    entry_list_summaries = _read_entry_list_summaries(metrics, issues)
     return SourceReadResult(
         protocol=protocol,
         registry=registry,
@@ -902,6 +949,7 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
         raw_identity_quarantine=raw_identity_quarantine,
         forecasts=forecasts,
         settlements=settlements,
+        targets=targets,
         monitoring_summary=monitoring_summary,
         readiness_summary=readiness_summary,
         backtest_report=backtest_report,
@@ -912,6 +960,7 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
         shadow_candidate_summary=shadow_candidate_summary,
         manifests=manifests,
         target_coverages=target_coverages,
+        entry_list_summaries=entry_list_summaries,
         issues=tuple(issues),
     )
 
@@ -972,6 +1021,116 @@ def _read_target_coverages(
         if season is not None and slug:
             coverages[(season, slug)] = frame
     return coverages
+
+
+def _read_monitoring_targets(base_dir: Path, issues: list[str]) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    for path in sorted(base_dir.glob("*/*/monitoring_qualifying_targets.parquet")):
+        frame = _read_parquet(path, issues)
+        if frame.empty:
+            continue
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True, sort=False)
+
+
+def _read_entry_list_summaries(
+    metrics_dir: Path,
+    issues: list[str],
+) -> dict[tuple[int, str], dict[str, Any]]:
+    summaries: dict[tuple[int, str], dict[str, Any]] = {}
+    pattern = "qualifying_entry_lists/*/*/qualifying_entry_list_summary.json"
+    for path in sorted(metrics_dir.glob(pattern)):
+        payload = _read_json(path, issues)
+        season = _optional_int(payload.get("season"))
+        slug = _optional_str(payload.get("event_slug"))
+        if season is not None and slug:
+            summaries[(season, slug)] = payload
+    return summaries
+
+
+def _entry_list_valid_forecasts(
+    forecasts: pd.DataFrame,
+    entry_summary: dict[str, Any],
+) -> pd.DataFrame:
+    if forecasts.empty:
+        return forecasts
+    if "qualifying_entry_list_status" not in forecasts:
+        return pd.DataFrame(columns=forecasts.columns)
+    if (
+        not forecasts["qualifying_entry_list_status"]
+        .astype(str)
+        .eq("driver_set_parity_passed")
+        .any()
+    ):
+        return pd.DataFrame(columns=forecasts.columns)
+    expected_count = _optional_int(entry_summary.get("entry_list_driver_count"))
+    if expected_count is None:
+        if (
+            "qualifying_entry_list_driver_count" in forecasts
+            and forecasts["qualifying_entry_list_driver_count"].notna().any()
+        ):
+            expected_count = _optional_int(
+                forecasts["qualifying_entry_list_driver_count"].dropna().tail(1).iloc[0]
+            )
+        if expected_count is None:
+            return pd.DataFrame(columns=forecasts.columns)
+    valid_groups = []
+    for _, group in forecasts.groupby("forecast_id", sort=False):
+        live = _live_rows(group)
+        if live.empty:
+            continue
+        status_ok = (
+            "qualifying_entry_list_status" in group
+            and group["qualifying_entry_list_status"]
+            .astype(str)
+            .eq("driver_set_parity_passed")
+            .all()
+        )
+        driver_count_ok = int(live["driver"].nunique()) == int(expected_count)
+        duplicate_free = not live["driver"].astype(str).duplicated().any()
+        if status_ok and driver_count_ok and duplicate_free:
+            valid_groups.append(group)
+    if not valid_groups:
+        return pd.DataFrame(columns=forecasts.columns)
+    latest = pd.concat(valid_groups, ignore_index=True, sort=False).sort_values(
+        "forecast_created_at_utc"
+    )
+    latest_id = str(latest["forecast_id"].iloc[-1])
+    return latest[latest["forecast_id"].astype(str).eq(latest_id)].copy()
+
+
+def _settled_preserved_forecasts(
+    forecasts: pd.DataFrame,
+    settlements: pd.DataFrame,
+    targets: pd.DataFrame,
+) -> pd.DataFrame:
+    if forecasts.empty or settlements.empty or targets.empty:
+        return pd.DataFrame(columns=forecasts.columns)
+    latest_forecasts = _latest_forecast_group(forecasts)
+    live_forecasts = _live_rows(latest_forecasts)
+    live_settlements = _settlement_evaluable_rows(_live_rows(settlements))
+    if live_forecasts.empty or live_settlements.empty:
+        return pd.DataFrame(columns=forecasts.columns)
+    forecast_keys = set(live_forecasts["driver"].dropna().astype(str).str.lower())
+    settlement_keys = set(live_settlements["driver"].dropna().astype(str).str.lower())
+    target_keys = set(targets["driver"].dropna().astype(str).str.lower())
+    if forecast_keys and forecast_keys == settlement_keys and forecast_keys < target_keys:
+        return latest_forecasts.copy()
+    return pd.DataFrame(columns=forecasts.columns)
+
+
+def _latest_forecast_group(forecasts: pd.DataFrame) -> pd.DataFrame:
+    if forecasts.empty:
+        return forecasts
+    frame = forecasts.copy()
+    if "forecast_created_at_utc" in frame:
+        frame = frame.sort_values("forecast_created_at_utc")
+    if "forecast_id" not in frame:
+        return frame
+    forecast_id = str(frame["forecast_id"].iloc[-1])
+    return frame[frame["forecast_id"].astype(str).eq(forecast_id)].copy()
 
 
 def _forecast_leaderboard(
@@ -1204,6 +1363,82 @@ def _forecast_metadata(context: EventContext, live: pd.DataFrame) -> dict[str, A
     }
 
 
+def _coverage_summary(forecasts: pd.DataFrame, targets: pd.DataFrame) -> dict[str, Any]:
+    live_forecasts = _live_rows(forecasts)
+    forecast_lookup = _driver_label_lookup(live_forecasts)
+    target_lookup = _driver_label_lookup(targets)
+    forecast_keys = set(forecast_lookup)
+    target_keys = set(target_lookup)
+    if not target_keys:
+        return {
+            "forecast_driver_count": len(forecast_keys),
+            "actual_qualifying_driver_count": 0,
+            "evaluable_driver_count": 0,
+            "unforecasted_actual_entrant_count": 0,
+            "unforecasted_actual_entrants": [],
+            "forecast_only_non_qualifier_count": 0,
+            "forecast_only_non_qualifiers": [],
+            "forecast_coverage": "unavailable",
+            "forecast_coverage_ratio": None,
+            "forecast_coverage_percentage": None,
+            "forecast_coverage_status": "unavailable",
+            "coverage_warning": "",
+        }
+    evaluable_keys = forecast_keys & target_keys if forecast_keys else target_keys
+    unforecasted_keys = sorted(target_keys - forecast_keys) if forecast_keys else []
+    forecast_only_keys = sorted(forecast_keys - target_keys) if forecast_keys else []
+    actual_count = len(target_keys)
+    evaluable_count = len(evaluable_keys)
+    status = "partial_coverage" if unforecasted_keys or forecast_only_keys else "full_coverage"
+    ratio = float(evaluable_count / actual_count) if actual_count else None
+    return {
+        "forecast_driver_count": len(forecast_keys),
+        "actual_qualifying_driver_count": actual_count,
+        "evaluable_driver_count": evaluable_count,
+        "unforecasted_actual_entrant_count": len(unforecasted_keys),
+        "unforecasted_actual_entrants": [
+            {
+                "driver": target_lookup[key],
+                "driver_code": target_lookup[key],
+                "reason": "pre_q_entry_list_resolution_miss",
+            }
+            for key in unforecasted_keys
+        ],
+        "forecast_only_non_qualifier_count": len(forecast_only_keys),
+        "forecast_only_non_qualifiers": [
+            {"driver": forecast_lookup[key], "driver_code": forecast_lookup[key]}
+            for key in forecast_only_keys
+        ],
+        "forecast_coverage": (
+            f"{evaluable_count}/{actual_count}" if actual_count else "unavailable"
+        ),
+        "forecast_coverage_ratio": ratio,
+        "forecast_coverage_percentage": ratio * 100 if ratio is not None else None,
+        "forecast_coverage_status": status,
+        "coverage_warning": "partial qualifying-entry coverage"
+        if status == "partial_coverage"
+        else "",
+    }
+
+
+def _driver_label_lookup(frame: pd.DataFrame) -> dict[str, str]:
+    if frame.empty:
+        return {}
+    data = frame.copy()
+    if "diagnostic_only" in data:
+        data = data[~data["diagnostic_only"].map(_truthy)]
+    if "driver_key" not in data:
+        data["driver_key"] = data.get("driver", pd.Series(dtype=str)).map(_normalized_driver_key)
+    rows = {}
+    for _, row in data.dropna(subset=["driver_key"]).iterrows():
+        key = _normalized_driver_key(row.get("driver_key") or row.get("driver"))
+        if key:
+            rows.setdefault(
+                key, _first_text(row.get("driver"), row.get("driver_code"), key.upper())
+            )
+    return rows
+
+
 def _summary_kpis(context: EventContext) -> dict[str, Any]:
     live_forecasts = _live_rows(context.forecast_rows)
     live_settlements = _live_rows(context.settlement_rows)
@@ -1220,6 +1455,7 @@ def _summary_kpis(context: EventContext) -> dict[str, Any]:
         _settlement_comparison(evaluable_settlements) if not evaluable_settlements.empty else []
     )
     settlement_metrics = _settlement_metrics(comparison) if comparison else {}
+    coverage = _coverage_summary(live_forecasts, context.target_rows)
     return {
         "forecasted_driver_count": len(leaderboard) if leaderboard else None,
         "predicted_pole_driver": leaderboard[0]["driver_code"] if leaderboard else None,
@@ -1229,6 +1465,12 @@ def _summary_kpis(context: EventContext) -> dict[str, Any]:
         else None,
         "settlement_mae_gap_sec": settlement_metrics.get("mae_gap_sec"),
         "actual_pole_driver": settlement_metrics.get("actual_pole_driver"),
+        "actual_qualifying_driver_count": coverage["actual_qualifying_driver_count"],
+        "forecast_coverage": coverage["forecast_coverage"],
+        "forecast_coverage_percentage": coverage["forecast_coverage_percentage"],
+        "forecast_coverage_status": coverage["forecast_coverage_status"],
+        "coverage_warning": coverage["coverage_warning"],
+        "unforecasted_actual_entrants": coverage["unforecasted_actual_entrants"],
     }
 
 
@@ -1314,16 +1556,26 @@ def _raw_session_identity_block(context: EventContext) -> dict[str, Any]:
 
 def _forecast_status_block(context: EventContext) -> dict[str, Any]:
     live = _live_rows(context.forecast_rows)
+    if live.empty and context.forecast_driver_universe_mismatch:
+        return {
+            "available": False,
+            "reason": "qualifying_entry_list_mismatch",
+            "forecast_driver_universe_mismatch": True,
+        }
     if live.empty:
         return unavailable("forecast_not_available")
     eligible = _forecast_population_rows(context, live, "qualifying_eligible")
     forecast_only = _forecast_population_rows(context, live, "forecast_only")
+    coverage = _coverage_summary(live, context.target_rows)
     return {
         "available": True,
         "forecasted_driver_count": int(len(eligible)),
         "forecast_only_driver_count": int(len(forecast_only)),
         "forecast_created_at_utc": _first_non_null(live, "forecast_created_at_utc"),
         "checkpoint": _first_non_null(live, "checkpoint"),
+        "qualifying_entry_list_status": context.entry_list_summary.get("driver_set_parity_status"),
+        "forecast_coverage_status": coverage["forecast_coverage_status"],
+        "forecast_coverage": coverage["forecast_coverage"],
     }
 
 
@@ -1332,12 +1584,19 @@ def _settlement_status_block(context: EventContext) -> dict[str, Any]:
     if live.empty:
         return unavailable("settlement_not_available")
     included = live["included_in_metrics"].astype(bool) if "included_in_metrics" in live else []
+    coverage = _coverage_summary(context.forecast_rows, context.target_rows)
     return {
         "available": True,
         "settled_at_utc": _first_non_null(live, "settled_at_utc"),
         "settlement_valid": _all_truthy(live, "settlement_valid"),
         "scored_driver_count": int(included.sum()) if len(live) else 0,
         "excluded_driver_count": int((~included).sum()) if len(live) else 0,
+        "actual_qualifying_driver_count": coverage["actual_qualifying_driver_count"],
+        "forecast_coverage": coverage["forecast_coverage"],
+        "forecast_coverage_percentage": coverage["forecast_coverage_percentage"],
+        "forecast_coverage_status": coverage["forecast_coverage_status"],
+        "coverage_warning": coverage["coverage_warning"],
+        "unforecasted_actual_entrants": coverage["unforecasted_actual_entrants"],
     }
 
 

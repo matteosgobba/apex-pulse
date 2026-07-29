@@ -23,6 +23,7 @@ ENTRY_LIST_PARITY_FAILED = "driver_set_parity_failed"
 
 LOCAL_PROCESSED_SOURCE = "processed_entry_list_artifact"
 LOCAL_RAW_SOURCE = "official_local_entry_list"
+AUTHORITATIVE_ROSTER_SOURCE = "authoritative_race_driver_roster"
 LOCAL_Q_METADATA_SOURCE = "local_q_metadata"
 LATEST_PRE_Q_SOURCE_PREFIX = "latest_completed_pre_qualifying_session"
 FASTF1_Q_RESULTS_SOURCE = "fastf1_q_results"
@@ -116,14 +117,29 @@ def audit_qualifying_entry_list(
                 "Correct the upstream entry-list source and rerun the audit.",
             )
         )
-    missing_features = _missing_driver_keys(drivers, features) if not features.empty else []
+    missing_features = _missing_driver_keys(drivers, features) if feature_rows is not None else []
+    missing_checkpoint_features = (
+        _missing_latest_checkpoint_feature_keys(drivers, features)
+        if feature_rows is not None
+        else []
+    )
     if missing_features and feature_rows is not None:
         failures.append(
             _failure(
-                "missing_eligible_driver_features",
+                "eligible_driver_missing_latest_checkpoint_features",
                 True,
                 f"Missing feature rows for eligible drivers: {', '.join(missing_features)}.",
                 "Rebuild practice features after the correct entry list is available.",
+            )
+        )
+    if missing_checkpoint_features:
+        failures.append(
+            _failure(
+                "eligible_driver_missing_latest_checkpoint_features",
+                True,
+                "Eligible drivers lack compatible latest-checkpoint feature values: "
+                f"{', '.join(missing_checkpoint_features)}.",
+                "Rebuild leakage-safe latest-checkpoint features before forecasting.",
             )
         )
     feature_extra = _extra_driver_keys(features, drivers) if not features.empty else []
@@ -224,6 +240,7 @@ def audit_qualifying_entry_list(
         else 0,
         "excluded_practice_only_driver_count": int(len(exclusions)),
         "missing_eligible_driver_count": int(len(missing_features or forecast_missing)),
+        "missing_latest_checkpoint_feature_count": int(len(missing_checkpoint_features)),
         "extra_feature_driver_count": int(len(feature_extra)),
         "extra_forecast_driver_count": int(len(forecast_extra)),
         "duplicate_count": int(duplicate_count + forecast_duplicate_count),
@@ -318,6 +335,40 @@ def local_entry_list_candidate_paths(
     )
 
 
+def local_race_roster_candidate_paths(
+    config: DataConfig,
+    season: int,
+    event: str,
+) -> tuple[Path, ...]:
+    slug = slugify(event)
+    return (
+        config.project_root
+        / "data/processed/monitoring"
+        / str(season)
+        / slug
+        / "race_driver_roster.csv",
+        config.project_root
+        / "data/processed/monitoring"
+        / str(season)
+        / slug
+        / "race_driver_roster.json",
+        config.project_root
+        / "data/processed/monitoring"
+        / str(season)
+        / slug
+        / "event_race_driver_roster.csv",
+        config.project_root
+        / "data/processed/monitoring"
+        / str(season)
+        / slug
+        / "event_race_driver_roster.json",
+        config.session_metadata_output_dir / str(season) / slug / "race_driver_roster.csv",
+        config.session_metadata_output_dir / str(season) / slug / "race_driver_roster.json",
+        config.session_metadata_output_dir / str(season) / slug / "event_race_driver_roster.csv",
+        config.session_metadata_output_dir / str(season) / slug / "event_race_driver_roster.json",
+    )
+
+
 def _resolve_entry_drivers(
     config: DataConfig,
     *,
@@ -341,6 +392,27 @@ def _resolve_entry_drivers(
                     q_required=False,
                     trace=trace,
                 ),
+            )
+    for path in local_race_roster_candidate_paths(config, season, event):
+        if path.is_file():
+            trace.append(
+                _trace(
+                    AUTHORITATIVE_ROSTER_SOURCE,
+                    "selected",
+                    _project_relative(path, config.project_root),
+                )
+            )
+            return EntryDriverResolution(
+                _normalize_entry_rows(
+                    _read_entry_artifact(path),
+                    season,
+                    event,
+                    AUTHORITATIVE_ROSTER_SOURCE,
+                ),
+                AUTHORITATIVE_ROSTER_SOURCE,
+                path,
+                "",
+                _resolution_metadata(q_status=q_status, q_required=False, trace=trace),
             )
     q_metadata = build_metadata_output_path(config.session_metadata_output_dir, season, event, "Q")
     if q_metadata.is_file():
@@ -543,6 +615,12 @@ def _resolve_latest_pre_qualifying_session(
     rows = completion["rows"]
     normalized = _normalize_entry_rows(pd.DataFrame(rows), season, event, session_source)
     identity_failures = _source_identity_failures(normalized)
+    if not _latest_session_consistent_with_prior_sessions(config, season, event, session_code):
+        identity_failures.append(
+            "Latest completed pre-qualifying session is not authoritative without a matching "
+            "race-driver roster; earlier completed practice sessions contain a different "
+            "entrant set."
+        )
     status = "blocked" if identity_failures else "selected"
     trace.append(
         _trace(
@@ -1032,6 +1110,66 @@ def _extra_driver_keys(observed: pd.DataFrame, expected: pd.DataFrame) -> list[s
         return []
     expected_keys = set(expected.get("driver_key", pd.Series(dtype=str)).dropna().astype(str))
     return sorted(set(observed["driver_key"].dropna().astype(str)) - expected_keys)
+
+
+def _missing_latest_checkpoint_feature_keys(
+    expected: pd.DataFrame,
+    features: pd.DataFrame,
+) -> list[str]:
+    if expected.empty or features.empty or "checkpoint" not in features:
+        return []
+    checkpoint = _first_text(features["checkpoint"].dropna().astype(str).tail(1))
+    latest_prefix = {
+        "after_fp1": "fp1_",
+        "after_fp2": "fp2_",
+        "after_fp3": "fp3_",
+    }.get(checkpoint)
+    if not latest_prefix:
+        return []
+    latest_columns = [
+        column for column in features.columns if str(column).startswith(latest_prefix)
+    ]
+    if not latest_columns:
+        return []
+    missing: list[str] = []
+    by_key = features.groupby("driver_key", sort=False)
+    for _, row in expected.iterrows():
+        key = str(row["driver_key"])
+        if key not in by_key.groups:
+            continue
+        driver_features = by_key.get_group(key)
+        if driver_features[latest_columns].notna().any(axis=None):
+            continue
+        missing.append(str(row["driver"]))
+    return sorted(missing)
+
+
+def _latest_session_consistent_with_prior_sessions(
+    config: DataConfig,
+    season: int,
+    event: str,
+    latest_session: str,
+) -> bool:
+    latest_path = build_lap_output_path(config.lap_output_dir, season, event, latest_session)
+    latest_keys = {
+        _driver_key(value)
+        for value in pd.read_parquet(latest_path).get("Driver", pd.Series(dtype=str)).dropna()
+    }
+    if not latest_keys:
+        return False
+    for session in ("FP1", "FP2", "FP3", "SQ", "S"):
+        if session == latest_session:
+            continue
+        path = build_lap_output_path(config.lap_output_dir, season, event, session)
+        if not path.is_file():
+            continue
+        keys = {
+            _driver_key(value)
+            for value in pd.read_parquet(path).get("Driver", pd.Series(dtype=str)).dropna()
+        }
+        if keys and keys != latest_keys:
+            return False
+    return True
 
 
 def _team_mismatches(entry: pd.DataFrame, features: pd.DataFrame) -> list[str]:

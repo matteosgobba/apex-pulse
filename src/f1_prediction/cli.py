@@ -1498,7 +1498,7 @@ def monitoring_before_qualifying_command(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     _print_monitoring_workflow_summary(summary, data_config.project_root)
-    if summary.status != "pass":
+    if not summary.completed or summary.blocking_failure_count:
         raise typer.Exit(code=1)
 
 
@@ -1572,7 +1572,7 @@ def monitoring_after_qualifying_command(
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     _print_monitoring_workflow_summary(summary, data_config.project_root)
-    if summary.status != "pass":
+    if not summary.completed or summary.blocking_failure_count:
         raise typer.Exit(code=1)
 
 

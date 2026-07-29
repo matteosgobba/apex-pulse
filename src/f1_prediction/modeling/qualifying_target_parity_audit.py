@@ -107,6 +107,7 @@ def _read_sources(config: DataConfig) -> dict[str, Any]:
         "reconciliation": read_csv(
             metrics_dir / "prospective_monitoring_event_order_reconciliation.csv"
         ),
+        "forecasts": read_parquet(metrics_dir / "prospective_monitoring_forecasts.parquet"),
         "settlements": read_parquet(metrics_dir / "prospective_monitoring_settlements.parquet"),
         "dashboard_current": _read_json_if_available(dashboard_dir / "current_event.json"),
         "dashboard_settlement": _read_json_if_available(dashboard_dir / "event_settlement.json"),
@@ -182,21 +183,34 @@ def _build_driver_comparison(
     for event in events:
         raw = _reconstruct_raw_q(config, event)
         targets = _stored_targets(config, event)
+        forecasts = _forecast_rows(sources, event)
         settlements = _settlement_actuals(sources, event)
         dashboard = _dashboard_actuals(sources, event)
         legacy = _legacy_noncanonical(sources, event)
         driver_keys = sorted(
             set(raw["driver_key"].dropna().astype(str).tolist())
             | set(targets["driver_key"].dropna().astype(str).tolist())
+            | set(forecasts["driver_key"].dropna().astype(str).tolist())
             | set(settlements["driver_key"].dropna().astype(str).tolist())
             | set(dashboard["driver_key"].dropna().astype(str).tolist())
         )
+        forecast_keys = set(forecasts["driver_key"].dropna().astype(str).tolist())
+        target_keys = set(targets["driver_key"].dropna().astype(str).tolist())
+        evaluable_keys = forecast_keys & target_keys if forecast_keys else target_keys
         for driver_key in driver_keys:
             raw_row = _row_by_key(raw, driver_key)
             target_row = _row_by_key(targets, driver_key)
+            forecast_row = _row_by_key(forecasts, driver_key)
             settlement_row = _row_by_key(settlements, driver_key)
             dashboard_row = _row_by_key(dashboard, driver_key)
-            identity = raw_row or target_row or settlement_row or dashboard_row or {}
+            identity = (
+                raw_row or target_row or forecast_row or settlement_row or dashboard_row or {}
+            )
+            forecast_present = forecast_row is not None or not forecast_keys
+            target_present = target_row is not None
+            settlement_expected = driver_key in evaluable_keys
+            unforecasted_actual = bool(forecast_keys and target_present and not forecast_present)
+            forecast_only = bool(forecast_keys and forecast_present and not target_present)
             position_match = _numbers_match(
                 _value(target_row, "quali_position"),
                 _value(raw_row, "reconstructed_quali_position"),
@@ -210,14 +224,21 @@ def _build_driver_comparison(
                 _value(target_row, "quali_best_lap_time_sec"),
                 _value(raw_row, "best_valid_q_lap_sec"),
             )
+            settlement_position = (
+                _value(target_row, "quali_position")
+                if settlement_row is not None
+                else _value(settlement_row, "settlement_actual_position")
+            )
             settlement_match = _numbers_match(
                 _value(settlement_row, "settlement_actual_gap_to_pole_sec"),
                 _value(target_row, "quali_gap_to_pole_sec"),
             ) and _numbers_match(
-                _value(settlement_row, "settlement_actual_position"),
+                settlement_position,
                 _value(target_row, "quali_position"),
                 integer=True,
             )
+            if not settlement_expected:
+                settlement_match = True
             dashboard_match = _numbers_match(
                 _value(dashboard_row, "dashboard_actual_gap_to_pole_sec"),
                 _value(settlement_row, "settlement_actual_gap_to_pole_sec"),
@@ -226,6 +247,8 @@ def _build_driver_comparison(
                 _value(settlement_row, "settlement_actual_position"),
                 integer=True,
             )
+            if not settlement_expected:
+                dashboard_match = True
             has_dashboard = dashboard_row is not None
             parity_status = _driver_parity_status(
                 raw_row,
@@ -235,6 +258,8 @@ def _build_driver_comparison(
                 best_lap_match,
                 settlement_match,
                 dashboard_match if has_dashboard else True,
+                unforecasted_actual=unforecasted_actual,
+                forecast_only=forecast_only,
             )
             rows.append(
                 {
@@ -249,9 +274,17 @@ def _build_driver_comparison(
                     "stored_target_best_lap_sec": _value(target_row, "quali_best_lap_time_sec"),
                     "stored_target_position": _value(target_row, "quali_position"),
                     "stored_target_gap_to_pole_sec": _value(target_row, "quali_gap_to_pole_sec"),
-                    "settlement_actual_position": _value(
-                        settlement_row, "settlement_actual_position"
-                    ),
+                    "forecast_present": bool(forecast_present),
+                    "target_present": bool(target_present),
+                    "settlement_expected": bool(settlement_expected),
+                    "unforecasted_actual_entrant": unforecasted_actual,
+                    "forecast_only_non_qualifier": forecast_only,
+                    "forecast_coverage_reason": "pre_q_entry_list_resolution_miss"
+                    if unforecasted_actual
+                    else "forecast_only_non_qualifier"
+                    if forecast_only
+                    else "",
+                    "settlement_actual_position": settlement_position,
                     "settlement_actual_gap_to_pole_sec": _value(
                         settlement_row, "settlement_actual_gap_to_pole_sec"
                     ),
@@ -318,6 +351,16 @@ def _stored_targets(config: DataConfig, event: dict[str, Any]) -> pd.DataFrame:
     return frame.reindex(columns=_target_columns())
 
 
+def _forecast_rows(sources: dict[str, Any], event: dict[str, Any]) -> pd.DataFrame:
+    forecasts = _event_rows(sources["forecasts"], event)
+    forecasts = _live_rows(forecasts)
+    if forecasts.empty:
+        return pd.DataFrame(columns=_forecast_columns())
+    forecasts = forecasts.copy()
+    forecasts["driver_key"] = _driver_key_series(forecasts)
+    return forecasts.reindex(columns=_forecast_columns())
+
+
 def _settlement_actuals(sources: dict[str, Any], event: dict[str, Any]) -> pd.DataFrame:
     settlements = _event_rows(sources["settlements"], event)
     settlements = _live_rows(settlements)
@@ -367,6 +410,7 @@ def _build_checks(
         event_rows = comparison[comparison["event_slug"].astype(str).eq(event["event_slug"])]
         raw = _reconstruct_raw_q(config, event)
         targets = _stored_targets(config, event)
+        forecasts = _forecast_rows(sources, event)
         settlements = _settlement_actuals(sources, event)
         dashboard = _dashboard_actuals(sources, event)
         raw_path = build_lap_output_path(
@@ -393,7 +437,7 @@ def _build_checks(
         rows.append(_raw_identity_check(config, event))
         rows.extend(_raw_quality_checks(event, raw))
         rows.extend(_target_checks(event, raw, targets, event_rows))
-        rows.extend(_settlement_checks(event, targets, settlements, event_rows))
+        rows.extend(_settlement_checks(event, forecasts, targets, settlements, event_rows))
         rows.extend(_dashboard_checks(event, settlements, dashboard, event_rows))
         rows.extend(_cross_identity_checks(event, raw, targets, settlements, dashboard))
     return pd.DataFrame(rows, columns=_check_columns())
@@ -548,46 +592,83 @@ def _target_checks(
 
 def _settlement_checks(
     event: dict[str, Any],
+    forecasts: pd.DataFrame,
     targets: pd.DataFrame,
     settlements: pd.DataFrame,
     comparison: pd.DataFrame,
 ) -> list[dict[str, Any]]:
+    forecast_keys = set(forecasts["driver_key"].dropna().astype(str).tolist())
     target_keys = set(targets["driver_key"].dropna().astype(str).tolist())
+    expected_keys = (forecast_keys & target_keys) if forecast_keys else target_keys
+    unforecasted_keys = target_keys - forecast_keys if forecast_keys else set()
+    forecast_only_keys = forecast_keys - target_keys if forecast_keys else set()
     settlement_keys = set(settlements["driver_key"].dropna().astype(str).tolist())
     comparable = comparison[
         comparison["stored_target_position"].notna()
         & comparison["settlement_actual_gap_to_pole_sec"].notna()
+        & comparison["driver_key"].astype(str).isin(expected_keys)
     ]
     settlement_bad = (
         comparable["settlement_match"].eq(False).any() if not comparable.empty else False
     )
     repair_settlement = (
         "Repair settlement projection."
-        if settlement_bad or not target_keys <= settlement_keys
+        if settlement_bad or not expected_keys <= settlement_keys
         else ""
     )
+    coverage_status = (
+        "partial_coverage" if unforecasted_keys or forecast_only_keys else "full_coverage"
+    )
+    coverage_check = _check(
+        event,
+        "forecast_coverage_status",
+        "warning" if coverage_status == "partial_coverage" else "passed",
+        False,
+        json.dumps(
+            {
+                "forecast_driver_count": len(forecast_keys) if forecast_keys else None,
+                "actual_qualifying_driver_count": len(target_keys),
+                "evaluable_driver_count": len(expected_keys),
+                "unforecasted_actual_entrants": sorted(unforecasted_keys),
+                "forecast_only_non_qualifiers": sorted(forecast_only_keys),
+                "forecast_coverage_status": coverage_status,
+            },
+            sort_keys=True,
+        ),
+        "full coverage or explicit partial coverage diagnostic",
+        "Forecast coverage is complete."
+        if coverage_status == "full_coverage"
+        else (
+            "Forecast coverage is partial but settlement projection is evaluated only on "
+            "forecasted target drivers."
+        ),
+        "Do not create retrospective predictions; expose partial coverage in dashboard."
+        if coverage_status == "partial_coverage"
+        else "",
+    )
     return [
+        coverage_check,
         _check(
             event,
             "settlement_actual_position_matches_target",
-            "passed" if not settlement_bad and target_keys <= settlement_keys else "failed",
-            bool(settlement_bad or not target_keys <= settlement_keys),
-            sorted(target_keys - settlement_keys),
+            "passed" if not settlement_bad and expected_keys <= settlement_keys else "failed",
+            bool(settlement_bad or not expected_keys <= settlement_keys),
+            sorted(expected_keys - settlement_keys),
             "settlement actual positions match target positions",
             "Settlement actual positions match stored targets."
-            if not settlement_bad and target_keys <= settlement_keys
+            if not settlement_bad and expected_keys <= settlement_keys
             else "Settlement actual positions diverge or are missing for target drivers.",
             repair_settlement,
         ),
         _check(
             event,
             "settlement_actual_gap_matches_target",
-            "passed" if not settlement_bad and target_keys <= settlement_keys else "failed",
-            bool(settlement_bad or not target_keys <= settlement_keys),
+            "passed" if not settlement_bad and expected_keys <= settlement_keys else "failed",
+            bool(settlement_bad or not expected_keys <= settlement_keys),
             "mismatch" if settlement_bad else "matched",
             "settlement actual gaps match target gaps",
             "Settlement actual gaps match stored targets."
-            if not settlement_bad and target_keys <= settlement_keys
+            if not settlement_bad and expected_keys <= settlement_keys
             else "Settlement actual gaps diverge or are missing for target drivers.",
             repair_settlement,
         ),
@@ -706,7 +787,16 @@ def _build_event_summary(
         raw = _reconstruct_raw_q(config, event)
         targets = _stored_targets(config, event)
         settlements = _settlement_actuals(sources, event)
+        forecasts = _forecast_rows(sources, event)
         dashboard = _dashboard_actuals(sources, event)
+        forecast_keys = set(forecasts["driver_key"].dropna().astype(str).tolist())
+        target_keys = set(targets["driver_key"].dropna().astype(str).tolist())
+        evaluable_keys = (forecast_keys & target_keys) if forecast_keys else target_keys
+        unforecasted_keys = sorted(target_keys - forecast_keys) if forecast_keys else []
+        forecast_only_keys = sorted(forecast_keys - target_keys) if forecast_keys else []
+        coverage_status = (
+            "partial_coverage" if unforecasted_keys or forecast_only_keys else "full_coverage"
+        )
         blocking = int(event_checks["blocking"].astype(bool).sum())
         warnings = int(event_checks["status"].astype(str).eq("warning").sum())
         rows.append(
@@ -717,9 +807,28 @@ def _build_event_summary(
                 "legacy_noncanonical": _legacy_noncanonical(sources, event),
                 "raw_q_available": not raw.empty,
                 "raw_q_driver_count": int(raw["driver_key"].notna().sum()) if not raw.empty else 0,
+                "forecast_driver_count": int(len(forecast_keys)) if forecast_keys else 0,
                 "stored_target_driver_count": len(targets),
+                "actual_qualifying_driver_count": len(targets),
+                "evaluable_driver_count": int(len(evaluable_keys)),
                 "settlement_driver_count": len(settlements),
                 "dashboard_driver_count": len(dashboard),
+                "unforecasted_actual_entrant_count": int(len(unforecasted_keys)),
+                "unforecasted_actual_entrants": ",".join(unforecasted_keys),
+                "forecast_only_non_qualifier_count": int(len(forecast_only_keys)),
+                "forecast_only_non_qualifiers": ",".join(forecast_only_keys),
+                "forecast_coverage_ratio": (
+                    float(len(evaluable_keys) / len(target_keys)) if target_keys else None
+                ),
+                "forecast_coverage_status": coverage_status,
+                "entry_list_resolution_misses": ",".join(unforecasted_keys),
+                "settlement_projection_status": "settlement_projection_mismatch"
+                if _check_failed(event_checks, "settlement_actual")
+                else "settlement_projection_verified",
+                "public_dashboard_allowed": not _check_failed(event_checks, "dashboard_actual"),
+                "lifecycle_status": "settled_partial_coverage"
+                if coverage_status == "partial_coverage"
+                else "settled",
                 "position_match_rate": _match_rate(
                     event_comparison,
                     "position_match",
@@ -778,7 +887,8 @@ def _build_summary(
     )
     status = "empty"
     if events:
-        status = "fail" if blocking_events else "warning" if root_causes else "pass"
+        warnings = int(checks["status"].astype(str).eq("warning").sum())
+        status = "fail" if blocking_events else "warning" if warnings or root_causes else "pass"
     return {
         "status": status,
         "generated_at_utc": utc_now(),
@@ -836,11 +946,18 @@ def _driver_parity_status(
     best_lap_match: bool,
     settlement_match: bool,
     dashboard_match: bool,
+    *,
+    unforecasted_actual: bool = False,
+    forecast_only: bool = False,
 ) -> str:
     if raw_row is None:
         return "raw_q_missing"
     if target_row is None:
+        if forecast_only:
+            return "forecast_only_non_qualifier"
         return "stored_target_missing"
+    if unforecasted_actual:
+        return "pre_q_entry_list_resolution_miss"
     failures = [
         not position_match,
         not gap_match,
@@ -849,6 +966,15 @@ def _driver_parity_status(
         not dashboard_match,
     ]
     return "parity_mismatch" if any(failures) else "parity_verified"
+
+
+def _check_failed(checks: pd.DataFrame, name_prefix: str) -> bool:
+    if checks.empty:
+        return False
+    failed = checks["check_name"].astype(str).str.startswith(name_prefix).astype(bool) & checks[
+        "blocking"
+    ].astype(bool)
+    return bool(failed.any())
 
 
 def _recommended_action(status: str, root_causes: list[str]) -> str:
@@ -1147,6 +1273,16 @@ def _target_columns() -> list[str]:
     ]
 
 
+def _forecast_columns() -> list[str]:
+    return [
+        "season",
+        "event",
+        "event_slug",
+        "driver",
+        "driver_key",
+    ]
+
+
 def _settlement_actual_columns() -> list[str]:
     return [
         "season",
@@ -1181,6 +1317,12 @@ def _driver_comparison_columns() -> list[str]:
         "stored_target_best_lap_sec",
         "stored_target_position",
         "stored_target_gap_to_pole_sec",
+        "forecast_present",
+        "target_present",
+        "settlement_expected",
+        "unforecasted_actual_entrant",
+        "forecast_only_non_qualifier",
+        "forecast_coverage_reason",
         "settlement_actual_position",
         "settlement_actual_gap_to_pole_sec",
         "dashboard_actual_position",
@@ -1219,9 +1361,22 @@ def _event_summary_columns() -> list[str]:
         "legacy_noncanonical",
         "raw_q_available",
         "raw_q_driver_count",
+        "forecast_driver_count",
         "stored_target_driver_count",
+        "actual_qualifying_driver_count",
+        "evaluable_driver_count",
         "settlement_driver_count",
         "dashboard_driver_count",
+        "unforecasted_actual_entrant_count",
+        "unforecasted_actual_entrants",
+        "forecast_only_non_qualifier_count",
+        "forecast_only_non_qualifiers",
+        "forecast_coverage_ratio",
+        "forecast_coverage_status",
+        "entry_list_resolution_misses",
+        "settlement_projection_status",
+        "public_dashboard_allowed",
+        "lifecycle_status",
         "position_match_rate",
         "gap_match_rate",
         "best_lap_match_rate",

@@ -198,6 +198,47 @@ def test_partial_target_coverage_reports_expected_denominator(tmp_path: Path) ->
     assert row["forecast_only_driver_count"] == 1
 
 
+def test_preserved_immutable_snapshot_count_gap_is_classified_not_generic_warning(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_monitoring_event(
+        config,
+        forecast_rows=[
+            ("NOR", "McLaren", 0.0),
+            ("VER", "Red Bull Racing", 0.2),
+        ],
+        target_rows=[
+            ("NOR", "McLaren", 1, 0.0, True),
+            ("VER", "Red Bull Racing", 2, 0.3, True),
+            ("PER", "Red Bull Racing", 3, 0.5, True),
+        ],
+        coverage_rows=[
+            ("NOR", "McLaren", True, True, ""),
+            ("VER", "Red Bull Racing", True, True, ""),
+            ("PER", "Red Bull Racing", True, False, "pre_q_entry_list_resolution_miss"),
+        ],
+    )
+    _write_features(
+        config,
+        "Italy",
+        [
+            ("NOR", "McLaren", 0.0),
+            ("VER", "Red Bull Racing", 0.2),
+            ("PER", "Red Bull Racing", 0.5),
+        ],
+    )
+
+    create_monitoring_data_integrity_audit(config)
+
+    forecast_count = _check(config, "forecast_driver_count")
+    alignment = _check(config, "feature_to_forecast_driver_alignment")
+    assert forecast_count["status"] == "expected_immutable_snapshot"
+    assert forecast_count["diagnostic_classification"] == "immutable_snapshot_preserved"
+    assert alignment["status"] == "expected_immutable_snapshot"
+    assert alignment["diagnostic_classification"] == "immutable_snapshot_preserved"
+
+
 def test_existing_forecast_artifact_is_not_mutated(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_monitoring_event(config)

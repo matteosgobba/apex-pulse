@@ -80,13 +80,13 @@ def test_partial_target_coverage_writes_targets_and_coverage(tmp_path: Path) -> 
     config = _config(tmp_path)
     drivers = tuple(f"D{i:02d}" for i in range(22))
     target_drivers = drivers[:20]
-    _write_practice_raw(config, 2026, "Australia", drivers=drivers)
-    _write_q_raw(config, 2026, "Australia", drivers=target_drivers)
-    prepare_monitoring_event(config, _features(), season=2026, event="Australia")
+    _write_practice_raw(config, 2026, "Bahrain", drivers=drivers)
+    _write_q_raw(config, 2026, "Bahrain", drivers=target_drivers)
+    prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
 
-    summary = add_monitoring_targets(config, season=2026, event="Australia")
-    targets = pd.read_parquet(target_artifact_path(config, 2026, "Australia"))
-    coverage = pd.read_csv(target_coverage_path(config, 2026, "Australia"))
+    summary = add_monitoring_targets(config, season=2026, event="Bahrain")
+    targets = pd.read_parquet(target_artifact_path(config, 2026, "Bahrain"))
+    coverage = pd.read_csv(target_coverage_path(config, 2026, "Bahrain"))
     manifest = json.loads(summary.summary_path.read_text())
 
     assert summary.status == "targets_added"
@@ -187,6 +187,56 @@ def test_add_targets_requires_valid_prequalification_features(tmp_path: Path) ->
 
     with pytest.raises(FileNotFoundError, match="manifest"):
         add_monitoring_targets(config, season=2026, event="Bahrain")
+
+
+def test_missing_raw_q_metadata_blocks_target_onboarding_without_writing_targets(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_practice_raw(config, 2026, "Bahrain")
+    _write_q_raw(config, 2026, "Bahrain")
+    metadata_path = config.session_metadata_output_dir / "2026/bahrain/q_metadata.json"
+    metadata_path.unlink()
+    prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
+
+    with pytest.raises(ValueError, match="metadata_missing"):
+        add_monitoring_targets(config, season=2026, event="Bahrain")
+
+    assert not target_artifact_path(config, 2026, "Bahrain").exists()
+    block = (
+        tmp_path / "data/processed/monitoring/2026/bahrain/raw_session_identity_target_block.json"
+    )
+    assert json.loads(block.read_text())["validation"]["identity_status"] == "metadata_missing"
+
+
+def test_malformed_raw_q_metadata_blocks_target_onboarding_without_writing_targets(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_practice_raw(config, 2026, "Bahrain")
+    _write_q_raw(config, 2026, "Bahrain")
+    metadata_path = config.session_metadata_output_dir / "2026/bahrain/q_metadata.json"
+    metadata_path.write_text("{bad", encoding="utf-8")
+    prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
+
+    with pytest.raises(ValueError, match="metadata_malformed"):
+        add_monitoring_targets(config, season=2026, event="Bahrain")
+
+    assert not target_artifact_path(config, 2026, "Bahrain").exists()
+
+
+def test_identity_mismatch_blocks_target_onboarding_without_writing_targets(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_practice_raw(config, 2026, "Great Britain")
+    _write_q_raw(config, 2026, "Great Britain", metadata_event_name="Austrian Grand Prix")
+    prepare_monitoring_event(config, _features(), season=2026, event="Great Britain")
+
+    with pytest.raises(ValueError, match="legacy_known_mismatch"):
+        add_monitoring_targets(config, season=2026, event="Great Britain")
+
+    assert not target_artifact_path(config, 2026, "Great Britain").exists()
 
 
 def test_register_validates_protocol_season_and_blocks_leaking_features(tmp_path: Path) -> None:
@@ -315,6 +365,7 @@ def test_partial_coverage_settlement_preserves_forecast_rows_and_scores_evaluabl
         dataset_path=dataset_path,
     )
     _write_practice_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC", "HAM"))
+    _write_entry_list(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC", "HAM"))
     _write_q_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC"))
     prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
     register_monitoring_event(
@@ -426,9 +477,56 @@ def _write_q_raw(
     *,
     drivers: tuple[str, ...] = ("VER", "NOR", "LEC", "HAM"),
     accurate: bool = True,
+    metadata_event_name: str | None = None,
 ) -> None:
     path = build_lap_output_path(config.lap_output_dir, season, event, "Q")
     _raw_laps(base_time=79.0, drivers=drivers, accurate=accurate).to_parquet(path, index=False)
+    metadata_path = (
+        config.session_metadata_output_dir
+        / str(season)
+        / event.strip().lower().replace(" ", "-")
+        / "q_metadata.json"
+    )
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "season": season,
+                "event_input": event,
+                "event_name": metadata_event_name or f"{event} Grand Prix",
+                "event_slug": event.strip().lower().replace(" ", "-"),
+                "session_input": "Q",
+                "session_name": "Qualifying",
+                "session_slug": "q",
+                "status": "success",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_entry_list(
+    config: DataConfig,
+    season: int,
+    event: str,
+    *,
+    drivers: tuple[str, ...] = ("VER", "NOR", "LEC", "HAM"),
+) -> None:
+    path = (
+        config.project_root
+        / "data/processed/monitoring"
+        / str(season)
+        / event.strip().lower().replace(" ", "-")
+        / "qualifying_entry_list.csv"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    teams = ("Red Bull Racing", "McLaren", "Ferrari", "Mercedes")
+    pd.DataFrame(
+        {
+            "driver": list(drivers),
+            "team": [teams[index % len(teams)] for index, _ in enumerate(drivers)],
+        }
+    ).to_csv(path, index=False)
 
 
 def _raw_laps(

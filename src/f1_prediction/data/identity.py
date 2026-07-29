@@ -7,7 +7,7 @@ import pandas as pd
 from f1_prediction.utils.paths import slugify
 
 TEAM_ALIASES: dict[str, tuple[str, ...]] = {
-    "red_bull": ("Red Bull Racing", "Oracle Red Bull Racing"),
+    "red_bull": ("Red Bull", "Red Bull Racing", "Oracle Red Bull Racing"),
     "ferrari": ("Ferrari", "Scuderia Ferrari"),
     "mercedes": ("Mercedes", "Mercedes-AMG Petronas Formula One Team"),
     "mclaren": ("McLaren", "McLaren Formula 1 Team"),

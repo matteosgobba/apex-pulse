@@ -143,6 +143,50 @@ def test_settled_event_exports_driver_comparison_and_metrics(tmp_path: Path) -> 
     assert settlement["data"]["driver_comparison"][0]["actual_gap_to_pole_sec"] == 0.1
 
 
+def test_partial_coverage_settled_event_exposes_missing_actual_entrant(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(
+        config, [_registry_event("Hungarian Grand Prix", 14, target_artifact_present=True)]
+    )
+    _write_forecasts(
+        config,
+        "Hungarian Grand Prix",
+        [("VER", "Red Bull Racing", 0.2), ("NOR", "McLaren", 0.5)],
+    )
+    _write_settlements(
+        config,
+        "Hungarian Grand Prix",
+        [("VER", 0.1, 0.2), ("NOR", 0.7, 0.5)],
+    )
+    _write_targets(
+        config,
+        "Hungarian Grand Prix",
+        [
+            ("VER", "Red Bull Racing", 1, 0.1),
+            ("NOR", "McLaren", 2, 0.7),
+            ("PER", "Red Bull Racing", 3, 0.9),
+        ],
+    )
+
+    export_dashboard_artifacts(config)
+    current = _read_dashboard(config, "current_event.json")
+    settlement = _read_dashboard(config, "event_settlement.json")
+
+    assert current["data"]["lifecycle"]["state"] == "settled_partial_coverage"
+    status = current["data"]["settlement_status"]
+    assert status["forecast_coverage"] == "2/3"
+    assert status["actual_qualifying_driver_count"] == 3
+    assert status["coverage_warning"] == "partial qualifying-entry coverage"
+    assert status["unforecasted_actual_entrants"] == [
+        {"driver": "PER", "driver_code": "PER", "reason": "pre_q_entry_list_resolution_miss"}
+    ]
+    assert settlement["data"]["summary_metrics"]["scored_driver_count"] == 2
+    assert settlement["data"]["summary_metrics"]["forecast_coverage_status"] == "partial_coverage"
+
+
 def test_missing_optional_interval_columns_do_not_break_exports(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_protocol(config)
@@ -639,6 +683,10 @@ def _write_forecasts(
                 "source_lineage_valid": True,
                 "live_policy_selected": True,
                 "forecast_integrity_status": "valid",
+                "qualifying_entry_list_status": "driver_set_parity_passed",
+                "qualifying_entry_list_source": "test_fixture",
+                "qualifying_entry_list_driver_count": len(rows),
+                "qualifying_entry_list_summary_path": "",
                 "preflight_status": "ready_to_forecast",
                 "preflight_run_id": "run123",
                 "preflight_summary_path": (
@@ -732,6 +780,37 @@ def _write_target_coverage(
             for driver, target_present, target_evaluable, reason in rows
         ]
     ).to_csv(path, index=False)
+
+
+def _write_targets(
+    config: DataConfig,
+    event: str,
+    rows: list[tuple[str, str, int, float]],
+) -> None:
+    slug = event.lower().replace(" ", "-")
+    path = (
+        config.project_root
+        / "data/processed/monitoring/2026"
+        / slug
+        / "monitoring_qualifying_targets.parquet"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "season": 2026,
+                "event": event,
+                "event_slug": slug,
+                "driver": driver,
+                "driver_key": driver.lower(),
+                "team": team,
+                "team_key": team.lower().replace(" ", "-"),
+                "quali_position": position,
+                "quali_gap_to_pole_sec": gap,
+            }
+            for driver, team, position, gap in rows
+        ]
+    ).to_parquet(path, index=False)
 
 
 def _write_reconciliation(

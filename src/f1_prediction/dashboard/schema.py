@@ -17,6 +17,7 @@ LifecycleStateName = Literal[
     "forecast_available",
     "awaiting_qualifying_targets",
     "settled",
+    "settled_partial_coverage",
     "blocked",
     "legacy_descriptive_only",
 ]
@@ -29,6 +30,7 @@ LIFECYCLE_STATES: set[str] = {
     "forecast_available",
     "awaiting_qualifying_targets",
     "settled",
+    "settled_partial_coverage",
     "blocked",
     "legacy_descriptive_only",
 }

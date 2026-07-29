@@ -30,7 +30,10 @@ from f1_prediction.data.monitoring_onboarding import (
     validate_target_raw_identity,
     write_json,
 )
-from f1_prediction.data.qualifying_entry_list import audit_qualifying_entry_list
+from f1_prediction.data.qualifying_entry_list import (
+    audit_qualifying_entry_list,
+    qualifying_entry_list_artifact_paths,
+)
 from f1_prediction.data.raw_session_identity import (
     IDENTITY_VERIFIED,
     create_raw_session_identity_validation_report,
@@ -211,6 +214,7 @@ def run_monitoring_before_qualifying(
         )
     event = resolution.canonical_event
     event_slug = resolution.event_slug
+    dashboard_snapshot = _capture_dashboard_state(config)
     recorder = _WorkflowRecorder(
         config,
         BEFORE_WORKFLOW,
@@ -270,11 +274,14 @@ def run_monitoring_before_qualifying(
             ),
             "dashboard_exported": lambda: _export_dashboard(
                 config,
+                season=season,
+                event=event,
                 event_slug=event_slug,
                 expected_lifecycle={"forecast_available", "awaiting_qualifying_targets"},
             ),
         },
     )
+    _preserve_dashboard_for_immutable_before_block(recorder, dashboard_snapshot)
     return recorder.write()
 
 
@@ -332,8 +339,10 @@ def run_monitoring_after_qualifying(
             ),
             "dashboard_exported": lambda: _export_dashboard(
                 config,
+                season=season,
+                event=event,
                 event_slug=event_slug,
-                expected_lifecycle={"settled"},
+                expected_lifecycle={"settled", "settled_partial_coverage"},
             ),
         },
     )
@@ -411,12 +420,13 @@ class _WorkflowRecorder:
             )
             return
         for key, value in result.items():
-            if key != "artifact_paths":
+            if key not in {"artifact_paths", "warning"}:
                 self.summary_values[key] = value
         paths = tuple(Path(path) for path in result.get("artifact_paths", ()))
+        stage_status = "warning" if bool(result.get("warning")) else "complete"
         self._stage(
             stage,
-            "complete",
+            stage_status,
             False,
             started,
             utc_now(),
@@ -463,6 +473,16 @@ class _WorkflowRecorder:
     def write(self) -> MonitoringWorkflowSummary:
         metrics_dir = ensure_directory(self.config.metrics_output_dir)
         stages = pd.DataFrame(self.stage_rows)
+        artifact_values = _artifact_summary_values(
+            self.config,
+            protocol_name=self.protocol_name,
+            season=self.season,
+            event=self.event,
+            event_slug=self.event_slug,
+        )
+        for key, value in artifact_values.items():
+            if self.summary_values.get(key) in (None, "", "not_run"):
+                self.summary_values[key] = value
         blocking_count = int(
             stages["blocking"]
             .astype(bool)
@@ -473,7 +493,7 @@ class _WorkflowRecorder:
         completed = bool(
             self.stage_status.get("dashboard_exported") == "complete" and blocking_count == 0
         )
-        status = "pass" if completed else "blocked"
+        status = "warning" if completed and warning_count else "pass" if completed else "blocked"
         summary = {
             "status": status,
             "workflow": self.workflow,
@@ -504,6 +524,14 @@ class _WorkflowRecorder:
                 "dashboard_export_status",
                 "not_run",
             ),
+            "dashboard_preservation_status": self.summary_values.get(
+                "dashboard_preservation_status",
+                "not_run",
+            ),
+            "dashboard_restored_path_count": self.summary_values.get(
+                "dashboard_restored_path_count",
+                0,
+            ),
             "qualifying_entry_list_status": self.summary_values.get(
                 "qualifying_entry_list_status",
                 "not_run",
@@ -520,11 +548,20 @@ class _WorkflowRecorder:
             "q_data_required": self.summary_values.get("q_data_required"),
             "dashboard_current_event": self.summary_values.get("dashboard_current_event"),
             "recommended_operator_action": (
-                "Workflow completed. Continue with the next monitored-event phase."
+                self.summary_values.get("recommended_operator_action")
+                or "Workflow completed. Continue with the next monitored-event phase."
                 if completed
                 else self.blocking_reason or "Resolve the blocking stage and rerun."
             ),
             "settlement_denominator": self.summary_values.get("settlement_denominator"),
+            "actual_qualifying_driver_count": self.summary_values.get(
+                "actual_qualifying_driver_count"
+            ),
+            "evaluable_driver_count": self.summary_values.get("evaluable_driver_count"),
+            "forecast_coverage": self.summary_values.get("forecast_coverage"),
+            "forecast_coverage_ratio": self.summary_values.get("forecast_coverage_ratio"),
+            "coverage_status": self.summary_values.get("coverage_status"),
+            "unforecasted_actual_entrants": self.summary_values.get("unforecasted_actual_entrants"),
             "generated_at_utc": utc_now(),
         }
         prefix = (
@@ -551,6 +588,69 @@ class _WorkflowRecorder:
             event_order_resolution_source=self.event_order_resolution_source,
             dashboard_current_event=summary["dashboard_current_event"],
         )
+
+
+@dataclass(frozen=True)
+class _DashboardStateSnapshot:
+    files: dict[Path, bytes]
+
+    def restore_changed_files(self) -> tuple[Path, ...]:
+        restored: list[Path] = []
+        for path, content in self.files.items():
+            if path.is_file() and path.read_bytes() == content:
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            restored.append(path)
+        return tuple(restored)
+
+
+def _capture_dashboard_state(config: DataConfig) -> _DashboardStateSnapshot:
+    dashboard_dir = config.metrics_output_dir.parent / "dashboard"
+    files = {
+        path: path.read_bytes() for path in sorted(dashboard_dir.glob("*.json")) if path.is_file()
+    }
+    return _DashboardStateSnapshot(files)
+
+
+def _preserve_dashboard_for_immutable_before_block(
+    recorder: _WorkflowRecorder,
+    dashboard_snapshot: _DashboardStateSnapshot,
+) -> None:
+    if recorder.workflow != BEFORE_WORKFLOW or not _immutable_before_workflow_block(recorder):
+        return
+    restored = dashboard_snapshot.restore_changed_files()
+    recorder.summary_values["dashboard_preservation_status"] = (
+        "preserved_existing_dashboard" if dashboard_snapshot.files else "no_existing_dashboard"
+    )
+    recorder.summary_values["dashboard_restored_path_count"] = len(restored)
+    current_event = _current_dashboard_event(recorder.config)
+    if current_event:
+        recorder.summary_values["dashboard_current_event"] = current_event
+
+
+def _immutable_before_workflow_block(recorder: _WorkflowRecorder) -> bool:
+    if not recorder.blocked:
+        return False
+    reason = recorder.blocking_reason
+    if "Existing immutable forecast and settlement artifacts detected" in reason:
+        return True
+    return (
+        recorder.summary_values.get("forecast_status") == "forecast_reused"
+        and recorder.current_stage == "forecast_created"
+    )
+
+
+def _current_dashboard_event(config: DataConfig) -> str | None:
+    current_path = config.metrics_output_dir.parent / "dashboard/current_event.json"
+    if not current_path.is_file():
+        return None
+    try:
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    event = current.get("data", {}).get("event_identity", {}).get("event")
+    return str(event) if event else None
 
 
 def _ingest_sessions(
@@ -707,7 +807,17 @@ def _run_preflight(
         return {
             "artifact_paths": (summary.summary_path, *summary.table_paths),
             "forecast_status": "forecast_reused",
-            "reason": "Preflight reports an existing valid immutable forecast.",
+            **_artifact_summary_values(
+                config,
+                protocol_name=protocol_name,
+                season=season,
+                event=event,
+                event_slug=event_slug,
+            ),
+            "reason": (
+                "Existing immutable forecast artifact detected. Forecast regeneration "
+                "intentionally skipped."
+            ),
         }
     if summary.status == PREFLIGHT_ALREADY_FORECASTED and _existing_forecast_has_entry_mismatch(
         config,
@@ -745,7 +855,10 @@ def _create_or_reuse_forecast(
     event_slug: str,
 ) -> dict[str, Any]:
     if _event_rows(config, "prospective_monitoring_settlements.parquet", protocol_name, event_slug):
-        raise ValueError("Existing settlement rows block before-qualifying forecast workflow.")
+        raise ValueError(
+            "Existing immutable forecast and settlement artifacts detected. "
+            "Forecast regeneration intentionally skipped."
+        )
     if target_artifact_path(config, season, event).is_file():
         raise ValueError("Existing target artifact blocks before-qualifying forecast workflow.")
     existing_forecasts = _forecast_rows(config, protocol_name, event_slug)
@@ -868,8 +981,17 @@ def _settle_or_reuse_event(
                 config.metrics_output_dir / "prospective_monitoring_settlements.parquet",
             ),
             "settlement_status": "settlement_reused",
-            "settlement_denominator": _settlement_denominator(config, event_slug),
-            "reason": "Existing valid immutable settlement reused.",
+            **_artifact_summary_values(
+                config,
+                protocol_name=protocol_name,
+                season=season,
+                event=event,
+                event_slug=event_slug,
+            ),
+            "reason": (
+                "Existing immutable settlement artifact reused. "
+                "No forecast or settlement rows were regenerated."
+            ),
         }
     valid, reason = validate_target_raw_identity(config, season, event)
     if not valid:
@@ -903,6 +1025,13 @@ def _run_event_parity_audit(
         or not event_rows["event_parity_status"].astype(str).eq("parity_verified").all()
     ):
         raise ValueError("Event-specific qualifying target parity audit failed.")
+    partial_coverage = bool(
+        event_rows.get("forecast_coverage_status", pd.Series(dtype=str))
+        .astype(str)
+        .eq("partial_coverage")
+        .any()
+    )
+    coverage_details = _parity_event_summary_values(event_rows)
     return {
         "artifact_paths": (
             summary.summary_path,
@@ -913,7 +1042,16 @@ def _run_event_parity_audit(
             summary.runbook_path,
         ),
         "event_specific_parity_status": "pass",
-        "reason": "Event-specific qualifying target parity audit passed.",
+        "warning": partial_coverage,
+        **coverage_details,
+        "recommended_operator_action": coverage_details.get("recommended_operator_action"),
+        "reason": "Event-specific qualifying target parity audit passed."
+        if not partial_coverage
+        else (
+            "Event-specific parity passed with explicit partial forecast coverage. "
+            f"Coverage: {coverage_details.get('forecast_coverage', 'unknown')}. "
+            "No retrospective prediction generated."
+        ),
     }
 
 
@@ -948,10 +1086,12 @@ def _run_event_integrity_audit(
 def _export_dashboard(
     config: DataConfig,
     *,
+    season: int,
+    event: str,
     event_slug: str,
     expected_lifecycle: set[str],
 ) -> dict[str, Any]:
-    summary = export_dashboard_artifacts(config)
+    summary = export_dashboard_artifacts(config, season=season, event=event)
     current_path = config.metrics_output_dir.parent / "dashboard/current_event.json"
     current = json.loads(current_path.read_text(encoding="utf-8"))
     current_slug = current.get("data", {}).get("event_identity", {}).get("event_slug")
@@ -968,6 +1108,273 @@ def _export_dashboard(
         "dashboard_current_event": summary.current_event,
         "reason": f"Dashboard export refreshed with lifecycle {lifecycle}.",
     }
+
+
+def _artifact_summary_values(
+    config: DataConfig,
+    *,
+    protocol_name: str,
+    season: int,
+    event: str,
+    event_slug: str,
+) -> dict[str, Any]:
+    forecasts = _latest_live_forecast_group(config, protocol_name, event_slug)
+    settlements = _latest_live_settlement_group(config, protocol_name, event_slug)
+    targets = read_parquet(target_artifact_path(config, season, event))
+    forecast_keys = _driver_key_set(forecasts)
+    target_keys = _driver_key_set(targets)
+    settlement_evaluable_keys = _evaluable_settlement_key_set(settlements)
+    evaluable_keys = forecast_keys & target_keys if forecast_keys and target_keys else set()
+    coverage = _coverage_values(forecast_keys, target_keys)
+    entry_summary = (
+        read_json_if_exists(qualifying_entry_list_artifact_paths(config, season, event)["summary"])
+        or {}
+    )
+    parity_rows = read_csv(config.metrics_output_dir / "qualifying_target_parity_event_summary.csv")
+    event_parity = (
+        parity_rows[parity_rows["event_slug"].astype(str).eq(event_slug)]
+        if not parity_rows.empty and "event_slug" in parity_rows
+        else pd.DataFrame()
+    )
+    parity_values = _parity_event_summary_values(event_parity)
+    eligible_count = _first_available_int(
+        parity_values.get("actual_qualifying_driver_count"),
+        entry_summary.get("entry_list_driver_count"),
+        _forecast_entry_count(forecasts),
+        len(target_keys) if target_keys else None,
+    )
+    result: dict[str, Any] = {
+        "forecast_driver_count": len(forecast_keys) if forecast_keys else None,
+        "eligible_driver_count": eligible_count,
+        "actual_qualifying_driver_count": len(target_keys) if target_keys else None,
+        "evaluable_driver_count": len(evaluable_keys)
+        if evaluable_keys
+        else len(settlement_evaluable_keys)
+        if settlement_evaluable_keys
+        else None,
+        "settlement_denominator": _settlement_denominator(config, event_slug)
+        or (len(settlement_evaluable_keys) if settlement_evaluable_keys else None),
+        "driver_set_parity_status": _first_text(
+            [
+                parity_values.get("driver_set_parity_status"),
+                entry_summary.get("driver_set_parity_status"),
+                _forecast_entry_status(forecasts),
+            ]
+        )
+        or None,
+        "qualifying_entry_list_status": _first_text(
+            [
+                entry_summary.get("entry_list_resolution_status"),
+                _forecast_entry_status(forecasts),
+            ]
+        )
+        or None,
+        "qualifying_entry_list_source": _first_text(
+            [
+                entry_summary.get("resolution_source"),
+                _first_frame_value(forecasts, "qualifying_entry_list_source"),
+            ]
+        )
+        or None,
+        "forecast_coverage": coverage["forecast_coverage"],
+        "forecast_coverage_ratio": coverage["forecast_coverage_ratio"],
+        "coverage_status": parity_values.get("coverage_status") or coverage["coverage_status"],
+        "unforecasted_actual_entrants": parity_values.get("unforecasted_actual_entrants")
+        or coverage["unforecasted_actual_entrants"],
+    }
+    if result["coverage_status"] == "partial_coverage":
+        result["recommended_operator_action"] = (
+            "Immutable historical forecast preserved. "
+            f"Coverage: {result['forecast_coverage']}. "
+            "No retrospective prediction generated."
+        )
+    return result
+
+
+def _parity_event_summary_values(event_rows: pd.DataFrame) -> dict[str, Any]:
+    if event_rows.empty:
+        return {}
+    row = event_rows.iloc[-1]
+    forecast_count = _optional_int(row.get("forecast_driver_count"))
+    actual_count = _optional_int(row.get("actual_qualifying_driver_count"))
+    evaluable_count = _optional_int(row.get("evaluable_driver_count"))
+    ratio = _optional_float(row.get("forecast_coverage_ratio"))
+    coverage = (
+        f"{evaluable_count}/{actual_count}"
+        if evaluable_count is not None and actual_count is not None
+        else None
+    )
+    unforecasted = _csv_list(row.get("unforecasted_actual_entrants"))
+    status = _first_text([row.get("forecast_coverage_status")])
+    result: dict[str, Any] = {
+        "forecast_driver_count": forecast_count,
+        "actual_qualifying_driver_count": actual_count,
+        "eligible_driver_count": actual_count,
+        "evaluable_driver_count": evaluable_count,
+        "settlement_denominator": evaluable_count,
+        "forecast_coverage": coverage,
+        "forecast_coverage_ratio": ratio,
+        "coverage_status": status or None,
+        "unforecasted_actual_entrants": unforecasted,
+        "driver_set_parity_status": "driver_set_parity_passed"
+        if str(row.get("event_parity_status")) == "parity_verified"
+        else None,
+    }
+    if status == "partial_coverage":
+        result["recommended_operator_action"] = (
+            "Immutable historical forecast preserved. "
+            f"Coverage: {coverage}. No retrospective prediction generated."
+        )
+    return result
+
+
+def _coverage_values(
+    forecast_keys: set[str],
+    target_keys: set[str],
+) -> dict[str, Any]:
+    if not forecast_keys or not target_keys:
+        return {
+            "forecast_coverage": None,
+            "forecast_coverage_ratio": None,
+            "coverage_status": None,
+            "unforecasted_actual_entrants": [],
+        }
+    evaluable = forecast_keys & target_keys
+    unforecasted = sorted(target_keys - forecast_keys)
+    forecast_only = sorted(forecast_keys - target_keys)
+    return {
+        "forecast_coverage": f"{len(evaluable)}/{len(target_keys)}",
+        "forecast_coverage_ratio": float(len(evaluable) / len(target_keys)),
+        "coverage_status": "partial_coverage" if unforecasted or forecast_only else "full_coverage",
+        "unforecasted_actual_entrants": [key.upper() for key in unforecasted],
+    }
+
+
+def _latest_live_forecast_group(
+    config: DataConfig,
+    protocol_name: str,
+    event_slug: str,
+) -> pd.DataFrame:
+    forecasts = _forecast_rows(config, protocol_name, event_slug)
+    if forecasts.empty:
+        return pd.DataFrame()
+    if "forecast_created_at_utc" in forecasts:
+        forecasts = forecasts.sort_values("forecast_created_at_utc")
+    forecast_id = str(forecasts["forecast_id"].iloc[-1]) if "forecast_id" in forecasts else ""
+    group = (
+        forecasts[forecasts["forecast_id"].astype(str).eq(forecast_id)].copy()
+        if forecast_id
+        else forecasts.copy()
+    )
+    return _live_artifact_rows(group)
+
+
+def _latest_live_settlement_group(
+    config: DataConfig,
+    protocol_name: str,
+    event_slug: str,
+) -> pd.DataFrame:
+    settlements = _settlement_rows(config, protocol_name, event_slug)
+    if settlements.empty:
+        return pd.DataFrame()
+    if "settled_at_utc" in settlements:
+        settlements = settlements.sort_values("settled_at_utc")
+    settlement_id = str(settlements["forecast_id"].iloc[-1]) if "forecast_id" in settlements else ""
+    group = (
+        settlements[settlements["forecast_id"].astype(str).eq(settlement_id)].copy()
+        if settlement_id
+        else settlements.copy()
+    )
+    return _live_artifact_rows(group)
+
+
+def _live_artifact_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    if "diagnostic_only" not in frame:
+        return frame.copy()
+    return frame[~frame["diagnostic_only"].astype(bool)].copy()
+
+
+def _driver_key_set(frame: pd.DataFrame) -> set[str]:
+    if frame.empty:
+        return set()
+    column = "driver_key" if "driver_key" in frame else "driver"
+    if column not in frame:
+        return set()
+    return set(frame[column].dropna().astype(str).str.strip().str.lower())
+
+
+def _evaluable_settlement_key_set(settlements: pd.DataFrame) -> set[str]:
+    if settlements.empty:
+        return set()
+    evaluable = (
+        settlements["settlement_evaluable"].astype(bool)
+        if "settlement_evaluable" in settlements
+        else pd.Series([True] * len(settlements), index=settlements.index)
+    )
+    return _driver_key_set(settlements[evaluable])
+
+
+def _forecast_entry_status(forecasts: pd.DataFrame) -> str:
+    return _first_frame_value(forecasts, "qualifying_entry_list_status")
+
+
+def _forecast_entry_count(forecasts: pd.DataFrame) -> int | None:
+    value = _first_frame_value(forecasts, "qualifying_entry_list_driver_count")
+    return _optional_int(value)
+
+
+def _first_frame_value(frame: pd.DataFrame, column: str) -> Any:
+    if frame.empty or column not in frame:
+        return None
+    values = frame[column].dropna()
+    return values.iloc[-1] if not values.empty else None
+
+
+def _first_available_int(*values: Any) -> int | None:
+    for value in values:
+        number = _optional_int(value)
+        if number is not None:
+            return number
+    return None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _csv_list(value: Any) -> list[str]:
+    if value is None or pd.isna(value):
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    return [item.strip().upper() for item in text.split(",") if item.strip()]
+
+
+def _first_text(values: list[Any]) -> str:
+    for value in values:
+        if value is None or pd.isna(value):
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
 
 
 def _reject_blocked_event(season: int, event: str, *, allow_test_event: bool) -> None:

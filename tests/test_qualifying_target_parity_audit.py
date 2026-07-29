@@ -112,6 +112,39 @@ def test_dashboard_actual_mismatch_versus_settlement_is_detected(tmp_path: Path)
     assert _check(config, "dashboard_actual_gap_matches_settlement")["status"] == "failed"
 
 
+def test_target_only_driver_is_forecast_coverage_warning_not_settlement_corruption(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_event(
+        config,
+        raw_laps=[
+            ("NOR", "McLaren", 79.0),
+            ("VER", "Red Bull Racing", 79.2),
+            ("PER", "Red Bull Racing", 79.5),
+        ],
+        forecast_drivers=("NOR", "VER"),
+        settlement_drivers=("NOR", "VER"),
+        dashboard_drivers=("NOR", "VER"),
+    )
+
+    summary = create_qualifying_target_parity_audit(config)
+    event_summary = _event_summary(config).iloc[0]
+    driver_comparison = _driver_comparison(config)
+
+    assert summary.status == "warning"
+    assert event_summary["event_parity_status"] == "parity_verified"
+    assert event_summary["forecast_coverage_status"] == "partial_coverage"
+    assert event_summary["forecast_coverage_ratio"] == 2 / 3
+    assert event_summary["unforecasted_actual_entrants"] == "per"
+    assert event_summary["settlement_projection_status"] == "settlement_projection_verified"
+    assert _check(config, "settlement_actual_gap_matches_target")["status"] == "passed"
+    per = driver_comparison[driver_comparison["driver"].eq("PER")].iloc[0]
+    assert bool(per["unforecasted_actual_entrant"]) is True
+    assert per["forecast_coverage_reason"] == "pre_q_entry_list_resolution_miss"
+    assert per["parity_status"] == "pre_q_entry_list_resolution_miss"
+
+
 def test_legacy_event_with_verified_parity_remains_legacy_but_passes(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_event(config, event="Australia", legacy=True)
@@ -185,6 +218,9 @@ def _write_event(
     target_event_slug: str | None = None,
     settlement_gap_override: dict[str, float] | None = None,
     dashboard_gap_override: dict[str, float] | None = None,
+    forecast_drivers: tuple[str, ...] | None = None,
+    settlement_drivers: tuple[str, ...] | None = None,
+    dashboard_drivers: tuple[str, ...] | None = None,
 ) -> None:
     raw_laps = raw_laps or [("NOR", "McLaren", 79.0), ("VER", "Red Bull Racing", 79.2)]
     target_position_override = target_position_override or {}
@@ -209,9 +245,25 @@ def _write_event(
     )
     _write_registry(config, season, event, len(raw_laps), len(targets))
     _write_reconciliation(config, season, event, legacy)
+    if forecast_drivers is not None:
+        _write_forecasts(config, season, event, targets, forecast_drivers)
     _write_targets(config, season, event, targets)
-    _write_settlements(config, season, event, targets, gap_override=settlement_gap_override)
-    _write_dashboard(config, season, event, targets, gap_override=dashboard_gap_override)
+    _write_settlements(
+        config,
+        season,
+        event,
+        targets,
+        gap_override=settlement_gap_override,
+        settlement_drivers=settlement_drivers,
+    )
+    _write_dashboard(
+        config,
+        season,
+        event,
+        targets,
+        gap_override=dashboard_gap_override,
+        dashboard_drivers=dashboard_drivers,
+    )
 
 
 def _write_raw_q(
@@ -350,6 +402,7 @@ def _write_settlements(
     targets: list[dict],
     *,
     gap_override: dict[str, float],
+    settlement_drivers: tuple[str, ...] | None,
 ) -> None:
     path = config.metrics_output_dir / "prospective_monitoring_settlements.parquet"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -366,6 +419,33 @@ def _write_settlements(
                 "settlement_evaluable": True,
             }
             for row in targets
+            if settlement_drivers is None or row["driver"] in settlement_drivers
+        ]
+    ).to_parquet(path, index=False)
+
+
+def _write_forecasts(
+    config: DataConfig,
+    season: int,
+    event: str,
+    targets: list[dict],
+    forecast_drivers: tuple[str, ...],
+) -> None:
+    path = config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "season": season,
+                "event": event,
+                "event_slug": _slug(event),
+                "driver": row["driver"],
+                "driver_key": row["driver_key"],
+                "prediction_role": "observed_live_policy",
+                "diagnostic_only": False,
+            }
+            for row in targets
+            if row["driver"] in forecast_drivers
         ]
     ).to_parquet(path, index=False)
 
@@ -377,6 +457,7 @@ def _write_dashboard(
     targets: list[dict],
     *,
     gap_override: dict[str, float],
+    dashboard_drivers: tuple[str, ...] | None,
 ) -> None:
     dashboard_dir = config.metrics_output_dir.parent / "dashboard"
     _write_json(
@@ -405,6 +486,7 @@ def _write_dashboard(
                         ),
                     }
                     for row in targets
+                    if dashboard_drivers is None or row["driver"] in dashboard_drivers
                 ]
             }
         },

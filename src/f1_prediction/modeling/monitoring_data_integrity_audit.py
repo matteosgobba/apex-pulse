@@ -414,6 +414,13 @@ def _count_alignment_checks(
     forecast_only_count = (
         int(population["forecast_only_driver"].astype(bool).sum()) if not population.empty else 0
     )
+    immutable_snapshot_preserved = bool(
+        forecast_count
+        and target_count > forecast_count
+        and settled_count == forecast_count
+        and evaluable_count == forecast_count
+    )
+    feature_forecast_aligned = _key_set(artifacts["features"]) == _key_set(artifacts["forecasts"])
     return [
         _check_count(
             event,
@@ -421,7 +428,27 @@ def _count_alignment_checks(
             feature_count,
             _registry_count(event, "feature_driver_count"),
         ),
-        _check_count(event, "forecast_driver_count", forecast_count, feature_count),
+        _check(
+            event,
+            "forecast_driver_count",
+            "passed"
+            if forecast_count == feature_count
+            else "expected_immutable_snapshot"
+            if immutable_snapshot_preserved
+            else "warning",
+            False,
+            forecast_count,
+            feature_count,
+            "Observed forecast count matches feature count."
+            if forecast_count == feature_count
+            else "Immutable historical forecast snapshot preserved with partial actual coverage."
+            if immutable_snapshot_preserved
+            else "Observed forecast count differs from feature count.",
+            "No retrospective prediction should be generated."
+            if immutable_snapshot_preserved
+            else "",
+            "immutable_snapshot_preserved" if immutable_snapshot_preserved else "",
+        ),
         _check_count(
             event,
             "target_driver_count",
@@ -433,13 +460,25 @@ def _count_alignment_checks(
             event,
             "feature_to_forecast_driver_alignment",
             "passed"
-            if _key_set(artifacts["features"]) == _key_set(artifacts["forecasts"])
+            if feature_forecast_aligned
+            else "expected_immutable_snapshot"
+            if immutable_snapshot_preserved
             else "warning",
             False,
             f"feature={feature_count};forecast={forecast_count}",
             "feature drivers equal forecast drivers for immutable snapshot preservation",
-            "Forecast snapshots preserve all feature participants.",
-            "",
+            "Forecast snapshots preserve all feature participants."
+            if feature_forecast_aligned
+            else (
+                "Immutable historical forecast snapshot intentionally preserves a narrower "
+                "driver set."
+            )
+            if immutable_snapshot_preserved
+            else "Forecast driver set differs from feature participant set.",
+            "No retrospective prediction should be generated."
+            if immutable_snapshot_preserved
+            else "",
+            "immutable_snapshot_preserved" if immutable_snapshot_preserved else "",
         ),
         _check(
             event,
@@ -476,8 +515,14 @@ def _target_quality_checks(
 ) -> list[dict[str, Any]]:
     targets = artifacts["targets"]
     rows: list[dict[str, Any]] = []
-    positions = pd.to_numeric(targets.get("quali_position"), errors="coerce")
-    gaps = pd.to_numeric(targets.get("quali_gap_to_pole_sec"), errors="coerce")
+    positions = pd.to_numeric(
+        targets.get("quali_position", pd.Series(dtype=float)),
+        errors="coerce",
+    )
+    gaps = pd.to_numeric(
+        targets.get("quali_gap_to_pole_sec", pd.Series(dtype=float)),
+        errors="coerce",
+    )
     invalid_position = bool((positions.isna() | positions.le(0) | positions.mod(1).ne(0)).any())
     invalid_gap = bool((gaps.isna() | gaps.lt(0)).any())
     duplicate_positions = bool(positions.duplicated().any()) if not positions.empty else False
@@ -650,8 +695,14 @@ def _build_event_comparison(
         artifacts = _event_artifacts(config, sources, event)
         event_pop = population[population["event_slug"].astype(str).eq(event["event_slug"])]
         targets = artifacts["targets"]
-        positions = pd.to_numeric(targets.get("quali_position"), errors="coerce")
-        gaps = pd.to_numeric(targets.get("quali_gap_to_pole_sec"), errors="coerce")
+        positions = pd.to_numeric(
+            targets.get("quali_position", pd.Series(dtype=float)),
+            errors="coerce",
+        )
+        gaps = pd.to_numeric(
+            targets.get("quali_gap_to_pole_sec", pd.Series(dtype=float)),
+            errors="coerce",
+        )
         pole_rows = targets.loc[positions.eq(1)] if not targets.empty else targets
         forecast_only = event_pop[event_pop["forecast_only_driver"].astype(bool)]
         rows.append(
@@ -926,6 +977,7 @@ def _check(
     expected: Any,
     reason: str,
     action: str,
+    diagnostic_classification: str = "",
 ) -> dict[str, Any]:
     return {
         "season": event.get("season"),
@@ -938,6 +990,7 @@ def _check(
         "expected_value": _stringify(expected),
         "reason": reason,
         "recommended_action": action,
+        "diagnostic_classification": diagnostic_classification,
     }
 
 
@@ -1075,6 +1128,7 @@ def _check_columns() -> list[str]:
         "expected_value",
         "reason",
         "recommended_action",
+        "diagnostic_classification",
     ]
 
 

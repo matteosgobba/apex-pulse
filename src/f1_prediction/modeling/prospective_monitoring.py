@@ -26,6 +26,11 @@ from f1_prediction.data.monitoring_onboarding import (
 from f1_prediction.data.monitoring_onboarding import (
     artifact_fingerprint as onboarding_artifact_fingerprint,
 )
+from f1_prediction.data.qualifying_entry_list import (
+    ENTRY_LIST_PARITY_PASSED,
+    audit_qualifying_entry_list,
+    constrain_features_to_entry_list,
+)
 from f1_prediction.data.season_builder import build_combined_dataset_path
 from f1_prediction.features.historical_features import add_historical_features
 from f1_prediction.modeling.feature_groups import get_feature_columns_for_group
@@ -64,7 +69,7 @@ from f1_prediction.modeling.temporal_weighting import (
     prepare_temporal_training_data,
 )
 from f1_prediction.modeling.train_tabular import PREDICTION_COLUMNS
-from f1_prediction.utils.paths import ensure_directory
+from f1_prediction.utils.paths import ensure_directory, slugify
 
 PROTOCOL_VERSION = "1.0"
 PROTOCOL_FILE = "prospective_monitoring_protocol.json"
@@ -212,7 +217,14 @@ def create_prospective_monitoring_forecast(
         season=int(protocol["monitor_season"]),
         event=event,
     )
-    if preflight.status != PREFLIGHT_READY:
+    if preflight.status != PREFLIGHT_READY and not (
+        preflight.status == PREFLIGHT_ALREADY_FORECASTED
+        and existing_forecast_entry_list_regeneration_required(
+            config,
+            protocol_name,
+            slugify(event),
+        )
+    ):
         raise ValueError(f"Monitoring preflight is not ready: {preflight.status}")
     preflight_payload = _read_json(preflight.summary_path)
     dataset, dataset_status = read_monitoring_dataset(
@@ -233,9 +245,23 @@ def create_prospective_monitoring_forecast(
         registry_path=metrics_dir / "prospective_monitoring_event_registry.csv",
         strict=True,
     )
-    assert_forecast_not_exists(metrics_dir, protocol_name, str(event_row["event_slug"]))
-
     dataset = monitoring_dataset_for_forecast(config, protocol, dataset, event_row)
+    entry_audit = audit_qualifying_entry_list(
+        config,
+        season=int(protocol["monitor_season"]),
+        event=str(event_row.get("event", event)),
+        event_order=int(event_order_lineage["event_order"]),
+        feature_rows=dataset[event_key_series(dataset).astype(str).eq(event_key)].copy(),
+    )
+    if not entry_audit.forecast_allowed:
+        reasons = "; ".join(entry_audit.summary.get("blocking_reasons", []))
+        raise ValueError(f"Qualifying entry-list audit blocks forecast creation: {reasons}")
+    assert_forecast_can_be_created(
+        config,
+        protocol_name,
+        str(event_row["event_slug"]),
+        entry_audit.drivers,
+    )
     event_order = monitoring_event_order_keys(dataset, registry, protocol)
     prior_settled_events = settled_event_keys(
         metrics_dir,
@@ -326,6 +352,19 @@ def create_prospective_monitoring_forecast(
         candidate_eligible=candidate_eligible,
         selection_reason=selection_reason,
     )
+    _annotate_entry_list_forecast_rows(forecasts, entry_audit)
+    _annotate_entry_list_forecast_rows(shadow, entry_audit)
+    forecast_entry_audit = audit_qualifying_entry_list(
+        config,
+        season=int(protocol["monitor_season"]),
+        event=str(event_row.get("event", event)),
+        event_order=int(event_order_lineage["event_order"]),
+        feature_rows=dataset[event_key_series(dataset).astype(str).eq(event_key)].copy(),
+        forecast_rows=forecasts,
+    )
+    if not forecast_entry_audit.forecast_allowed:
+        reasons = "; ".join(forecast_entry_audit.summary.get("blocking_reasons", []))
+        raise ValueError(f"Forecast driver-set parity failed: {reasons}")
     snapshot_hash = forecast_snapshot_hash(forecasts, shadow)
     leakage["forecast_snapshot_hash"] = snapshot_hash
     selection = monitoring_selection_row(
@@ -1533,6 +1572,15 @@ def monitoring_dataset_for_forecast(
     for column in target_columns:
         if column not in feature_rows:
             feature_rows[column] = pd.NA
+    feature_rows, _entry_audit = constrain_features_to_entry_list(
+        config,
+        season=int(protocol["monitor_season"]),
+        event=str(event_row.get("event", event_row["event_slug"])),
+        event_order=(
+            int(event_row["event_order"]) if not pd.isna(event_row["event_order"]) else None
+        ),
+        feature_rows=feature_rows,
+    )
     return pd.concat([historical, feature_rows], ignore_index=True, sort=False)
 
 
@@ -1810,6 +1858,16 @@ def monitoring_prediction_rows(
     return forecasts.loc[:, forecast_columns()], shadow.loc[:, forecast_columns()]
 
 
+def _annotate_entry_list_forecast_rows(
+    frame: pd.DataFrame,
+    audit: Any,
+) -> None:
+    frame["qualifying_entry_list_status"] = ENTRY_LIST_PARITY_PASSED
+    frame["qualifying_entry_list_source"] = audit.summary.get("resolution_source", "")
+    frame["qualifying_entry_list_driver_count"] = audit.summary.get("entry_list_driver_count", 0)
+    frame["qualifying_entry_list_summary_path"] = _relative_report_path(audit.summary_path)
+
+
 def role_frame(
     frame: pd.DataFrame,
     *,
@@ -1901,6 +1959,10 @@ def role_frame(
     result["preflight_run_id"] = preflight.get("preflight_run_id")
     result["preflight_status"] = preflight.get("status")
     result["preflight_summary_path"] = preflight.get("preflight_summary_path")
+    result["qualifying_entry_list_status"] = pd.NA
+    result["qualifying_entry_list_source"] = pd.NA
+    result["qualifying_entry_list_driver_count"] = pd.NA
+    result["qualifying_entry_list_summary_path"] = pd.NA
     result["actual_gap_sec"] = pd.NA
     result["absolute_error_sec"] = pd.NA
     return result
@@ -3687,6 +3749,96 @@ def assert_forecast_not_exists(metrics_dir: Path, protocol_name: str, event_slug
         raise ValueError(f"Forecast snapshot already exists for {event_slug}")
 
 
+def assert_forecast_can_be_created(
+    config: DataConfig,
+    protocol_name: str,
+    event_slug: str,
+    entry_drivers: pd.DataFrame,
+) -> None:
+    """Allow regeneration only when existing rows fail entry-list parity."""
+    forecasts = read_parquet(config.metrics_output_dir / "prospective_monitoring_forecasts.parquet")
+    if forecasts.empty or "protocol_name" not in forecasts:
+        return
+    event_rows = forecasts[
+        forecasts["protocol_name"].astype(str).eq(protocol_name)
+        & forecasts["event_slug"].astype(str).eq(event_slug)
+    ].copy()
+    if event_rows.empty:
+        return
+    diagnostic_only = event_rows.get(
+        "diagnostic_only",
+        pd.Series(False, index=event_rows.index),
+    )
+    live = event_rows[~diagnostic_only.astype(bool)]
+    if live.empty:
+        return
+    expected = set(entry_drivers["driver_key"].astype(str))
+    valid_existing = False
+    for _forecast_id, group in live.groupby("forecast_id", sort=False):
+        observed = set(
+            group.get("driver_key", group.get("driver", pd.Series(dtype=str)))
+            .dropna()
+            .astype(str)
+            .str.lower()
+        )
+        duplicate_count = int(group.get("driver_key", group.get("driver")).duplicated().sum())
+        if (
+            observed == expected
+            and duplicate_count == 0
+            and _forecast_group_has_entry_list_parity(group)
+        ):
+            valid_existing = True
+            break
+        audit_qualifying_entry_list(
+            config,
+            season=int(group["season"].iloc[0]),
+            event=str(group["event"].iloc[0]),
+            event_order=int(group["event_order"].iloc[0])
+            if not pd.isna(group["event_order"].iloc[0])
+            else None,
+            forecast_rows=group,
+            feature_rows=pd.DataFrame(),
+            allow_fastf1=False,
+        )
+    if valid_existing:
+        raise ValueError(f"Forecast snapshot already exists for {event_slug}")
+
+
+def existing_forecast_entry_list_regeneration_required(
+    config: DataConfig,
+    protocol_name: str,
+    event_slug: str,
+) -> bool:
+    forecasts = read_parquet(config.metrics_output_dir / "prospective_monitoring_forecasts.parquet")
+    if forecasts.empty or "protocol_name" not in forecasts:
+        return False
+    event_rows = forecasts[
+        forecasts["protocol_name"].astype(str).eq(protocol_name)
+        & forecasts["event_slug"].astype(str).eq(event_slug)
+    ].copy()
+    if event_rows.empty:
+        return False
+    diagnostic_only = event_rows.get(
+        "diagnostic_only",
+        pd.Series(False, index=event_rows.index),
+    )
+    live = event_rows[~diagnostic_only.astype(bool)]
+    if live.empty:
+        return False
+    return not any(
+        _forecast_group_has_entry_list_parity(group)
+        for _, group in live.groupby("forecast_id", sort=False)
+    )
+
+
+def _forecast_group_has_entry_list_parity(group: pd.DataFrame) -> bool:
+    if "qualifying_entry_list_status" not in group:
+        return False
+    return bool(
+        group["qualifying_entry_list_status"].astype(str).eq(ENTRY_LIST_PARITY_PASSED).all()
+    )
+
+
 def build_event_order_reconciliation(
     protocol: dict[str, Any],
     registry: pd.DataFrame,
@@ -4306,6 +4458,10 @@ def forecast_columns() -> list[str]:
         "preflight_run_id",
         "preflight_status",
         "preflight_summary_path",
+        "qualifying_entry_list_status",
+        "qualifying_entry_list_source",
+        "qualifying_entry_list_driver_count",
+        "qualifying_entry_list_summary_path",
     ]
 
 

@@ -25,7 +25,7 @@ from tests.test_dashboard_export import (
 
 def test_fp3_is_selected_before_q_on_conventional_weekend(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    _write_practice(config, fp1=("ALO", "STR", "CRA"), fp2=("ALO", "STR"), fp3=("ALO", "STR"))
+    _write_practice(config, fp1=("ALO", "STR"), fp2=("ALO", "STR"), fp3=("ALO", "STR"))
 
     audit = audit_qualifying_entry_list(
         config,
@@ -40,8 +40,7 @@ def test_fp3_is_selected_before_q_on_conventional_weekend(tmp_path: Path) -> Non
     assert audit.summary["q_data_available"] is False
     assert audit.summary["q_data_required"] is False
     assert set(audit.drivers["driver"]) == {"ALO", "STR"}
-    assert audit.exclusions["driver"].tolist() == ["CRA"]
-    assert audit.exclusions["exclusion_reason"].tolist() == ["fp1_only_not_in_latest_session"]
+    assert audit.exclusions.empty
 
 
 def test_latest_session_not_union_excludes_fp1_fp2_only_driver(tmp_path: Path) -> None:
@@ -60,18 +59,15 @@ def test_latest_session_not_union_excludes_fp1_fp2_only_driver(tmp_path: Path) -
         allow_fastf1=False,
     )
 
-    assert set(audit.drivers["driver"]) == {"VER", "NOR"}
+    assert not audit.forecast_allowed
+    assert "identity_or_team_mismatch" in set(audit.failures["check_name"])
     assert "DEV" not in set(audit.drivers["driver"])
-    assert audit.summary["entry_list_driver_count"] == 2
-    assert audit.summary["practice_participant_count"] == 3
-    assert audit.exclusions["exclusion_reason"].tolist() == [
-        "earlier_practice_only_not_in_latest_session"
-    ]
 
 
-def test_replacement_present_in_fp3_is_included_without_entry_artifact(tmp_path: Path) -> None:
+def test_replacement_present_in_fp3_is_included_with_authoritative_roster(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_practice(config, fp1=("VER", "REG"), fp2=("VER", "REG"), fp3=("VER", "BEA"))
+    _write_race_roster(config, [("VER", "Team VER"), ("BEA", "Team BEA")])
     features = _features([("VER", "Team VER"), ("REG", "Team REG"), ("BEA", "Team BEA")])
 
     constrained, audit = constrain_features_to_entry_list(
@@ -85,7 +81,42 @@ def test_replacement_present_in_fp3_is_included_without_entry_artifact(tmp_path:
 
     assert set(constrained["driver"]) == {"VER", "BEA"}
     assert "REG" not in set(constrained["driver"])
-    assert audit.summary["latest_session_participant_count"] == 2
+    assert audit.summary["resolution_source"] == "authoritative_race_driver_roster"
+
+
+def test_regular_roster_driver_absent_from_fp3_is_retained(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_practice(config, fp1=("VER", "PER", "CRA"), fp2=("VER", "PER"), fp3=("VER",))
+    _write_race_roster(config, [("VER", "Team VER"), ("PER", "Team PER")])
+
+    audit = audit_qualifying_entry_list(
+        config,
+        season=2026,
+        event="Belgian Grand Prix",
+        allow_fastf1=False,
+    )
+
+    assert audit.forecast_allowed
+    assert set(audit.drivers["driver"]) == {"VER", "PER"}
+    assert set(audit.exclusions["driver"]) == {"CRA"}
+    assert "PER" not in set(audit.exclusions["driver"])
+
+
+def test_official_entrant_without_latest_checkpoint_features_blocks(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_race_roster(config, [("VER", "Team VER"), ("PER", "Team PER")])
+    features = _features([("VER", "Team VER"), ("PER", "Team PER")])
+    features.loc[features["driver"].eq("PER"), "fp3_best_push_lap_time_sec"] = pd.NA
+
+    with pytest.raises(ValueError, match="latest-checkpoint feature values"):
+        constrain_features_to_entry_list(
+            config,
+            season=2026,
+            event="Belgian Grand Prix",
+            event_order=12,
+            feature_rows=features,
+            allow_fastf1=False,
+        )
 
 
 def test_participant_count_is_not_hard_coded_for_latest_session(tmp_path: Path) -> None:
@@ -112,7 +143,7 @@ def test_alternative_weekend_uses_latest_completed_session_before_q(
     config = _config(tmp_path)
     _write_session(config, "FP1", ("VER", "NOR"))
     _write_session(config, "SQ", ("VER", "NOR"))
-    _write_session(config, "S", ("VER", "BEA"))
+    _write_session(config, "S", ("VER", "NOR"))
     monkeypatch.setattr(
         "f1_prediction.data.qualifying_entry_list.fastf1.get_event_schedule",
         lambda season, include_testing=False: pd.DataFrame(
@@ -136,8 +167,8 @@ def test_alternative_weekend_uses_latest_completed_session_before_q(
 
     assert audit.forecast_allowed
     assert audit.summary["resolution_source"] == f"{LATEST_PRE_Q_SOURCE_PREFIX}:S"
-    assert set(audit.drivers["driver"]) == {"VER", "BEA"}
-    assert set(audit.exclusions["driver"]) == {"NOR"}
+    assert set(audit.drivers["driver"]) == {"VER", "NOR"}
+    assert audit.exclusions.empty
 
 
 def test_empty_latest_session_blocks(tmp_path: Path) -> None:
@@ -427,6 +458,20 @@ def _write_entry_list(config: DataConfig, entrants: list[tuple[str, str]]) -> No
     path = (
         config.project_root
         / "data/processed/monitoring/2026/belgian-grand-prix/qualifying_entry_list.csv"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "driver": [driver for driver, _team in entrants],
+            "team": [team for _driver, team in entrants],
+        }
+    ).to_csv(path, index=False)
+
+
+def _write_race_roster(config: DataConfig, entrants: list[tuple[str, str]]) -> None:
+    path = (
+        config.project_root
+        / "data/processed/monitoring/2026/belgian-grand-prix/race_driver_roster.csv"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(

@@ -1005,6 +1005,7 @@ def _write_registered_feature_artifacts(config: DataConfig, dataset_path: Path) 
             "target_coverage_status": "target_not_available",
         }
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        _write_entry_list(config, event, features)
         mask = registry["event_slug"].astype(str).eq(slug)
         registry.loc[mask, "feature_artifact_path"] = _portable(feature_path, config.project_root)
         registry.loc[mask, "feature_artifact_fingerprint"] = _fingerprint(feature_path)
@@ -1017,6 +1018,24 @@ def _write_registered_feature_artifacts(config: DataConfig, dataset_path: Path) 
         registry.loc[mask, "settleable"] = False
         registry.loc[mask, "target_coverage_status"] = "target_not_available"
     registry.to_csv(registry_path, index=False)
+
+
+def _write_entry_list(config: DataConfig, event: str, features: pd.DataFrame) -> None:
+    slug = event.strip().lower().replace(" ", "-")
+    path = (
+        config.project_root
+        / "data/processed/monitoring"
+        / "2026"
+        / slug
+        / "qualifying_entry_list.csv"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    columns = ["driver", "team"]
+    if "driver_key" in features:
+        columns.append("driver_key")
+    if "team_key" in features:
+        columns.append("team_key")
+    features[columns].drop_duplicates().to_csv(path, index=False)
 
 
 def _write_target_artifact(config: DataConfig, dataset_path: Path, event: str) -> None:

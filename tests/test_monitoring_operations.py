@@ -10,6 +10,7 @@ from f1_prediction.config import DataConfig, FeatureConfig, PushLapConfig, load_
 from f1_prediction.data.fastf1_loader import build_lap_output_path
 from f1_prediction.modeling.monitoring_data_integrity_audit import (
     MonitoringDataIntegrityAuditSummary,
+    create_monitoring_data_integrity_audit,
 )
 from f1_prediction.modeling.monitoring_operations import (
     EVENT_ORDER_RESOLUTION_SOURCE,
@@ -241,7 +242,11 @@ def test_before_qualifying_rerun_reuses_existing_forecast(tmp_path: Path) -> Non
         _fingerprint(config.metrics_output_dir / "prospective_monitoring_forecasts.parquet")
         == before
     )
-    assert json.loads(second.summary_path.read_text())["forecast_status"] == "forecast_reused"
+    payload = json.loads(second.summary_path.read_text())
+    assert payload["forecast_status"] == "forecast_reused"
+    assert payload["forecast_driver_count"] == 4
+    assert payload["eligible_driver_count"] == 4
+    assert payload["driver_set_parity_status"] == "driver_set_parity_passed"
 
 
 def test_after_qualifying_rerun_reuses_existing_settlement(tmp_path: Path) -> None:
@@ -265,7 +270,78 @@ def test_after_qualifying_rerun_reuses_existing_settlement(tmp_path: Path) -> No
         _fingerprint(config.metrics_output_dir / "prospective_monitoring_settlements.parquet")
         == before
     )
-    assert json.loads(second.summary_path.read_text())["settlement_status"] == "settlement_reused"
+    payload = json.loads(second.summary_path.read_text())
+    current = _dashboard_current(config)
+    assert payload["settlement_status"] == "settlement_reused"
+    assert payload["forecast_driver_count"] == 4
+    assert payload["eligible_driver_count"] == 4
+    assert payload["actual_qualifying_driver_count"] == 4
+    assert payload["evaluable_driver_count"] == 4
+    assert payload["settlement_denominator"] == 4
+    assert payload["forecast_coverage"] == "4/4"
+    assert payload["forecast_coverage_ratio"] == 1.0
+    assert payload["coverage_status"] == "full_coverage"
+    assert payload["forecast_coverage"] == current["data"]["settlement_status"]["forecast_coverage"]
+
+
+def test_blocked_before_qualifying_preserves_existing_dashboard_state(
+    tmp_path: Path,
+) -> None:
+    config = _configured_workspace(tmp_path)
+    run_monitoring_before_qualifying(
+        config,
+        load_model_config(),
+        _features(),
+        season=2026,
+        event="Monza",
+    )
+    _write_q_raw(config, 2026, "Monza")
+    run_monitoring_after_qualifying(config, season=2026, event="Monza")
+    dashboard_path = config.metrics_output_dir.parent / "dashboard/current_event.json"
+    dashboard_before = _fingerprint(dashboard_path)
+    forecast_before = _fingerprint(
+        config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    )
+    settlement_before = _fingerprint(
+        config.metrics_output_dir / "prospective_monitoring_settlements.parquet"
+    )
+
+    summary = run_monitoring_before_qualifying(
+        config,
+        load_model_config(),
+        _features(),
+        season=2026,
+        event="Monza",
+    )
+
+    payload = json.loads(summary.summary_path.read_text())
+    stages = pd.read_csv(summary.stages_path)
+    current = _dashboard_current(config)
+    audit = create_monitoring_data_integrity_audit(config)
+    checks = pd.read_csv(audit.checks_path)
+    dashboard_actual_check = checks[
+        checks["event_slug"].astype(str).eq("monza")
+        & checks["check_name"].astype(str).eq("dashboard_actual_values_match_settlement")
+    ].iloc[0]
+
+    assert summary.status == "blocked"
+    assert payload["forecast_status"] == "forecast_reused"
+    assert payload["dashboard_preservation_status"] == "preserved_existing_dashboard"
+    assert payload["dashboard_current_event"] == "Monza"
+    assert stages.loc[stages["stage"].eq("forecast_created"), "status"].iloc[0] == "blocked"
+    assert _fingerprint(dashboard_path) == dashboard_before
+    assert (
+        _fingerprint(config.metrics_output_dir / "prospective_monitoring_forecasts.parquet")
+        == forecast_before
+    )
+    assert (
+        _fingerprint(config.metrics_output_dir / "prospective_monitoring_settlements.parquet")
+        == settlement_before
+    )
+    assert current["data"]["event_identity"]["event_slug"] == "monza"
+    assert current["data"]["lifecycle"]["state"] == "settled"
+    assert dashboard_actual_check["status"] == "passed"
+    assert "forecast_rows=4" in str(dashboard_actual_check["observed_value"])
 
 
 def test_blocked_preflight_stops_before_forecast(
