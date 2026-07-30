@@ -3,7 +3,61 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: dark;
+  --apex-background: 7 11 18;
+  --apex-surface: 17 24 39;
+  --apex-surface-elevated: 13 19 30;
+  --apex-surface-muted: 23 32 51;
+  --apex-foreground: 248 250 252;
+  --apex-secondary: 168 179 199;
+  --apex-muted: 124 135 155;
+  --apex-border: 43 52 67;
+  --apex-brand: 225 6 0;
+  --apex-brand-soft: 64 22 25;
+  --apex-success: 52 211 153;
+  --apex-success-soft: 14 48 42;
+  --apex-success-text: 167 243 208;
+  --apex-warning: 245 158 11;
+  --apex-warning-soft: 55 39 16;
+  --apex-warning-text: 253 230 138;
+  --apex-danger: 248 113 113;
+  --apex-danger-soft: 66 25 30;
+  --apex-danger-text: 254 202 202;
+  --apex-ink: 13 19 30;
+  --apex-on-strong: 248 250 252;
+  --apex-on-strong-muted: 203 213 225;
+  --shadow-panel: 0 18px 56px rgba(0, 0, 0, 0.26);
+  --shadow-card: 0 10px 34px rgba(0, 0, 0, 0.2);
+  --shadow-hero: 0 28px 80px rgba(0, 0, 0, 0.35);
+}
+
+:root[data-theme="light"] {
   color-scheme: light;
+  --apex-background: 247 248 250;
+  --apex-surface: 255 255 255;
+  --apex-surface-elevated: 255 255 255;
+  --apex-surface-muted: 241 245 249;
+  --apex-foreground: 15 23 42;
+  --apex-secondary: 71 85 105;
+  --apex-muted: 100 116 139;
+  --apex-border: 226 232 240;
+  --apex-brand: 225 6 0;
+  --apex-brand-soft: 254 242 242;
+  --apex-success: 5 150 105;
+  --apex-success-soft: 236 253 245;
+  --apex-success-text: 6 95 70;
+  --apex-warning: 217 119 6;
+  --apex-warning-soft: 255 251 235;
+  --apex-warning-text: 146 64 14;
+  --apex-danger: 220 38 38;
+  --apex-danger-soft: 254 242 242;
+  --apex-danger-text: 153 27 27;
+  --apex-ink: 17 24 39;
+  --apex-on-strong: 248 250 252;
+  --apex-on-strong-muted: 203 213 225;
+  --shadow-panel: 0 16px 50px rgba(15, 23, 42, 0.08);
+  --shadow-card: 0 8px 30px rgba(15, 23, 42, 0.055);
+  --shadow-hero: 0 24px 70px rgba(15, 23, 42, 0.16);
 }
 
 * {
@@ -13,13 +67,13 @@
 html {
   min-width: 320px;
   scroll-behavior: smooth;
-  background: #f7f8fa;
+  background: rgb(var(--apex-background));
 }
 
 body {
   margin: 0;
-  background: #f7f8fa;
-  color: #0f172a;
+  background: rgb(var(--apex-background));
+  color: rgb(var(--apex-foreground));
   font-family:
     Inter,
     ui-sans-serif,
@@ -28,6 +82,9 @@ body {
     BlinkMacSystemFont,
     "Segoe UI",
     sans-serif;
+  transition:
+    background-color 180ms ease,
+    color 180ms ease;
 }
 
 body,
@@ -44,15 +101,43 @@ a {
 }
 
 ::selection {
-  background: rgba(225, 6, 0, 0.18);
+  background: rgb(var(--apex-brand) / 0.28);
 }
 
 :focus-visible {
-  outline-color: #e10600;
+  outline: 2px solid rgb(var(--apex-brand));
+  outline-offset: 3px;
+}
+
+@layer components {
+  .status-neutral {
+    @apply bg-apex-surface text-apex-secondary;
+  }
+
+  .status-success {
+    @apply border-apex-success/35 bg-apex-successSoft text-apex-successText;
+  }
+
+  .status-warning {
+    @apply border-apex-warning/35 bg-apex-warningSoft text-apex-warningText;
+  }
+
+  .status-danger {
+    @apply border-apex-danger/35 bg-apex-dangerSoft text-apex-dangerText;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

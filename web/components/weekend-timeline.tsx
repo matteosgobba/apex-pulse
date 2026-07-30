@@ -23,10 +23,10 @@ export function WeekendTimeline({
     <section
       id="weekend"
       aria-labelledby="weekend-title"
-      className="rounded-3xl border border-apex-border bg-white p-6 shadow-card"
+      className="rounded-3xl border border-apex-border bg-apex-panel p-6 shadow-card"
     >
       <div>
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-muted">
           Weekend progression
         </p>
         <h2 id="weekend-title" className="mt-2 text-2xl font-semibold text-apex-text">
@@ -48,10 +48,10 @@ export function WeekendTimeline({
               <div
                 className={`h-full rounded-2xl border p-4 ${
                   isNext
-                    ? "border-apex-accent bg-red-50"
+                    ? "border-apex-accent/70 bg-apex-accentSoft"
                     : completed
-                      ? "border-emerald-200 bg-emerald-50/60"
-                      : "border-apex-border bg-slate-50"
+                      ? "border-apex-success/35 bg-apex-successSoft"
+                      : "border-apex-border bg-apex-surface"
                 }`}
               >
                 <div className="flex items-center gap-2">
@@ -59,18 +59,18 @@ export function WeekendTimeline({
                     aria-hidden="true"
                     className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${
                       completed
-                        ? "bg-emerald-600 text-white"
+                        ? "bg-apex-success text-apex-ink"
                         : isNext
-                          ? "bg-apex-accent text-white"
-                          : "bg-slate-200 text-slate-500"
+                          ? "bg-apex-accent text-apex-onStrong"
+                          : "bg-apex-border text-apex-muted"
                     }`}
                   >
                     {completed ? "✓" : index + 1}
                   </span>
                   <span className="font-semibold text-apex-text">{sessionDisplayName(code)}</span>
                 </div>
-                <p className="mt-3 text-xs font-medium text-slate-500">{status}</p>
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="mt-3 text-xs font-medium text-apex-muted">{status}</p>
+                <p className="mt-1 text-xs text-apex-muted">
                   {formatScheduleTime(scheduled?.scheduled_start_utc)}
                 </p>
               </div>
@@ -78,7 +78,7 @@ export function WeekendTimeline({
           );
         })}
       </ol>
-      <p className="mt-4 text-xs leading-5 text-slate-500">
+      <p className="mt-4 text-xs leading-5 text-apex-muted">
         Status reflects exported artifact availability, not lap-by-lap live coverage.
       </p>
     </section>

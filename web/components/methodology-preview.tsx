@@ -21,7 +21,7 @@ const STEPS = [
 export function MethodologyPreview() {
   return (
     <section id="methodology" aria-labelledby="methodology-preview-title">
-      <div className="rounded-[2rem] bg-slate-100 p-6 sm:p-10">
+      <div className="rounded-[2rem] border border-apex-border bg-apex-elevated p-6 shadow-card sm:p-10">
         <div className="flex flex-wrap items-end justify-between gap-5">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
@@ -36,21 +36,24 @@ export function MethodologyPreview() {
           </div>
           <Link
             href="/methodology"
-            className="rounded-full bg-apex-text px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-apex-accent"
+            className="rounded-full bg-apex-text px-5 py-2.5 text-sm font-semibold text-apex-bg transition-colors hover:bg-apex-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-apex-accent"
           >
             Explore methodology
           </Link>
         </div>
         <div className="mt-8 grid gap-4 md:grid-cols-3">
           {STEPS.map((step) => (
-            <article key={step.number} className="rounded-2xl bg-white p-5">
+            <article
+              key={step.number}
+              className="rounded-2xl border border-apex-border bg-apex-panel p-5"
+            >
               <p className="text-sm font-semibold text-apex-accent">{step.number}</p>
               <h3 className="mt-4 text-lg font-semibold text-apex-text">{step.title}</h3>
-              <p className="mt-2 text-sm leading-6 text-slate-600">{step.body}</p>
+              <p className="mt-2 text-sm leading-6 text-apex-secondary">{step.body}</p>
             </article>
           ))}
         </div>
-        <p className="mt-6 max-w-3xl text-xs leading-5 text-slate-500">
+        <p className="mt-6 max-w-3xl text-xs leading-5 text-apex-muted">
           Apex Pulse uses public data only. It has no private team telemetry, paid live feed, or
           control over backend forecasting operations.
         </p>

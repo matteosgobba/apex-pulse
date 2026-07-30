@@ -30,7 +30,7 @@ export function PredictionOfficialComparison({
             How the forecast compared
           </h2>
         </div>
-        <p className="max-w-md text-xs leading-5 text-slate-500">
+        <p className="max-w-md text-xs leading-5 text-apex-muted">
           “Over” means the model predicted a better finishing position than achieved. “Under”
           means the driver finished higher than predicted.
         </p>
@@ -38,8 +38,8 @@ export function PredictionOfficialComparison({
       <div className="mt-6">
         <CoverageNotice coverage={coverage} entrants={unforecastedEntrants} />
       </div>
-      <div className="mt-4 overflow-hidden rounded-3xl border border-apex-border bg-white shadow-card">
-        <div className="hidden grid-cols-[minmax(180px,1fr)_90px_90px_130px_110px_110px_100px] gap-3 border-b border-apex-border bg-apex-surface px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 lg:grid">
+      <div className="mt-4 overflow-hidden rounded-3xl border border-apex-border bg-apex-panel shadow-card">
+        <div className="hidden grid-cols-[minmax(180px,1fr)_90px_90px_130px_110px_110px_100px] gap-3 border-b border-apex-border bg-apex-surface px-5 py-3 text-xs font-semibold uppercase tracking-wide text-apex-muted lg:grid">
           <span>Driver</span>
           <span>Predicted</span>
           <span>Official</span>
@@ -54,30 +54,30 @@ export function PredictionOfficialComparison({
             return (
               <li
                 key={`${row.driverCode}-${row.predictedPosition}`}
-                className="border-b border-apex-border/70 p-4 last:border-b-0 lg:grid lg:grid-cols-[minmax(180px,1fr)_90px_90px_130px_110px_110px_100px] lg:items-center lg:gap-3 lg:px-5"
+                className="border-b border-apex-border/70 p-4 transition-colors last:border-b-0 hover:bg-apex-surface/55 lg:grid lg:grid-cols-[minmax(180px,1fr)_90px_90px_130px_110px_110px_100px] lg:items-center lg:gap-3 lg:px-5"
               >
                 <div className="flex min-w-0 items-center gap-3">
                   <TeamMark team={row.team} size="sm" />
                   <div className="min-w-0">
                     <p className="font-semibold text-apex-text">{row.driverCode}</p>
-                    <p className="truncate text-xs text-slate-500">{row.team.displayName}</p>
+                    <p className="truncate text-xs text-apex-muted">{row.team.displayName}</p>
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:contents">
                   <Value label="Predicted" value={row.predictedPosition} />
                   <Value label="Official" value={row.actualPosition} />
                   <div>
-                    <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 lg:hidden">
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-apex-muted lg:hidden">
                       Position read
                     </span>
                     <p
                       aria-label={delta.label}
                       className={`mt-1 text-sm font-semibold lg:mt-0 ${
                         delta.direction === "exact"
-                          ? "text-emerald-700"
+                          ? "text-apex-successText"
                           : delta.direction === "unavailable"
-                            ? "text-slate-400"
-                            : "text-slate-700"
+                            ? "text-apex-muted"
+                            : "text-apex-secondary"
                       }`}
                     >
                       {delta.shortLabel}
@@ -106,7 +106,7 @@ export function PredictionOfficialComparison({
 function Value({ label, value }: { label: string; value: string | number | null }) {
   return (
     <div>
-      <span className="text-[10px] font-medium uppercase tracking-wide text-slate-500 lg:hidden">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-apex-muted lg:hidden">
         {label}
       </span>
       <p className="mt-1 text-sm font-semibold text-apex-text lg:mt-0">{value ?? "—"}</p>

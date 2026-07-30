@@ -49,12 +49,12 @@ export function EventMetrics({ metrics }: { metrics: PublicEventViewModel["metri
         {cards.map((card) => (
           <article
             key={card.label}
-            className="rounded-2xl border border-apex-border bg-white p-5 shadow-card"
+            className="rounded-2xl border border-apex-border bg-apex-panel p-5 shadow-card"
             title={card.hint}
           >
-            <p className="text-sm font-medium text-slate-500">{card.label}</p>
+            <p className="text-sm font-medium text-apex-muted">{card.label}</p>
             <p className="mt-3 text-2xl font-semibold text-apex-text">{card.value}</p>
-            <p className="mt-2 text-xs leading-5 text-slate-500">{card.hint}</p>
+            <p className="mt-2 text-xs leading-5 text-apex-muted">{card.hint}</p>
           </article>
         ))}
       </div>

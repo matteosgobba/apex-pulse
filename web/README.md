@@ -37,6 +37,24 @@ The frontend expects the API at `http://127.0.0.1:8000` unless
 
 The old permanent operator sidebar is not part of the public interface.
 
+## Theme system
+
+Apex Pulse defaults to dark mode on a visitor's first load. The sun/moon control in the shared
+header switches immediately between dark and light without reloading, remains visible at mobile
+sizes, and stores only `dark` or `light` under the browser-storage key `apex-pulse-theme`. Missing,
+invalid, or unavailable storage falls back safely to dark.
+
+The root layout ships `data-theme="dark"` as the no-JavaScript fallback and runs a small inline
+initializer in the document head. That initializer restores a valid preference, `color-scheme`,
+and `theme-color` before React hydrates, preventing a light-theme flash. The client theme provider
+is the only runtime owner of theme state and browser storage.
+
+`app/globals.css` defines the shared semantic color contract for background, surfaces, text,
+borders, brand, success, warning, danger, and shadows. `tailwind.config.ts` exposes those variables
+to components through the existing `apex-*` utilities, so the public routes share one component
+implementation rather than separate dark and light trees. Theme transitions are limited to color
+changes and reduced to effectively instant when `prefers-reduced-motion` is enabled.
+
 ## Data and countdown
 
 The app consumes the existing version `1.0` dashboard JSON envelopes through the read-only FastAPI
@@ -94,4 +112,6 @@ npm run build
 The tests are deterministic and network-independent. They cover countdown selection and zero
 clamping, missing schedules, ordering, team fallbacks, comparison semantics, partial coverage,
 missing entrants, stale/unavailable states, contact filtering, technical disclosures, and public
-history separation.
+history separation. Theme coverage includes dark-default initialization, valid and invalid stored
+preferences, both toggle directions, root attribute updates, storage persistence, accessible labels,
+hydration behavior, shared desktop/mobile navigation, and all three public routes in both themes.

@@ -17,12 +17,12 @@ export function CoverageNotice({
   return (
     <aside
       aria-label="Forecast coverage"
-      className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"
+      className="status-warning rounded-2xl border p-4 text-sm"
     >
       <p className="font-semibold">
         Forecast coverage: {coverage ?? "partial"}
       </p>
-      <p className="mt-1 leading-6 text-amber-900">
+      <p className="mt-1 leading-6">
         {names
           ? `${names} appeared in the official result but was not included in the original pre-qualifying forecast. No retrospective prediction has been added.`
           : "Only entrants included in the original forecast are evaluated."}

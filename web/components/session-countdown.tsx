@@ -75,7 +75,7 @@ export function SessionCountdown({
   return (
     <section
       aria-label={`Countdown to ${name}`}
-      className="rounded-3xl border border-apex-border bg-white p-6 shadow-card"
+      className="rounded-3xl border border-apex-border bg-apex-panel p-6 shadow-card"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -84,7 +84,7 @@ export function SessionCountdown({
           </p>
           <h2 className="mt-2 text-2xl font-semibold text-apex-text">{name}</h2>
         </div>
-        <p className="text-sm text-slate-500">{localDate} · your local time</p>
+        <p className="text-sm text-apex-muted">{localDate} · your local time</p>
       </div>
       <div className="mt-6 grid grid-cols-4 gap-2 sm:gap-4">
         <TimePart value={parts.days} label="Days" />
@@ -102,7 +102,7 @@ function TimePart({ value, label }: { value: number; label: string }) {
       <div className="text-2xl font-semibold tracking-tight text-apex-text sm:text-4xl">
         {String(value).padStart(2, "0")}
       </div>
-      <div className="mt-1 text-[10px] font-medium uppercase tracking-wide text-slate-500 sm:text-xs">
+      <div className="mt-1 text-[10px] font-medium uppercase tracking-wide text-apex-muted sm:text-xs">
         {label}
       </div>
     </div>
@@ -121,20 +121,20 @@ function CountdownShell({
   return (
     <section
       aria-label={title}
-      className="rounded-3xl border border-apex-border bg-white p-6 shadow-card"
+      className="rounded-3xl border border-apex-border bg-apex-panel p-6 shadow-card"
     >
       <div className="flex items-start gap-4">
         <span
           className={`mt-1 h-3 w-3 shrink-0 rounded-full ${
-            complete ? "bg-emerald-500" : "bg-slate-300"
+            complete ? "bg-apex-success" : "bg-apex-muted"
           }`}
         />
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-muted">
             Weekend timing
           </p>
           <h2 className="mt-2 text-2xl font-semibold text-apex-text">{title}</h2>
-          <p className="mt-2 text-sm leading-6 text-slate-600">{detail}</p>
+          <p className="mt-2 text-sm leading-6 text-apex-secondary">{detail}</p>
         </div>
       </div>
     </section>

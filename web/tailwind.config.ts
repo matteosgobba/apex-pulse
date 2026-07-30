@@ -10,15 +10,29 @@ const config: Config = {
     extend: {
       colors: {
         apex: {
-          bg: "#F7F8FA",
-          panel: "#FFFFFF",
-          panelSoft: "#F1F5F9",
-          surface: "#F1F5F9",
-          border: "#E2E8F0",
-          muted: "#64748B",
-          text: "#0F172A",
-          ink: "#111827",
-          accent: "#E10600",
+          bg: "rgb(var(--apex-background) / <alpha-value>)",
+          panel: "rgb(var(--apex-surface) / <alpha-value>)",
+          elevated: "rgb(var(--apex-surface-elevated) / <alpha-value>)",
+          panelSoft: "rgb(var(--apex-surface-muted) / <alpha-value>)",
+          surface: "rgb(var(--apex-surface-muted) / <alpha-value>)",
+          border: "rgb(var(--apex-border) / <alpha-value>)",
+          muted: "rgb(var(--apex-muted) / <alpha-value>)",
+          secondary: "rgb(var(--apex-secondary) / <alpha-value>)",
+          text: "rgb(var(--apex-foreground) / <alpha-value>)",
+          ink: "rgb(var(--apex-ink) / <alpha-value>)",
+          accent: "rgb(var(--apex-brand) / <alpha-value>)",
+          accentSoft: "rgb(var(--apex-brand-soft) / <alpha-value>)",
+          success: "rgb(var(--apex-success) / <alpha-value>)",
+          successSoft: "rgb(var(--apex-success-soft) / <alpha-value>)",
+          successText: "rgb(var(--apex-success-text) / <alpha-value>)",
+          warning: "rgb(var(--apex-warning) / <alpha-value>)",
+          warningSoft: "rgb(var(--apex-warning-soft) / <alpha-value>)",
+          warningText: "rgb(var(--apex-warning-text) / <alpha-value>)",
+          danger: "rgb(var(--apex-danger) / <alpha-value>)",
+          dangerSoft: "rgb(var(--apex-danger-soft) / <alpha-value>)",
+          dangerText: "rgb(var(--apex-danger-text) / <alpha-value>)",
+          onStrong: "rgb(var(--apex-on-strong) / <alpha-value>)",
+          onStrongMuted: "rgb(var(--apex-on-strong-muted) / <alpha-value>)",
           amber: "#D97706",
           violet: "#6D5BD0"
         }
@@ -35,9 +49,9 @@ const config: Config = {
         ]
       },
       boxShadow: {
-        panel: "0 16px 50px rgba(15, 23, 42, 0.08)",
-        card: "0 8px 30px rgba(15, 23, 42, 0.055)",
-        hero: "0 24px 70px rgba(15, 23, 42, 0.16)"
+        panel: "var(--shadow-panel)",
+        card: "var(--shadow-card)",
+        hero: "var(--shadow-hero)"
       }
     }
   },

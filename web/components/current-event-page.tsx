@@ -71,12 +71,12 @@ export function CurrentEventPageView({
 
 function PublicEmptyState({ title, detail }: { title: string; detail: string }) {
   return (
-    <section className="mx-auto max-w-2xl rounded-[2rem] border border-dashed border-slate-300 bg-white p-10 text-center shadow-card">
+    <section className="mx-auto max-w-2xl rounded-[2rem] border border-dashed border-apex-border bg-apex-panel p-10 text-center shadow-card">
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
         Apex Pulse
       </p>
       <h1 className="mt-4 text-3xl font-semibold text-apex-text">{title}</h1>
-      <p className="mt-3 text-sm leading-6 text-slate-600">{detail}</p>
+      <p className="mt-3 text-sm leading-6 text-apex-secondary">{detail}</p>
     </section>
   );
 }

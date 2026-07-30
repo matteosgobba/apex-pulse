@@ -36,14 +36,14 @@ export function MonitoringHistoryPageView({ data }: { data: MonitoringHistoryPag
 
   return (
     <div className="space-y-14">
-      <section className="rounded-[2rem] bg-apex-ink px-6 py-10 text-white sm:px-10 sm:py-14">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-red-300">
+      <section className="rounded-[2rem] border border-white/10 bg-apex-ink px-6 py-10 text-apex-onStrong shadow-hero sm:px-10 sm:py-14">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
           Prediction history
         </p>
         <h1 className="mt-3 max-w-3xl text-4xl font-semibold tracking-tight sm:text-5xl">
           Preserved forecasts across race weekends.
         </h1>
-        <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-300">
+        <p className="mt-4 max-w-2xl text-sm leading-7 text-apex-onStrongMuted">
           Prospective predictions are kept separate from legacy descriptive records and historical
           backtests, so public performance claims use the right evidence.
         </p>
@@ -64,7 +64,7 @@ export function MonitoringHistoryPageView({ data }: { data: MonitoringHistoryPag
         <h2 id="past-predictions-title" className="mt-2 text-3xl font-semibold text-apex-text">
           Past predictions
         </h2>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-apex-secondary">
           Open an event to inspect its preserved forecast and, where available, official comparison.
         </p>
         {events.length > 0 ? (
@@ -86,23 +86,25 @@ export function MonitoringHistoryPageView({ data }: { data: MonitoringHistoryPag
 
       {legacy.length > 0 ? <TechnicalArchive records={legacy} /> : null}
 
-      <section className="rounded-3xl border border-apex-border bg-white p-6 shadow-card">
-        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+      <section className="rounded-3xl border border-apex-border bg-apex-panel p-6 shadow-card">
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-muted">
           Historical backtest context
         </p>
         <h2 className="mt-2 text-2xl font-semibold text-apex-text">Model development evidence</h2>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+        <p className="mt-3 max-w-3xl text-sm leading-6 text-apex-secondary">
           Backtests simulate earlier race weekends for model development. They are useful, but are
           not counted as prospective public predictions.
         </p>
-        <div className="mt-5 flex flex-wrap gap-3 text-sm text-slate-600">
-          <span className="rounded-full bg-slate-100 px-3 py-1.5">
+        <div className="mt-5 flex flex-wrap gap-3 text-sm text-apex-secondary">
+          <span className="rounded-full bg-apex-surface px-3 py-1.5">
             {backtest?.n_events ?? "—"} historical events
           </span>
-          <span className="rounded-full bg-slate-100 px-3 py-1.5">
+          <span className="rounded-full bg-apex-surface px-3 py-1.5">
             {backtest?.n_folds_successful ?? "—"} successful folds
           </span>
-          <span className="rounded-full bg-slate-100 px-3 py-1.5">Walk-forward evaluation</span>
+          <span className="rounded-full bg-apex-surface px-3 py-1.5">
+            Walk-forward evaluation
+          </span>
         </div>
       </section>
     </div>
@@ -115,30 +117,30 @@ function PredictionHistoryEvent({ event }: { event: MonitoringHistoryEvent }) {
   const comparisonRows = event.comparison_rows ?? [];
   const metrics = event.metrics;
   return (
-    <details className="group overflow-hidden rounded-3xl border border-apex-border bg-white shadow-card">
+    <details className="group overflow-hidden rounded-3xl border border-apex-border bg-apex-panel shadow-card">
       <summary className="cursor-pointer list-none p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-apex-accent sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-5">
           <div>
-            <p className="text-sm text-slate-500">{event.event_identity?.season ?? "—"}</p>
+            <p className="text-sm text-apex-muted">{event.event_identity?.season ?? "—"}</p>
             <h3 className="mt-1 text-2xl font-semibold text-apex-text">
               {event.event_identity?.event ?? "Unknown event"}
             </h3>
-            <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-600">
-              <span className="rounded-full bg-slate-100 px-3 py-1.5">
+            <div className="mt-3 flex flex-wrap gap-2 text-xs text-apex-secondary">
+              <span className="rounded-full bg-apex-surface px-3 py-1.5">
                 {publicLifecycleLabel(lifecycle)}
               </span>
-              <span className="rounded-full bg-slate-100 px-3 py-1.5">
+              <span className="rounded-full bg-apex-surface px-3 py-1.5">
                 {event.forecast_checkpoint
                   ? predictionCheckpointLabel(event.forecast_checkpoint)
                   : "Checkpoint unavailable"}
               </span>
-              <span className="rounded-full bg-slate-100 px-3 py-1.5">
+              <span className="rounded-full bg-apex-surface px-3 py-1.5">
                 Coverage {event.forecast_coverage ?? "unavailable"}
               </span>
             </div>
           </div>
           <div className="text-right">
-            <p className="text-xs text-slate-500">Gap MAE</p>
+            <p className="text-xs text-apex-muted">Gap MAE</p>
             <p className="mt-1 text-2xl font-semibold text-apex-text">
               {typeof metrics?.mae_gap_sec === "number"
                 ? `${metrics.mae_gap_sec.toFixed(3)}s`
@@ -166,7 +168,7 @@ function PredictionHistoryEvent({ event }: { event: MonitoringHistoryEvent }) {
                 return (
                   <div
                     key={`${row.driver_code ?? row.driver}-${row.predicted_position}`}
-                    className="flex items-center gap-3 rounded-2xl bg-white p-3"
+                    className="flex items-center gap-3 rounded-2xl border border-apex-border bg-apex-panel p-3"
                   >
                     <span className="w-7 text-lg font-semibold text-apex-text">
                       {row.predicted_position ?? "—"}
@@ -176,26 +178,26 @@ function PredictionHistoryEvent({ event }: { event: MonitoringHistoryEvent }) {
                       <p className="font-semibold text-apex-text">
                         {row.driver_code ?? row.driver ?? "—"}
                       </p>
-                      <p className="truncate text-xs text-slate-500">{team.displayName}</p>
+                      <p className="truncate text-xs text-apex-muted">{team.displayName}</p>
                     </div>
                     <div className="text-right text-xs">
                       <p className="font-semibold text-apex-text">
                         {formatSignedGap(row.predicted_gap_to_pole_sec)}
                       </p>
-                      {actual ? <p className="mt-1 text-slate-500">{delta.shortLabel}</p> : null}
+                      {actual ? <p className="mt-1 text-apex-muted">{delta.shortLabel}</p> : null}
                     </div>
                   </div>
                 );
               })}
             </div>
             {!event.settled ? (
-              <p className="mt-4 text-sm text-slate-600">
+              <p className="mt-4 text-sm text-apex-secondary">
                 Official qualifying comparison is not available for this event.
               </p>
             ) : null}
           </div>
         ) : (
-          <p className="text-sm text-slate-600">Detailed forecast rows are unavailable.</p>
+          <p className="text-sm text-apex-secondary">Detailed forecast rows are unavailable.</p>
         )}
       </div>
     </details>
@@ -204,7 +206,7 @@ function PredictionHistoryEvent({ event }: { event: MonitoringHistoryEvent }) {
 
 function TechnicalArchive({ records }: { records: LegacyDescriptiveRecord[] }) {
   return (
-    <details className="rounded-3xl border border-apex-border bg-white">
+    <details className="rounded-3xl border border-apex-border bg-apex-panel">
       <summary className="cursor-pointer list-none p-6 font-semibold text-apex-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-apex-accent">
         Technical archive · {records.length} legacy descriptive records
       </summary>
@@ -212,12 +214,12 @@ function TechnicalArchive({ records }: { records: LegacyDescriptiveRecord[] }) {
         {records.map((record) => (
           <article
             key={`${record.event_identity?.season}-${record.event_identity?.event_slug}`}
-            className="rounded-2xl bg-slate-100 p-4"
+            className="rounded-2xl bg-apex-surface p-4"
           >
             <h3 className="font-semibold text-apex-text">
               {record.event_identity?.season} {record.event_identity?.event}
             </h3>
-            <p className="mt-2 text-xs leading-5 text-slate-600">
+            <p className="mt-2 text-xs leading-5 text-apex-secondary">
               Descriptive only · excluded from prospective performance claims.
             </p>
           </article>
@@ -229,17 +231,17 @@ function TechnicalArchive({ records }: { records: LegacyDescriptiveRecord[] }) {
 
 function HistoryStat({ label, value }: { label: string; value: string | number | null | undefined }) {
   return (
-    <span className="rounded-full bg-white/10 px-4 py-2 text-slate-200">
-      {label}: <strong className="text-white">{value ?? "—"}</strong>
+    <span className="rounded-full bg-white/10 px-4 py-2 text-apex-onStrongMuted">
+      {label}: <strong className="text-apex-onStrong">{value ?? "—"}</strong>
     </span>
   );
 }
 
 function HistoryEmpty({ title, detail }: { title: string; detail: string }) {
   return (
-    <div className="mt-6 rounded-3xl border border-dashed border-slate-300 bg-white p-8 text-center">
+    <div className="mt-6 rounded-3xl border border-dashed border-apex-border bg-apex-panel p-8 text-center">
       <h2 className="text-xl font-semibold text-apex-text">{title}</h2>
-      <p className="mt-2 text-sm text-slate-600">{detail}</p>
+      <p className="mt-2 text-sm text-apex-secondary">{detail}</p>
     </div>
   );
 }
