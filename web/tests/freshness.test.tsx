@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { AppShell } from "@/components/app-shell";
+import { DataFreshnessNotice } from "@/components/data-freshness-notice";
 import { FreshnessIndicator } from "@/components/freshness-indicator";
 import { DEFAULT_STALE_AFTER_MINUTES, getDashboardStaleAfterMinutes } from "@/lib/config";
 import { evaluateFreshness } from "@/lib/freshness";
@@ -40,31 +41,34 @@ describe("dashboard freshness", () => {
     expect(freshness.relativeLabel).toBe("Updated 1 hour ago");
   });
 
-  test("stale artifact renders explicit stale warning in the shared app shell", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-06T12:00:00Z"));
+  test("stale artifact renders an understandable public notice", () => {
+    const freshness = evaluateFreshness("2026-07-06T08:30:00Z", {
+      now: new Date("2026-07-06T12:00:00Z"),
+      staleAfterMinutes: 180
+    });
+    render(<DataFreshnessNotice freshness={freshness} />);
 
-    render(
-      <AppShell health={null} generatedAt="2026-07-06T08:30:00Z">
-        <p>Dashboard body</p>
-      </AppShell>
-    );
-
-    expect(screen.getByText("Dashboard data may be stale.")).toBeInTheDocument();
-    expect(screen.getByText(/validated artifacts are exported by the operator workflow/i))
-      .toBeInTheDocument();
+    expect(screen.getByText(/Data may be stale/i)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toBeInTheDocument();
   });
 
   test("missing timestamp renders safe unknown state without stale warning", () => {
-    render(
-      <AppShell health={null} generatedAt={null}>
+    render(<DataFreshnessNotice freshness={evaluateFreshness(null)} />);
+
+    expect(screen.getByText("Update time unavailable")).toBeInTheDocument();
+    expect(screen.queryByText(/Data may be stale/i)).not.toBeInTheDocument();
+  });
+
+  test("public app shell exposes compact navigation and no operator sidebar", () => {
+    const { container } = render(
+      <AppShell health={null}>
         <p>Dashboard body</p>
       </AppShell>
     );
 
-    expect(screen.getByText("Update time unavailable")).toBeInTheDocument();
-    expect(screen.getByText("Unknown")).toBeInTheDocument();
-    expect(screen.queryByText("Dashboard data may be stale.")).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Current Event" })).toHaveAttribute("href", "/");
+    expect(container.querySelector("aside")).toBeNull();
   });
 
   test("configured stale threshold is respected", () => {

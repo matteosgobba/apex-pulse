@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * {
@@ -12,15 +12,14 @@
 
 html {
   min-width: 320px;
-  background: #080b10;
+  scroll-behavior: smooth;
+  background: #f7f8fa;
 }
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at top left, rgba(110, 231, 249, 0.08), transparent 32rem),
-    #080b10;
-  color: #eef4fb;
+  background: #f7f8fa;
+  color: #0f172a;
   font-family:
     Inter,
     ui-sans-serif,
@@ -45,5 +44,15 @@ a {
 }
 
 ::selection {
-  background: rgba(110, 231, 249, 0.3);
+  background: rgba(225, 6, 0, 0.18);
+}
+
+:focus-visible {
+  outline-color: #e10600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }

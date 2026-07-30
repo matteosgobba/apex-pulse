@@ -95,20 +95,22 @@ describe("MonitoringHistoryPageView", () => {
   test("separates valid prospective evidence from legacy records", () => {
     renderMonitoringPage();
 
-    expect(screen.getByText("Prospective Monitoring")).toBeInTheDocument();
-    expect(screen.getByText("Legacy Descriptive Records")).toBeInTheDocument();
-    expect(screen.getByText("Historical Backtest Context")).toBeInTheDocument();
+    expect(screen.getByText("Valid prospective evidence")).toBeInTheDocument();
+    expect(screen.getByText(/Technical archive · 2 legacy descriptive records/i)).toBeInTheDocument();
+    expect(screen.getByText("Historical backtest context")).toBeInTheDocument();
   });
 
   test("Australia and Great Britain appear only in the legacy section", () => {
     renderMonitoringPage();
 
-    const legacySection = screen.getByText("Legacy Descriptive Records").closest("section");
-    expect(legacySection).not.toBeNull();
-    expect(within(legacySection as HTMLElement).getByText("Australia")).toBeInTheDocument();
-    expect(within(legacySection as HTMLElement).getByText("Great Britain")).toBeInTheDocument();
+    const archive = screen
+      .getByText(/Technical archive · 2 legacy descriptive records/i)
+      .closest("details");
+    expect(archive).not.toBeNull();
+    expect(within(archive as HTMLElement).getByText(/Australia/)).toBeInTheDocument();
+    expect(within(archive as HTMLElement).getByText(/Great Britain/)).toBeInTheDocument();
 
-    const prospectiveSection = screen.getByText("Valid prospective evidence only").closest("section");
+    const prospectiveSection = screen.getByText("Valid prospective evidence").closest("section");
     expect(prospectiveSection).not.toBeNull();
     expect(within(prospectiveSection as HTMLElement).queryByText("Australia")).not.toBeInTheDocument();
     expect(
@@ -119,24 +121,22 @@ describe("MonitoringHistoryPageView", () => {
   test("legacy records do not affect valid prospective aggregate counts shown in UI", () => {
     renderMonitoringPage();
 
-    expect(screen.getByText("Valid events")).toBeInTheDocument();
-    expect(screen.getAllByText("1").length).toBeGreaterThan(0);
-    expect(screen.getByText("Aggregate MAE")).toBeInTheDocument();
-    expect(screen.getAllByText("0.117 sec").length).toBeGreaterThan(0);
+    expect(screen.getByText(/Prospective events:/)).toHaveTextContent("1");
+    expect(screen.getByText(/Aggregate gap MAE:/)).toHaveTextContent("0.117s");
   });
 
   test("historical backtest context is visually distinct from prospective monitoring", () => {
     renderMonitoringPage();
 
-    expect(screen.getByText(/Separate from prospective monitoring/i)).toBeInTheDocument();
-    expect(screen.getByText(/Backtests provide historical context/i)).toBeInTheDocument();
-    expect(screen.getByText("Walk Forward")).toBeInTheDocument();
+    expect(screen.getByText("Model development evidence")).toBeInTheDocument();
+    expect(screen.getByText(/not counted as prospective public predictions/i)).toBeInTheDocument();
+    expect(screen.getByText("Walk-forward evaluation")).toBeInTheDocument();
   });
 
   test("empty monitoring history renders a useful prospective empty state", () => {
     renderMonitoringPage(emptyHistory as HistoricalMonitoringEnvelope);
 
-    expect(screen.getByText("No valid prospective events yet.")).toBeInTheDocument();
+    expect(screen.getByText("No prospective predictions yet")).toBeInTheDocument();
   });
 });
 

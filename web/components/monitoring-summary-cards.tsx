@@ -8,9 +8,12 @@ export function MonitoringSummaryCards({
   monitoring: ValidProspectiveMonitoring | null | undefined;
 }) {
   const aggregate = monitoring?.aggregate_metrics;
-  const aggregateValue = aggregate?.available ? aggregate.value : null;
+  const aggregateValue =
+    aggregate?.available && "value" in aggregate ? aggregate.value : aggregate;
   const mae =
-    aggregateValue && typeof aggregateValue.mae_gap_sec === "number"
+    aggregateValue &&
+    "mae_gap_sec" in aggregateValue &&
+    typeof aggregateValue.mae_gap_sec === "number"
       ? aggregateValue.mae_gap_sec
       : null;
   return (

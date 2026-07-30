@@ -7,6 +7,7 @@ export type LifecycleState =
   | "forecast_available"
   | "awaiting_qualifying_targets"
   | "settled"
+  | "settled_partial_coverage"
   | "blocked"
   | "legacy_descriptive_only";
 
@@ -40,6 +41,25 @@ export interface EventIdentity {
   event: string | null;
   event_slug: string | null;
   event_order: number | null;
+}
+
+export interface EventScheduleSession {
+  session: "FP1" | "FP2" | "FP3" | "Q" | string;
+  display_name?: string | null;
+  scheduled_start_utc?: string | null;
+  scheduled_end_utc?: string | null;
+}
+
+export interface EventSchedule {
+  available: boolean;
+  reason?: string | null;
+  source?: string | null;
+  timezone?: string | null;
+  location?: string | null;
+  country?: string | null;
+  circuit?: string | null;
+  sessions?: EventScheduleSession[] | null;
+  value?: null;
 }
 
 export interface LifecycleInfo {
@@ -87,11 +107,17 @@ export interface ForecastStatus {
 }
 
 export interface SettlementStatus {
+  actual_qualifying_driver_count?: number | null;
   available?: boolean | null;
+  coverage_warning?: string | null;
   excluded_driver_count?: number | null;
+  forecast_coverage?: string | null;
+  forecast_coverage_percentage?: number | null;
+  forecast_coverage_status?: string | null;
   scored_driver_count?: number | null;
   settled_at_utc?: string | null;
   settlement_valid?: boolean | null;
+  unforecasted_actual_entrants?: UnforecastedActualEntrant[] | null;
 }
 
 export interface LegacyStatus {
@@ -119,16 +145,23 @@ export interface FreshnessInfo {
 }
 
 export interface SummaryKpis {
+  actual_qualifying_driver_count?: number | null;
   actual_pole_driver?: string | null;
+  coverage_warning?: string | null;
   forecast_checkpoint?: string | null;
+  forecast_coverage?: string | null;
+  forecast_coverage_percentage?: number | null;
+  forecast_coverage_status?: string | null;
   forecasted_driver_count?: number | null;
   interval_availability_rate?: number | null;
   predicted_pole_driver?: string | null;
   settlement_mae_gap_sec?: number | null;
+  unforecasted_actual_entrants?: UnforecastedActualEntrant[] | null;
 }
 
 export interface CurrentEventData extends Record<string, unknown> {
   event_identity?: EventIdentity | null;
+  event_schedule?: EventSchedule | null;
   lifecycle?: LifecycleInfo | null;
   freshness?: FreshnessInfo | null;
   monitoring_protocol?: MonitoringProtocol | null;
@@ -160,6 +193,7 @@ export interface MonitoringReadiness {
 
 export interface PracticeStatusData extends Record<string, unknown> {
   event_identity?: EventIdentity | null;
+  event_schedule?: EventSchedule | null;
   lifecycle_state?: LifecycleState | null;
   sessions?: SessionStatus[];
   monitoring_readiness?: MonitoringReadiness | null;
@@ -244,8 +278,11 @@ export interface SettlementMetadata extends Record<string, unknown> {
 }
 
 export interface SettlementSummaryMetrics extends Record<string, unknown> {
+  actual_qualifying_driver_count?: number | null;
   actual_pole_driver?: string | null;
+  coverage_warning?: string | null;
   driver_count?: number | null;
+  evaluable_driver_count?: number | null;
   mae_gap_sec?: number | null;
   mean_absolute_position_error?: number | null;
   median_absolute_gap_error_sec?: number | null;
@@ -253,9 +290,22 @@ export interface SettlementSummaryMetrics extends Record<string, unknown> {
   scored_driver_count?: number | null;
   settlement_evaluable_driver_count?: number | null;
   excluded_driver_count?: number | null;
+  forecast_coverage?: string | null;
+  forecast_coverage_percentage?: number | null;
+  forecast_coverage_ratio?: number | null;
+  forecast_coverage_status?: string | null;
+  forecast_driver_count?: number | null;
   top_10_agreement?: number | null;
   top_3_agreement?: number | null;
   top_5_agreement?: number | null;
+  unforecasted_actual_entrant_count?: number | null;
+  unforecasted_actual_entrants?: UnforecastedActualEntrant[] | null;
+}
+
+export interface UnforecastedActualEntrant {
+  driver?: string | null;
+  driver_code?: string | null;
+  reason?: string | null;
 }
 
 export interface SettlementDriverComparisonRow extends Record<string, unknown> {
@@ -283,6 +333,7 @@ export interface SettlementData extends Record<string, unknown> {
   settlement_evaluable_rows?: DashboardRows<SettlementDriverComparisonRow>;
   forecast_only_rows?: DashboardRows<SettlementDriverComparisonRow>;
   summary_metrics?: SettlementSummaryMetrics | null;
+  unforecasted_actual_entrants?: UnforecastedActualEntrant[] | null;
 }
 
 export type HistoricalMonitoringAggregateMetrics = AvailabilityValue<Record<string, unknown>>;
@@ -293,13 +344,37 @@ export interface MonitoringHistoryEvent extends Record<string, unknown> {
   forecast_available?: boolean | null;
   settlement_available?: boolean | null;
   forecast_checkpoint?: string | null;
+  forecast_coverage?: string | null;
+  forecast_coverage_percentage?: number | null;
+  forecast_coverage_status?: string | null;
+  forecast_rows?: ForecastLeaderboardRow[];
+  comparison_rows?: SettlementDriverComparisonRow[];
+  summary_metrics?: SettlementSummaryMetrics | AvailabilityValue<Record<string, unknown>>;
+  unforecasted_actual_entrants?: UnforecastedActualEntrant[];
   mae_gap_sec?: number | null;
   interval_availability_rate?: number | null;
   eligible_for_valid_prospective_evidence?: boolean | null;
+  forecasted?: boolean | null;
+  settled?: boolean | null;
+  metrics?: {
+    available?: boolean | null;
+    excluded_rows?: number | null;
+    forecast_rows?: number | null;
+    mae_gap_sec?: number | null;
+    scored_rows?: number | null;
+  } | null;
 }
 
 export interface ValidProspectiveMonitoring extends Record<string, unknown> {
-  aggregate_metrics?: HistoricalMonitoringAggregateMetrics | null;
+  aggregate_metrics?:
+    | HistoricalMonitoringAggregateMetrics
+    | {
+        available?: boolean | null;
+        event_count?: number | null;
+        mae_gap_sec?: number | null;
+        scored_rows?: number | null;
+      }
+    | null;
   event_count?: number | null;
   events?: MonitoringHistoryEvent[];
   forecasted_event_count?: number | null;

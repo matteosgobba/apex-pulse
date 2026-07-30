@@ -8,6 +8,7 @@ const STATE_STYLES: Record<LifecycleState, string> = {
   forecast_available: "border-sky-300/60 bg-sky-300/10 text-sky-100",
   awaiting_qualifying_targets: "border-amber-300/60 bg-amber-300/10 text-amber-100",
   settled: "border-violet-300/60 bg-violet-300/10 text-violet-100",
+  settled_partial_coverage: "border-amber-300/60 bg-amber-300/10 text-amber-100",
   blocked: "border-rose-300/60 bg-rose-300/10 text-rose-100",
   legacy_descriptive_only: "border-zinc-300/60 bg-zinc-300/10 text-zinc-100"
 };

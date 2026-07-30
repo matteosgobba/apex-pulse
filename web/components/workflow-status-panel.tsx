@@ -110,6 +110,8 @@ function workflowMessage(state: LifecycleState): string {
       "A forecast snapshot exists and qualifying target ingestion is pending in the operator workflow.",
     settled:
       "Qualifying targets have been incorporated. Detailed settlement comparison is planned for a later dashboard milestone.",
+    settled_partial_coverage:
+      "Qualifying targets have been incorporated for the entrants covered by the preserved forecast.",
     blocked:
       "Preflight blocked the forecast workflow. Only safe artifact-level blocking context is shown here.",
     legacy_descriptive_only:

@@ -10,15 +10,17 @@ const config: Config = {
     extend: {
       colors: {
         apex: {
-          bg: "#080b10",
-          panel: "#10151f",
-          panelSoft: "#151c28",
-          border: "#263244",
-          muted: "#9ca8b8",
-          text: "#eef4fb",
-          accent: "#6ee7f9",
-          amber: "#f5c56b",
-          violet: "#a7a5ff"
+          bg: "#F7F8FA",
+          panel: "#FFFFFF",
+          panelSoft: "#F1F5F9",
+          surface: "#F1F5F9",
+          border: "#E2E8F0",
+          muted: "#64748B",
+          text: "#0F172A",
+          ink: "#111827",
+          accent: "#E10600",
+          amber: "#D97706",
+          violet: "#6D5BD0"
         }
       },
       fontFamily: {
@@ -33,7 +35,9 @@ const config: Config = {
         ]
       },
       boxShadow: {
-        panel: "0 24px 80px rgba(0, 0, 0, 0.24)"
+        panel: "0 16px 50px rgba(15, 23, 42, 0.08)",
+        card: "0 8px 30px rgba(15, 23, 42, 0.055)",
+        hero: "0 24px 70px rgba(15, 23, 42, 0.16)"
       }
     }
   },

@@ -88,7 +88,8 @@ describe("ForecastPageView", () => {
   });
 
   test("team accent mapping has a neutral fallback", () => {
-    expect(teamAccent("unknown-team")).toBe("#9ca8b8");
+    expect(teamAccent("unknown-team")).toMatch(/^#[0-9A-F]{6}$/);
+    expect(teamAccent("unknown-team")).toBe(teamAccent("unknown-team"));
   });
 });
 

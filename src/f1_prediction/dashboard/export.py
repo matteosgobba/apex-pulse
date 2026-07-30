@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import pickle
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,6 +93,8 @@ class SourceReadResult:
     manifests: dict[tuple[int, str], dict[str, Any]]
     target_coverages: dict[tuple[int, str], pd.DataFrame]
     entry_list_summaries: dict[tuple[int, str], dict[str, Any]]
+    event_schedules: dict[tuple[int, str], dict[str, Any]]
+    schedule_source_paths: tuple[Path, ...]
     issues: tuple[str, ...]
 
 
@@ -112,6 +115,7 @@ class EventContext:
     raw_identity_row: dict[str, Any]
     preflight_summary: dict[str, Any] | None
     entry_list_summary: dict[str, Any]
+    event_schedule: dict[str, Any]
     forecast_driver_universe_mismatch: bool
     lifecycle: LifecycleState
     legacy_noncanonical: bool
@@ -130,12 +134,15 @@ def export_dashboard_artifacts(
     destination = output_dir or (config.metrics_output_dir.parent / "dashboard")
     ensure_directory(destination)
     generated_at = _utc_now()
-    source_artifacts = _build_source_artifacts(config)
+    sources = _read_sources(config)
+    source_artifacts = _build_source_artifacts(
+        config,
+        additional_paths=sources.schedule_source_paths,
+    )
     source_paths = tuple(source.path for source in source_artifacts)
     source_fingerprints = {
         source.path: source.to_fingerprint_entry() for source in source_artifacts
     }
-    sources = _read_sources(config)
     contexts = _build_event_contexts(sources, season=season, event=event)
     current_event = _select_current_event(contexts, season=season, event=event)
     documents = _build_documents(
@@ -333,6 +340,7 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
     )
     raw_forecasts = _matching_rows(sources.forecasts, season=identity.season, event_slug=slug)
     entry_summary = sources.entry_list_summaries.get((identity.season or -1, slug), {})
+    event_schedule = sources.event_schedules.get((identity.season or -1, slug), {})
     settlements = _matching_rows(sources.settlements, season=identity.season, event_slug=slug)
     targets = _matching_rows(sources.targets, season=identity.season, event_slug=slug)
     forecasts = _entry_list_valid_forecasts(raw_forecasts, entry_summary)
@@ -380,6 +388,7 @@ def _build_event_context(sources: SourceReadResult, identity: EventIdentity) -> 
         raw_identity_row=raw_identity,
         preflight_summary=preflight,
         entry_list_summary=entry_summary,
+        event_schedule=event_schedule,
         forecast_driver_universe_mismatch=forecast_driver_universe_mismatch,
         lifecycle=lifecycle,
         legacy_noncanonical=legacy,
@@ -526,6 +535,7 @@ def _manifest_data(
                 _forecast_has_intervals(context.forecast_rows) for context in contexts
             ),
             "practice_checkpoint_status": True,
+            "session_schedule": any(bool(context.event_schedule) for context in contexts),
             "post_qualifying_comparison": any(
                 _has_live_rows(context.settlement_rows) for context in contexts
             ),
@@ -549,6 +559,7 @@ def _current_event_data(
         "event_identity": current_event.identity.to_dict(),
         "lifecycle": current_event.lifecycle.to_dict(),
         "freshness": _freshness(current_event, sources),
+        "event_schedule": _event_schedule_block(current_event),
         "monitoring_protocol": _monitoring_protocol(sources.protocol),
         "registry_lineage": _registry_lineage(current_event),
         "preflight": _preflight_block(current_event),
@@ -673,6 +684,7 @@ def _practice_status_data(
             "event_identity": EventIdentity().to_dict(),
             "lifecycle_state": "no_event_available",
             "sessions": _empty_sessions(),
+            "event_schedule": unavailable("session_schedule_not_available"),
             "monitoring_readiness": unavailable("no_event_available"),
             "preflight": unavailable("no_event_available"),
             "notes": ["No monitored event is available."],
@@ -681,6 +693,7 @@ def _practice_status_data(
         "event_identity": current_event.identity.to_dict(),
         "lifecycle_state": current_event.lifecycle.state,
         "sessions": _sessions(current_event),
+        "event_schedule": _event_schedule_block(current_event),
         "monitoring_readiness": {
             "status": sources.readiness_summary.get("status"),
             "forecastable_event_count": sources.readiness_summary.get("forecastable_event_count"),
@@ -841,7 +854,11 @@ def _overall_status(documents: Any) -> str:
     return "complete"
 
 
-def _build_source_artifacts(config: DataConfig) -> tuple[SourceArtifact, ...]:
+def _build_source_artifacts(
+    config: DataConfig,
+    *,
+    additional_paths: tuple[Path, ...] = (),
+) -> tuple[SourceArtifact, ...]:
     root = config.project_root
     paths = [
         config.metrics_output_dir / "prospective_monitoring_protocol.json",
@@ -877,6 +894,7 @@ def _build_source_artifacts(config: DataConfig) -> tuple[SourceArtifact, ...]:
             (root / "data/processed/monitoring").glob("*/*/monitoring_qualifying_targets.parquet")
         )
     )
+    paths.extend(additional_paths)
     artifacts = []
     for path in paths:
         available_on_disk = path.is_file()
@@ -936,6 +954,10 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
         issues,
     )
     entry_list_summaries = _read_entry_list_summaries(metrics, issues)
+    event_schedules, schedule_source_paths = _read_cached_event_schedules(
+        config.fastf1_cache_dir,
+        registry,
+    )
     return SourceReadResult(
         protocol=protocol,
         registry=registry,
@@ -961,6 +983,8 @@ def _read_sources(config: DataConfig) -> SourceReadResult:
         manifests=manifests,
         target_coverages=target_coverages,
         entry_list_summaries=entry_list_summaries,
+        event_schedules=event_schedules,
+        schedule_source_paths=schedule_source_paths,
         issues=tuple(issues),
     )
 
@@ -1048,6 +1072,137 @@ def _read_entry_list_summaries(
         if season is not None and slug:
             summaries[(season, slug)] = payload
     return summaries
+
+
+class _SessionInfoUnpickler(pickle.Unpickler):
+    """Restrict FastF1 cache deserialization to the datetime values used by session info."""
+
+    def find_class(self, module: str, name: str) -> Any:
+        if module == "datetime" and name in {"datetime", "timedelta", "timezone"}:
+            import datetime
+
+            return getattr(datetime, name)
+        raise pickle.UnpicklingError(f"Unsupported cached session-info value: {module}.{name}")
+
+
+def _read_cached_event_schedules(
+    cache_dir: Path,
+    registry: pd.DataFrame,
+) -> tuple[dict[tuple[int, str], dict[str, Any]], tuple[Path, ...]]:
+    """Read optional session schedule metadata from the existing local FastF1 cache."""
+    if not cache_dir.is_dir() or registry.empty:
+        return {}, ()
+    registry_keys: dict[tuple[int, int], str] = {}
+    registered_slugs: set[tuple[int, str]] = set()
+    monitored_seasons: set[int] = set()
+    for _, row in registry.iterrows():
+        season = _optional_int(row.get("monitor_season", row.get("season")))
+        order = _optional_int(row.get("event_order"))
+        event_slug = _optional_str(row.get("event_slug"))
+        if season is None or not event_slug:
+            continue
+        monitored_seasons.add(season)
+        registered_slugs.add((season, event_slug))
+        if order is not None:
+            registry_keys[(season, order)] = event_slug
+
+    schedules: dict[tuple[int, str], dict[str, Any]] = {}
+    source_paths: set[Path] = set()
+    for season in sorted(monitored_seasons):
+        for path in sorted((cache_dir / str(season)).glob("*/*/session_info.ff1pkl")):
+            payload = _read_cached_session_info(path)
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(data, dict):
+                continue
+            meeting = data.get("Meeting")
+            if not isinstance(meeting, dict):
+                continue
+            event_order = _optional_int(meeting.get("Number"))
+            meeting_name = _optional_str(meeting.get("Name"))
+            event_slug = registry_keys.get((season, event_order or -1))
+            if event_slug is None and meeting_name:
+                candidate_slug = slugify(meeting_name)
+                if (season, candidate_slug) in registered_slugs:
+                    event_slug = candidate_slug
+            if event_slug is None:
+                continue
+            session_code = _cached_session_code(data)
+            if session_code is None:
+                continue
+            schedule = schedules.setdefault(
+                (season, event_slug),
+                {
+                    "source": "fastf1_cached_session_info",
+                    "timezone": "UTC",
+                    "location": meeting.get("Location"),
+                    "country": (
+                        meeting.get("Country", {}).get("Name")
+                        if isinstance(meeting.get("Country"), dict)
+                        else None
+                    ),
+                    "circuit": (
+                        meeting.get("Circuit", {}).get("ShortName")
+                        if isinstance(meeting.get("Circuit"), dict)
+                        else None
+                    ),
+                    "sessions": {},
+                },
+            )
+            schedule["sessions"][session_code] = {
+                "session": session_code,
+                "display_name": data.get("Name") or session_code,
+                "scheduled_start_utc": _cached_datetime_utc(
+                    data.get("StartDate"),
+                    data.get("GmtOffset"),
+                ),
+                "scheduled_end_utc": _cached_datetime_utc(
+                    data.get("EndDate"),
+                    data.get("GmtOffset"),
+                ),
+            }
+            source_paths.add(path)
+
+    normalized: dict[tuple[int, str], dict[str, Any]] = {}
+    for key, schedule in schedules.items():
+        session_map = schedule.pop("sessions")
+        sessions = [session_map[name] for name in SESSION_NAMES if name in session_map]
+        if sessions:
+            normalized[key] = {**schedule, "sessions": sessions}
+    return normalized, tuple(sorted(source_paths))
+
+
+def _read_cached_session_info(path: Path) -> dict[str, Any]:
+    try:
+        with path.open("rb") as handle:
+            payload = _SessionInfoUnpickler(handle).load()
+    except (OSError, EOFError, pickle.PickleError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _cached_session_code(data: dict[str, Any]) -> str | None:
+    name = str(data.get("Name") or "").strip().lower()
+    session_type = str(data.get("Type") or "").strip().lower()
+    number = _optional_int(data.get("Number"))
+    if name in {"practice 1", "free practice 1"} or (session_type == "practice" and number == 1):
+        return "FP1"
+    if name in {"practice 2", "free practice 2"} or (session_type == "practice" and number == 2):
+        return "FP2"
+    if name in {"practice 3", "free practice 3"} or (session_type == "practice" and number == 3):
+        return "FP3"
+    if name == "qualifying" or session_type == "qualifying":
+        return "Q"
+    return None
+
+
+def _cached_datetime_utc(value: Any, offset: Any) -> str | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).isoformat()
+    if hasattr(offset, "total_seconds"):
+        value = value - offset
+    return value.replace(tzinfo=timezone.utc).isoformat()
 
 
 def _entry_list_valid_forecasts(
@@ -1627,6 +1782,16 @@ def _freshness(context: EventContext, sources: SourceReadResult) -> dict[str, An
     }
 
 
+def _event_schedule_block(context: EventContext) -> dict[str, Any]:
+    if not context.event_schedule:
+        return unavailable("session_schedule_not_available")
+    return {
+        "available": True,
+        "reason": "",
+        **context.event_schedule,
+    }
+
+
 def _sessions(context: EventContext) -> list[dict[str, Any]]:
     manifest = context.manifest
     source_availability = manifest.get("source_availability", {})
@@ -1691,11 +1856,43 @@ def _valid_aggregate_metrics(contexts: list[EventContext]) -> dict[str, Any]:
 
 
 def _historical_event_row(context: EventContext) -> dict[str, Any]:
+    coverage = _coverage_summary(context.forecast_rows, context.target_rows)
+    checkpoint = _first_non_null(context.forecast_rows, "checkpoint")
+    live_forecasts = _live_rows(context.forecast_rows)
+    forecast_rows = (
+        _forecast_leaderboard(
+            context,
+            _forecast_population_rows(context, live_forecasts, "qualifying_eligible"),
+        )
+        if not live_forecasts.empty
+        else []
+    )
+    live_settlements = _live_rows(context.settlement_rows)
+    comparison = (
+        _settlement_comparison(_settlement_evaluable_rows(live_settlements))
+        if not live_settlements.empty
+        else []
+    )
     return {
         "event_identity": context.identity.to_dict(),
         "lifecycle_state": context.lifecycle.state,
         "forecasted": _has_live_rows(context.forecast_rows),
         "settled": _has_live_rows(context.settlement_rows),
+        "forecast_checkpoint": checkpoint,
+        "forecast_coverage": coverage["forecast_coverage"],
+        "forecast_coverage_percentage": coverage["forecast_coverage_percentage"],
+        "forecast_coverage_status": coverage["forecast_coverage_status"],
+        "forecast_rows": forecast_rows,
+        "comparison_rows": comparison,
+        "summary_metrics": (
+            {
+                **_settlement_metrics(comparison, total_rows=len(live_settlements)),
+                **coverage,
+            }
+            if comparison
+            else unavailable("settlement_not_available")
+        ),
+        "unforecasted_actual_entrants": coverage["unforecasted_actual_entrants"],
         "eligible_for_valid_prospective_evidence": (
             context.eligible_for_valid_prospective_evidence
         ),
@@ -1769,6 +1966,7 @@ def _empty_event_data(reason: str) -> dict[str, Any]:
         "event_identity": EventIdentity().to_dict(),
         "lifecycle": lifecycle.to_dict(),
         "freshness": {},
+        "event_schedule": unavailable("session_schedule_not_available"),
         "monitoring_protocol": unavailable("protocol_not_available"),
         "registry_lineage": unavailable("registry_not_available"),
         "preflight": unavailable("preflight_not_available"),

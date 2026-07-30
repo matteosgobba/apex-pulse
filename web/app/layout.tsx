@@ -3,8 +3,15 @@ import type { Metadata } from "next";
 import "@/app/globals.css";
 
 export const metadata: Metadata = {
-  title: "Apex Pulse Dashboard",
-  description: "Read-only Formula 1 qualifying forecast monitoring dashboard."
+  title: {
+    default: "Apex Pulse — Formula 1 Qualifying Predictions",
+    template: "%s — Apex Pulse"
+  },
+  description:
+    "Machine-learning Formula 1 qualifying predictions built from public free-practice data.",
+  icons: {
+    icon: "/brand/apex-pulse-logo-simple.png"
+  }
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

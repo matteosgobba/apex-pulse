@@ -1,4 +1,6 @@
 import json
+import pickle
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -36,6 +38,63 @@ def test_ready_preflight_exports_ready_to_forecast(tmp_path: Path) -> None:
     assert current["data"]["lifecycle"]["state"] == "ready_to_forecast"
     assert current["data"]["preflight"]["status"] == "ready_to_forecast"
     assert current["data"]["preflight"]["forecast_allowed"] is True
+
+
+def test_optional_cached_schedule_is_exported_additively(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(config, [_registry_event("Bahrain", 1)])
+    _write_cached_session_info(
+        config,
+        event="Bahrain",
+        event_order=1,
+        session_name="Practice 1",
+        session_number=1,
+        start=datetime(2026, 3, 6, 14, 30),
+    )
+    _write_cached_session_info(
+        config,
+        event="Bahrain",
+        event_order=1,
+        session_name="Qualifying",
+        session_number=4,
+        start=datetime(2026, 3, 7, 18, 0),
+    )
+
+    export_dashboard_artifacts(config)
+    current = _read_dashboard(config, "current_event.json")
+    practice = _read_dashboard(config, "event_practice_status.json")
+    manifest = _read_dashboard(config, "dashboard_manifest.json")
+
+    schedule = current["data"]["event_schedule"]
+    assert schedule["available"] is True
+    assert schedule["source"] == "fastf1_cached_session_info"
+    assert schedule["location"] == "Sakhir"
+    assert schedule["country"] == "Bahrain"
+    assert schedule["circuit"] == "Bahrain International Circuit"
+    assert [session["session"] for session in schedule["sessions"]] == ["FP1", "Q"]
+    assert schedule["sessions"][0]["scheduled_start_utc"] == "2026-03-06T11:30:00+00:00"
+    assert practice["data"]["event_schedule"] == schedule
+    assert manifest["schema_version"] == SCHEMA_VERSION
+    assert manifest["data"]["dashboard_contract_capabilities"]["session_schedule"] is True
+
+
+def test_missing_cached_schedule_preserves_backward_compatible_unavailable_state(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(config, [_registry_event("Bahrain", 1)])
+
+    export_dashboard_artifacts(config)
+    current = _read_dashboard(config, "current_event.json")
+
+    assert current["schema_version"] == SCHEMA_VERSION
+    assert current["data"]["event_schedule"] == {
+        "available": False,
+        "reason": "session_schedule_not_available",
+        "value": None,
+    }
 
 
 def test_blocked_preflight_exports_blocked_reason(tmp_path: Path) -> None:
@@ -185,6 +244,13 @@ def test_partial_coverage_settled_event_exposes_missing_actual_entrant(
     ]
     assert settlement["data"]["summary_metrics"]["scored_driver_count"] == 2
     assert settlement["data"]["summary_metrics"]["forecast_coverage_status"] == "partial_coverage"
+    historical = _read_dashboard(config, "historical_monitoring_summary.json")
+    history_event = historical["data"]["valid_prospective_monitoring"]["events"][0]
+    assert history_event["forecast_checkpoint"] == "after_fp3"
+    assert history_event["forecast_coverage"] == "2/3"
+    assert len(history_event["forecast_rows"]) == 2
+    assert len(history_event["comparison_rows"]) == 2
+    assert history_event["unforecasted_actual_entrants"][0]["driver_code"] == "PER"
 
 
 def test_missing_optional_interval_columns_do_not_break_exports(tmp_path: Path) -> None:
@@ -588,6 +654,43 @@ def _write_registry(config: DataConfig, rows: list[dict]) -> None:
     pd.DataFrame(rows).to_csv(path, index=False)
     for row in rows:
         _write_manifest(config, row)
+
+
+def _write_cached_session_info(
+    config: DataConfig,
+    *,
+    event: str,
+    event_order: int,
+    session_name: str,
+    session_number: int,
+    start: datetime,
+) -> None:
+    session_dir = (
+        config.fastf1_cache_dir
+        / "2026"
+        / f"2026-03-06_{event.replace(' ', '_')}"
+        / session_name.replace(" ", "_")
+    )
+    session_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "data": {
+            "Meeting": {
+                "Number": event_order,
+                "Name": event,
+                "Location": "Sakhir",
+                "Country": {"Name": "Bahrain"},
+                "Circuit": {"ShortName": "Bahrain International Circuit"},
+            },
+            "Name": session_name,
+            "Type": "Qualifying" if session_name == "Qualifying" else "Practice",
+            "Number": session_number,
+            "StartDate": start,
+            "EndDate": start + timedelta(hours=1),
+            "GmtOffset": timedelta(hours=3),
+        }
+    }
+    with (session_dir / "session_info.ff1pkl").open("wb") as handle:
+        pickle.dump(payload, handle)
 
 
 def _write_manifest(config: DataConfig, registry_row: dict) -> None:
