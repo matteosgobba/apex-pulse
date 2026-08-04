@@ -5,6 +5,7 @@ import type {
   MonitoringHistoryPageData
 } from "@/lib/dashboard-types";
 import { formatSignedGap } from "@/lib/formatters";
+import { formatEventNameWithFlag } from "@/lib/event-display";
 import {
   positionDeltaLabel,
   predictionCheckpointLabel,
@@ -123,7 +124,7 @@ function PredictionHistoryEvent({ event }: { event: MonitoringHistoryEvent }) {
           <div>
             <p className="text-sm text-apex-muted">{event.event_identity?.season ?? "—"}</p>
             <h3 className="mt-1 text-2xl font-semibold text-apex-text">
-              {event.event_identity?.event ?? "Unknown event"}
+              {formatEventNameWithFlag(event.event_identity?.event) || "Unknown event"}
             </h3>
             <div className="mt-3 flex flex-wrap gap-2 text-xs text-apex-secondary">
               <span className="rounded-full bg-apex-surface px-3 py-1.5">
@@ -217,7 +218,8 @@ function TechnicalArchive({ records }: { records: LegacyDescriptiveRecord[] }) {
             className="rounded-2xl bg-apex-surface p-4"
           >
             <h3 className="font-semibold text-apex-text">
-              {record.event_identity?.season} {record.event_identity?.event}
+              {record.event_identity?.season}{" "}
+              {formatEventNameWithFlag(record.event_identity?.event)}
             </h3>
             <p className="mt-2 text-xs leading-5 text-apex-secondary">
               Descriptive only · excluded from prospective performance claims.

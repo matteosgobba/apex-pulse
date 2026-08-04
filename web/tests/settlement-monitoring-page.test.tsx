@@ -27,7 +27,9 @@ describe("SettlementPageView", () => {
   test("renders valid summary metrics", () => {
     renderSettlementPage();
 
-    expect(screen.getByText("Italy Settlement")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Italy\u00A0🇮🇹 Settlement", level: 1 })
+    ).toBeInTheDocument();
     expect(screen.getByText("MAE gap to pole")).toBeInTheDocument();
     expect(screen.getAllByText("0.117 sec").length).toBeGreaterThan(0);
     expect(screen.getByText("Top-3 agreement")).toBeInTheDocument();

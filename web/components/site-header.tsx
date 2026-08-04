@@ -21,11 +21,9 @@ export function SiteHeader({ health }: { health: HealthResponse | null }) {
         <Link
           href="/"
           aria-label="Apex Pulse home"
-          className="flex items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-apex-accent"
+          className="flex h-10 w-24 items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-apex-accent sm:w-28"
         >
-          <span className="flex h-10 w-24 items-center justify-center overflow-hidden rounded-lg bg-apex-ink px-2 ring-1 ring-white/10 sm:w-28">
-            <ApexPulseLogo compact priority className="max-h-8" />
-          </span>
+          <ApexPulseLogo compact priority className="h-10 w-full" />
         </Link>
         <nav
           aria-label="Primary navigation"

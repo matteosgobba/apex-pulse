@@ -6,6 +6,7 @@ import { SettlementSummary } from "@/components/settlement-summary";
 import { TableEmptyState } from "@/components/table-empty-state";
 import { dashboardRows } from "@/lib/dashboard-collections";
 import type { SettlementPageData } from "@/lib/dashboard-types";
+import { formatEventNameWithFlag } from "@/lib/event-display";
 import { formatDateTime, formatInteger, formatText, humanizeToken } from "@/lib/formatters";
 
 export function SettlementPageView({ data }: { data: SettlementPageData }) {
@@ -49,7 +50,7 @@ export function SettlementPageView({ data }: { data: SettlementPageData }) {
               {formatText(identity?.season)}
             </p>
             <h1 className="mt-2 break-words text-3xl font-semibold text-apex-text md:text-5xl">
-              {formatText(identity?.event)} Settlement
+              {formatEventNameWithFlag(identity?.event) || formatText(null)} Settlement
             </h1>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
               This comparison evaluates a pre-qualifying forecast against final qualifying outcomes.

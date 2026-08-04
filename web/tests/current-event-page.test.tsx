@@ -31,7 +31,7 @@ describe("CurrentEventPageView", () => {
   test("homepage renders the artifact event and makes the forecast central", () => {
     renderPage();
 
-    expect(screen.getByRole("heading", { name: "Italy", level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Italy\u00A0🇮🇹", level: 1 })).toBeInTheDocument();
     expect(screen.getByText("Practice data ready")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Predicted starting order" })).toBeInTheDocument();
     expect(screen.getAllByText("NOR").length).toBeGreaterThan(0);
@@ -102,7 +102,9 @@ describe("CurrentEventPageView", () => {
       settlement: partialSettlement()
     });
 
-    expect(screen.getByRole("heading", { name: "Dutch Grand Prix", level: 1 })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Dutch Grand Prix\u00A0🇳🇱", level: 1 })
+    ).toBeInTheDocument();
     expect(screen.getByText("Current weekend")).toBeInTheDocument();
     expect(screen.getByText("Sprint weekend")).toBeInTheDocument();
     expect(
@@ -110,7 +112,7 @@ describe("CurrentEventPageView", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Sprint Qualifying" })).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Hungarian Grand Prix", level: 2 })
+      screen.getByRole("heading", { name: "Hungarian Grand Prix\u00A0🇭🇺", level: 2 })
     ).toBeInTheDocument();
     expect(screen.queryByText("UNSUPPORTED_WEEKEND_FORMAT")).not.toBeInTheDocument();
     expect(screen.getByText("Forecast coverage: 2/3")).toBeInTheDocument();
@@ -129,7 +131,7 @@ describe("CurrentEventPageView", () => {
 
     expect(screen.queryByLabelText("Operational Formula 1 weekend")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Hungarian Grand Prix", level: 1 })
+      screen.getByRole("heading", { name: "Hungarian Grand Prix\u00A0🇭🇺", level: 1 })
     ).toBeInTheDocument();
   });
 
@@ -189,13 +191,17 @@ describe("CurrentEventPageView", () => {
     expect(container.querySelector("table")).toBeNull();
   });
 
-  test("contact renders only verified configured links and technical details stay secondary", () => {
+  test("contact renders the public profile links and technical details stay secondary", () => {
     renderPage();
 
     expect(screen.getByText("Built by Matteo Sgobba")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "GitHub" }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: "Email" }).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("link", { name: "LinkedIn" })).not.toBeInTheDocument();
+    const linkedIn = screen.getAllByRole("link", { name: "LinkedIn" });
+    expect(linkedIn.length).toBeGreaterThan(0);
+    expect(linkedIn[0]).toHaveAttribute("href", "https://www.linkedin.com/in/matteosgobba/");
+    expect(linkedIn[0]).toHaveAttribute("target", "_blank");
+    expect(linkedIn[0]).toHaveAttribute("rel", expect.stringContaining("noopener"));
     expect(screen.getByText("Artifact details").closest("details")).not.toHaveAttribute("open");
   });
 });
@@ -206,6 +212,13 @@ describe("MethodologyPage", () => {
 
     expect(screen.getByRole("heading", { name: /pre-qualifying prediction/i })).toBeInTheDocument();
     expect(screen.getByText(/no private team data/i)).toBeInTheDocument();
+    expect(screen.getByText(/never rewrites or fills missing predictions/i)).toBeInTheDocument();
+    expect(screen.getByText(/legacy noncanonical records/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Evaluation metrics" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Public-data limitations" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Prospective evidence and backtests" })
+    ).toBeInTheDocument();
     expect(screen.getByText("Technical lifecycle details").closest("details")).not.toHaveAttribute(
       "open"
     );

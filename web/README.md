@@ -70,21 +70,22 @@ The timeline reflects exported artifact availability, not lap-by-lap live teleme
 ## Team identity and assets
 
 `lib/team-identity.ts` is the single source of truth for team names, aliases, accessible colors, and
-optional logo paths. No team-logo files were present or added for Milestone 47, so the UI uses
-polished local color/monogram marks. Unknown teams receive a deterministic, high-contrast fallback.
-Future suitable local team logos can be registered through `logoPath`; missing files never block
-the ranking.
+logo paths. Mixed PNG, SVG, and WebP assets live under `public/teams/` and render through the shared
+`TeamMark` component on a theme-independent `#2b2b30` backing square. Unknown teams keep the
+deterministic, high-contrast monogram fallback, so a missing mapping never blocks the ranking.
 
-The supplied Apex Pulse logos are copied unchanged into `public/brand/` for web delivery.
+The supplied Apex Pulse logos are copied unchanged into `public/brand/` for web delivery. The
+header uses the black monochrome mark in light mode and the white monochrome mark in dark mode;
+CSS follows the root `data-theme` value without introducing separate theme state or a logo card.
 
 ## Contact configuration
 
-`lib/site-config.ts` centralizes contact values. The repository URL and author email were verified
-from repository metadata and Git history. LinkedIn was not verifiable, so no LinkedIn link is
-rendered by default. Configure a verified profile with:
+`lib/site-config.ts` centralizes contact values. GitHub, email, and Matteo Sgobba's LinkedIn profile
+are rendered in the About and footer contact surfaces. A deployment may override the default
+LinkedIn profile with:
 
 ```text
-NEXT_PUBLIC_APEX_PULSE_LINKEDIN_URL=https://www.linkedin.com/in/verified-profile
+NEXT_PUBLIC_APEX_PULSE_LINKEDIN_URL=https://www.linkedin.com/in/profile
 ```
 
 Invalid or empty values are ignored.

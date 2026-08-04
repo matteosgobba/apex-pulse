@@ -16,8 +16,8 @@ export function ContactSection() {
             Built by {SITE_CONTACT.name}
           </h2>
           <p className="mt-4 max-w-2xl text-sm leading-7 text-apex-onStrongMuted">
-            Apex Pulse is an applied machine-learning portfolio project focused on one clear
-            question: what can public free-practice data tell us about the qualifying order?
+            Apex Pulse turns public free-practice data into pre-qualifying forecasts of the Formula
+            1 qualifying order, with each prediction frozen before qualifying begins.
           </p>
           <div className="mt-7 flex flex-wrap gap-3">
             {contactLinks().map((link) => (
@@ -25,7 +25,7 @@ export function ContactSection() {
                 key={link.label}
                 href={link.href}
                 target={link.external ? "_blank" : undefined}
-                rel={link.external ? "noreferrer" : undefined}
+                rel={link.external ? "noopener noreferrer" : undefined}
                 className="rounded-full border border-white/20 px-4 py-2 text-sm font-semibold transition-colors hover:border-white/50 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-apex-accent"
               >
                 {link.label}

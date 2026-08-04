@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { SessionCountdown } from "@/components/session-countdown";
 import type { OperationalEvent } from "@/lib/dashboard-types";
+import { formatEventNameWithFlag } from "@/lib/event-display";
 import {
   operationalEventSchedule,
   operationalFormatLabel,
@@ -45,7 +46,7 @@ export function OperationalWeekendCard({
               {weekendLabel}
             </p>
             <h1 className="mt-3 break-words text-3xl font-semibold tracking-tight text-apex-text sm:text-4xl">
-              {event.event}
+              {formatEventNameWithFlag(event.event)}
             </h1>
             <p className="mt-2 text-sm text-apex-secondary">
               {event.season} · Round {event.round_number}

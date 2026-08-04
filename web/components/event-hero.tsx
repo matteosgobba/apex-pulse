@@ -1,5 +1,6 @@
 import { ApexPulseLogo } from "@/components/apex-pulse-logo";
 import { DataFreshnessNotice } from "@/components/data-freshness-notice";
+import { formatEventNameWithFlag } from "@/lib/event-display";
 import type { PublicEventViewModel } from "@/lib/public-view-model";
 
 export function EventHero({
@@ -26,7 +27,7 @@ export function EventHero({
             <span className="text-sm text-apex-onStrongMuted">{event.lifecycleLabel}</span>
           </div>
           <EventHeading className="mt-5 max-w-4xl text-4xl font-semibold tracking-tight sm:text-5xl lg:text-6xl">
-            {event.eventName}
+            {formatEventNameWithFlag(event.eventName, event.schedule?.country)}
           </EventHeading>
           {place ? <p className="mt-3 text-base text-apex-onStrongMuted">{place}</p> : null}
         </div>

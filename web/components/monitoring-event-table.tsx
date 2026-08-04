@@ -1,6 +1,7 @@
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { TableEmptyState } from "@/components/table-empty-state";
 import type { MonitoringHistoryEvent } from "@/lib/dashboard-types";
+import { formatEventNameWithFlag } from "@/lib/event-display";
 import { formatInteger, formatPercent, formatSeconds, formatText } from "@/lib/formatters";
 
 export function MonitoringEventTable({ events }: { events: MonitoringHistoryEvent[] }) {
@@ -39,7 +40,7 @@ export function MonitoringEventTable({ events }: { events: MonitoringHistoryEven
                 className="border-t border-apex-border/80"
               >
                 <Td>{formatInteger(event.event_identity?.season)}</Td>
-                <Td>{formatText(event.event_identity?.event)}</Td>
+                <Td>{formatEventNameWithFlag(event.event_identity?.event) || formatText(null)}</Td>
                 <Td>
                   <LifecycleBadge state={event.lifecycle_state} />
                 </Td>
@@ -68,7 +69,7 @@ export function MonitoringEventTable({ events }: { events: MonitoringHistoryEven
                   {formatInteger(event.event_identity?.season)}
                 </p>
                 <h3 className="mt-1 text-xl font-semibold text-apex-text">
-                  {formatText(event.event_identity?.event)}
+                  {formatEventNameWithFlag(event.event_identity?.event) || formatText(null)}
                 </h3>
               </div>
               <LifecycleBadge state={event.lifecycle_state} />

@@ -1,8 +1,9 @@
 import { ForecastInterval } from "@/components/forecast-interval";
 import { TableEmptyState } from "@/components/table-empty-state";
+import { TeamMark } from "@/components/team-mark";
 import type { ForecastLeaderboardRow } from "@/lib/dashboard-types";
 import { formatInteger, formatSignedGap, formatText, humanizeToken } from "@/lib/formatters";
-import { teamAccent } from "@/lib/team-accent";
+import { getTeamIdentity } from "@/lib/team-identity";
 import type { ReactNode } from "react";
 
 export function ForecastLeaderboard({
@@ -73,11 +74,7 @@ export function ForecastLeaderboard({
                 </Td>
                 <Td>
                   <span className="inline-flex items-center gap-2">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: teamAccent(row.team_key) }}
-                      aria-hidden="true"
-                    />
+                    <TeamMark team={getTeamIdentity(row.team_key, row.team)} size="sm" />
                     <span>{formatText(row.team)}</span>
                   </span>
                 </Td>
@@ -119,11 +116,7 @@ export function ForecastLeaderboard({
                   {formatText(row.driver_code ?? row.driver)}
                 </h3>
                 <p className="mt-1 flex items-center gap-2 text-sm text-slate-300">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: teamAccent(row.team_key) }}
-                    aria-hidden="true"
-                  />
+                  <TeamMark team={getTeamIdentity(row.team_key, row.team)} size="sm" />
                   {formatText(row.team)}
                 </p>
               </div>

@@ -41,7 +41,7 @@ export function SiteFooter() {
                 key={link.label}
                 href={link.href}
                 target={link.external ? "_blank" : undefined}
-                rel={link.external ? "noreferrer" : undefined}
+                rel={link.external ? "noopener noreferrer" : undefined}
                 className="transition-colors hover:text-apex-onStrong"
               >
                 {link.label}

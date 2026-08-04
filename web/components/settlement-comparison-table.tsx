@@ -2,9 +2,10 @@ import { ForecastInterval } from "@/components/forecast-interval";
 import { IntervalOutcome } from "@/components/interval-outcome";
 import { PositionDelta } from "@/components/position-delta";
 import { TableEmptyState } from "@/components/table-empty-state";
+import { TeamMark } from "@/components/team-mark";
 import type { ForecastLeaderboardRow, SettlementDriverComparisonRow } from "@/lib/dashboard-types";
 import { formatInteger, formatSignedGap, formatText, humanizeToken } from "@/lib/formatters";
-import { teamAccent } from "@/lib/team-accent";
+import { getTeamIdentity } from "@/lib/team-identity";
 
 export function SettlementComparisonTable({
   rows,
@@ -157,14 +158,11 @@ function TeamLabel({
 }) {
   const teamKey = forecast?.team_key ?? settlement?.team_key;
   const team = forecast?.team ?? settlement?.team;
+  const identity = getTeamIdentity(teamKey, team);
   return (
     <span className="inline-flex items-center gap-2">
-      <span
-        className="h-2.5 w-2.5 rounded-full"
-        style={{ backgroundColor: teamAccent(teamKey) }}
-        aria-hidden="true"
-      />
-      <span>{formatText(team)}</span>
+      <TeamMark team={identity} size="sm" />
+      <span>{formatText(team ?? identity.displayName)}</span>
     </span>
   );
 }

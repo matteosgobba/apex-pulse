@@ -1,4 +1,5 @@
 import type { LegacyDescriptiveRecord } from "@/lib/dashboard-types";
+import { formatEventNameWithFlag } from "@/lib/event-display";
 import { formatInteger, formatSeconds, formatText, humanizeToken } from "@/lib/formatters";
 
 export function LegacyRecordsPanel({ records }: { records: LegacyDescriptiveRecord[] }) {
@@ -27,7 +28,7 @@ export function LegacyRecordsPanel({ records }: { records: LegacyDescriptiveReco
                     {formatInteger(record.event_identity?.season)}
                   </p>
                   <h3 className="mt-1 text-lg font-semibold text-apex-text">
-                    {formatText(record.event_identity?.event)}
+                    {formatEventNameWithFlag(record.event_identity?.event) || formatText(null)}
                   </h3>
                 </div>
                 <span className="rounded-full bg-amber-300/10 px-2 py-1 text-xs font-semibold text-amber-100">

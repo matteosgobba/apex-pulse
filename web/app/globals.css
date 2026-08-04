@@ -100,6 +100,22 @@ a {
   text-decoration: none;
 }
 
+.apex-theme-logo-light {
+  display: none;
+}
+
+.apex-theme-logo-dark {
+  display: block;
+}
+
+:root[data-theme="light"] .apex-theme-logo-light {
+  display: block;
+}
+
+:root[data-theme="light"] .apex-theme-logo-dark {
+  display: none;
+}
+
 ::selection {
   background: rgb(var(--apex-brand) / 0.28);
 }

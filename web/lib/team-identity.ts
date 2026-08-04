@@ -15,32 +15,32 @@ type TeamDefinition = Omit<TeamIdentity, "key" | "known" | "logoPath"> & {
 };
 
 const TEAMS: Record<string, TeamDefinition> = {
-  ferrari: team("Ferrari", "#E80020", "#FFF0F2", "#FFFFFF", "FER", ["scuderia ferrari"]),
-  mclaren: team("McLaren", "#FF8000", "#FFF3E7", "#0F172A", "MCL", ["mclaren mercedes"]),
+  ferrari: team("Ferrari", "#E80020", "#FFF0F2", "#FFFFFF", "FER", ["scuderia ferrari"], "/teams/ferrari.svg.webp"),
+  mclaren: team("McLaren", "#FF8000", "#FFF3E7", "#0F172A", "MCL", ["mclaren mercedes"], "/teams/mclaren.svg"),
   mercedes: team("Mercedes", "#00A19C", "#E7F7F6", "#0F172A", "MER", [
     "mercedes amg",
     "mercedes-amg"
-  ]),
+  ], "/teams/mercedes.svg"),
   red_bull: team("Red Bull Racing", "#3671C6", "#EAF1FC", "#FFFFFF", "RBR", [
     "red bull",
     "red bull racing",
     "oracle red bull racing"
-  ]),
-  audi: team("Audi", "#C0002A", "#FBE8EC", "#FFFFFF", "AUD", ["stake", "sauber"]),
+  ], "/teams/redbull.png"),
+  audi: team("Audi", "#C0002A", "#FBE8EC", "#FFFFFF", "AUD", ["stake", "sauber"], "/teams/audi.webp"),
   racing_bulls: team("Racing Bulls", "#5E8BFF", "#EDF2FF", "#0F172A", "RB", [
     "rb",
     "visa cash app rb",
     "vcarb"
-  ]),
-  alpine: team("Alpine", "#2173D3", "#EAF2FC", "#FFFFFF", "ALP", ["alpine f1 team"]),
-  haas: team("Haas", "#767A81", "#F0F1F2", "#FFFFFF", "HAS", ["haas f1 team"]),
+  ], "/teams/racingbulls.png"),
+  alpine: team("Alpine", "#2173D3", "#EAF2FC", "#FFFFFF", "ALP", ["alpine f1 team"], "/teams/alpine.png"),
+  haas: team("Haas", "#767A81", "#F0F1F2", "#FFFFFF", "HAS", ["haas f1 team"], "/teams/haas.png"),
   aston_martin: team("Aston Martin", "#006F62", "#E4F1EF", "#FFFFFF", "AMR", [
     "aston martin aramco"
-  ]),
+  ], "/teams/astonmartin.png"),
   cadillac: team("Cadillac", "#161A22", "#EBEDF0", "#FFFFFF", "CAD", [
     "cadillac f1 team"
-  ]),
-  williams: team("Williams", "#005AFF", "#E8F0FF", "#FFFFFF", "WIL", ["williams racing"])
+  ], "/teams/cadillac.png"),
+  williams: team("Williams", "#005AFF", "#E8F0FF", "#FFFFFF", "WIL", ["williams racing"], "/teams/williams.svg")
 };
 
 const ALIASES = Object.entries(TEAMS).reduce<Record<string, string>>((index, [key, value]) => {
@@ -59,7 +59,7 @@ export function getTeamIdentity(
   teamName?: string | null
 ): TeamIdentity {
   const normalized = normalizeTeamKey(teamKey ?? teamName ?? "");
-  const canonicalKey = ALIASES[normalized];
+  const canonicalKey = ALIASES[normalized] ?? ALIASES[normalizeTeamKey(teamName ?? "")];
   if (canonicalKey) {
     const definition = TEAMS[canonicalKey];
     return {
@@ -103,9 +103,10 @@ function team(
   secondary: string,
   foreground: TeamIdentity["foreground"],
   monogram: string,
-  aliases: string[]
+  aliases: string[],
+  logoPath: string
 ): TeamDefinition {
-  return { displayName, primary, secondary, foreground, monogram, aliases, logoPath: null };
+  return { displayName, primary, secondary, foreground, monogram, aliases, logoPath };
 }
 
 function stableIndex(value: string, length: number): number {

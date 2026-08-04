@@ -2,7 +2,9 @@ import { act, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { SessionCountdown } from "@/components/session-countdown";
+import { TeamMark } from "@/components/team-mark";
 import type { EventSchedule } from "@/lib/dashboard-types";
+import { formatEventNameWithFlag } from "@/lib/event-display";
 import { positionDeltaLabel } from "@/lib/public-view-model";
 import {
   countdownParts,
@@ -114,6 +116,19 @@ describe("public identity and position semantics", () => {
     expect(ferrari.displayName).toBe("Ferrari");
     expect(ferrari.primary).toBe("#E80020");
     expect(ferrari.foreground).toBe("#FFFFFF");
+    expect(ferrari.logoPath).toBe("/teams/ferrari.svg.webp");
+    expect(getTeamIdentity("Red Bull Racing").logoPath).toBe("/teams/redbull.png");
+    expect(getTeamIdentity("RB").logoPath).toBe("/teams/racingbulls.png");
+  });
+
+  test("team mark renders a mapped logo with accessible alternative text", () => {
+    const { container } = render(<TeamMark team={getTeamIdentity("mclaren")} />);
+
+    expect(screen.getByRole("img", { name: "McLaren logo" })).toHaveAttribute(
+      "src",
+      "/teams/mclaren.svg"
+    );
+    expect(container.firstChild).toHaveStyle({ backgroundColor: "#2b2b30" });
   });
 
   test("unknown teams receive a deterministic readable fallback without a logo", () => {
@@ -124,6 +139,10 @@ describe("public identity and position semantics", () => {
     expect(first.logoPath).toBeNull();
     expect(first.monogram).toBe("NC");
     expect(first.foreground).toBe("#FFFFFF");
+
+    render(<TeamMark team={first} />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("New Constructor team mark")).toHaveTextContent("NC");
   });
 
   test("position delta labels overprediction, underprediction, and exact matches correctly", () => {
@@ -139,5 +158,26 @@ describe("public identity and position semantics", () => {
       direction: "exact",
       label: "Exact position"
     });
+  });
+});
+
+describe("event display", () => {
+  test.each([
+    ["Belgian Grand Prix", null, "Belgian Grand Prix\u00A0🇧🇪"],
+    ["São Paulo Grand Prix", null, "São Paulo Grand Prix\u00A0🇧🇷"],
+    ["Italy", "Italy", "Italy\u00A0🇮🇹"],
+    ["Miami Grand Prix", "United States", "Miami Grand Prix\u00A0🇺🇸"]
+  ])("formats %s with the correct host flag", (event, country, expected) => {
+    expect(formatEventNameWithFlag(event, country)).toBe(expected);
+  });
+
+  test("leaves unknown event names unchanged", () => {
+    expect(formatEventNameWithFlag("Synthetic Clean GP Final")).toBe("Synthetic Clean GP Final");
+  });
+
+  test("does not append a second flag", () => {
+    expect(formatEventNameWithFlag("Hungarian Grand Prix 🇭🇺")).toBe(
+      "Hungarian Grand Prix 🇭🇺"
+    );
   });
 });

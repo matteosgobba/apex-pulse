@@ -4,7 +4,9 @@ export interface ContactLink {
   external: boolean;
 }
 
-const LINKEDIN_URL = process.env.NEXT_PUBLIC_APEX_PULSE_LINKEDIN_URL ?? null;
+const LINKEDIN_URL =
+  process.env.NEXT_PUBLIC_APEX_PULSE_LINKEDIN_URL ??
+  "https://www.linkedin.com/in/matteosgobba/";
 
 export const SITE_CONTACT = {
   name: "Matteo Sgobba",

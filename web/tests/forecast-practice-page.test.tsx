@@ -25,7 +25,9 @@ describe("ForecastPageView", () => {
   test("renders a valid leaderboard with predicted position, driver, team, and gap", () => {
     renderForecastPage();
 
-    expect(screen.getByText("Italy Forecast")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Italy\u00A0🇮🇹 Forecast", level: 1 })
+    ).toBeInTheDocument();
     expect(screen.getAllByText("NOR").length).toBeGreaterThan(0);
     expect(screen.getAllByText("McLaren").length).toBeGreaterThan(0);
     expect(screen.getAllByText("+0.000s").length).toBeGreaterThan(0);

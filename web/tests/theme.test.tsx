@@ -4,6 +4,7 @@ import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import MethodologyPage from "@/app/methodology/page";
+import { HEADER_LOGO_PATHS } from "@/components/apex-pulse-logo";
 import { AppShell } from "@/components/app-shell";
 import { CurrentEventPageView } from "@/components/current-event-page";
 import { MonitoringHistoryPageView } from "@/components/monitoring-history-page";
@@ -138,6 +139,26 @@ describe("theme toggle", () => {
     expect(toggle).toHaveClass("min-h-11", "min-w-11");
     expect(toggle).not.toHaveClass("hidden");
     expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
+  });
+
+  test.each([
+    ["light", "light", HEADER_LOGO_PATHS.light],
+    ["dark", "dark", HEADER_LOGO_PATHS.dark]
+  ] as const)("header exposes the %s-mode monochrome logo", (theme, variant, path) => {
+    setRootTheme(theme);
+    const { container } = render(
+      <AppShell health={null}>
+        <p>Theme-aware page</p>
+      </AppShell>
+    );
+
+    const logo = container.querySelector<HTMLImageElement>(`[data-logo-theme="${variant}"]`);
+    expect(logo).not.toBeNull();
+    expect(decodeURIComponent(logo?.getAttribute("src") ?? "")).toContain(path);
+    expect(logo?.className).toContain(`apex-theme-logo-${variant}`);
+    expect(screen.getByRole("link", { name: "Apex Pulse home" }).firstChild).not.toHaveClass(
+      "bg-apex-ink"
+    );
   });
 
   test("light initialization hydrates without a wrong-tree warning", async () => {

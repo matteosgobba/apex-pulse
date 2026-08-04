@@ -4,6 +4,7 @@ import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { PracticeTimeline } from "@/components/practice-timeline";
 import { WorkflowStatusPanel } from "@/components/workflow-status-panel";
 import type { PracticePageData } from "@/lib/dashboard-types";
+import { formatEventNameWithFlag } from "@/lib/event-display";
 import { formatInteger, formatText, humanizeToken } from "@/lib/formatters";
 
 export function PracticePageView({ data }: { data: PracticePageData }) {
@@ -28,7 +29,7 @@ export function PracticePageView({ data }: { data: PracticePageData }) {
               {formatText(identity?.season)}
             </p>
             <h1 className="mt-2 break-words text-3xl font-semibold text-apex-text md:text-5xl">
-              {formatText(identity?.event)} Practice Status
+              {formatEventNameWithFlag(identity?.event) || formatText(null)} Practice Status
             </h1>
             <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
               This page represents exported session availability and monitoring readiness. This
