@@ -1,17 +1,22 @@
 import asyncio
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import pytest
 from typer.testing import CliRunner
 
+from f1_prediction.autopilot_scheduler import SCHEDULER_STATUS_FILE, SchedulerSnapshot
 from f1_prediction.cli import app
 from f1_prediction.dashboard.schema import SCHEMA_VERSION
 from f1_prediction.dashboard_api.app import create_dashboard_app
+from f1_prediction.dashboard_api.server import resolve_dashboard_server_binding
 from f1_prediction.dashboard_api.service import (
     DEFAULT_STALE_AFTER_MINUTES,
     parse_stale_after_minutes,
 )
+from f1_prediction.modeling.weekend_orchestrator import AutopilotTickResult
 
 GENERATED_AT = "2026-01-01T12:00:00+00:00"
 ARTIFACT_FILES = {
@@ -48,6 +53,104 @@ def test_health_reports_unavailable_before_export(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     assert response.json["dashboard_artifact_status"] == "unavailable"
+
+
+def test_autopilot_status_returns_normal_not_initialized_envelope(tmp_path: Path) -> None:
+    application = create_dashboard_app(tmp_path / "dashboard")
+
+    response = _request(application, "GET", "/api/v1/autopilot-status")
+
+    assert response.status_code == 200
+    assert response.json["schema_version"] == "1.0"
+    assert response.json["status"] == "not_initialized"
+    assert response.json["data"]["scheduler_enabled"] is False
+    assert response.json["data"]["scheduler_running"] is False
+    assert response.json["data"]["scheduler_interval_seconds"] == 300
+    assert response.json["data"]["last_tick_origin"] is None
+
+
+def test_autopilot_status_returns_validated_read_only_snapshot(tmp_path: Path) -> None:
+    dashboard_dir = tmp_path / "reports/dashboard"
+    dashboard_dir.mkdir(parents=True)
+    status_path = tmp_path / "reports/metrics/autopilot_status.json"
+    status_path.parent.mkdir(parents=True)
+    payload = _autopilot_status_payload()
+    _write_json(status_path, payload)
+    before = status_path.read_bytes()
+    application = create_dashboard_app(dashboard_dir)
+
+    response = _request(application, "GET", "/api/v1/autopilot-status")
+
+    assert response.status_code == 200
+    assert response.json["schema_version"] == "1.0"
+    assert response.json["status"] == "available"
+    assert {key: response.json["data"][key] for key in payload} == payload
+    assert response.json["data"]["scheduler_enabled"] is False
+    assert response.json["data"]["scheduler_running"] is False
+    assert response.headers["cache-control"] == "no-cache"
+    assert status_path.read_bytes() == before
+
+
+def test_autopilot_status_exposes_scheduler_origin_and_last_tick(tmp_path: Path) -> None:
+    dashboard_dir = tmp_path / "reports/dashboard"
+    dashboard_dir.mkdir(parents=True)
+    metrics = tmp_path / "reports/metrics"
+    metrics.mkdir()
+    tick = _autopilot_status_payload()
+    scheduler = SchedulerSnapshot(
+        schema_version="1.0",
+        scheduler_enabled=True,
+        scheduler_running=True,
+        scheduler_interval_seconds=300,
+        scheduler_initial_delay_seconds=10,
+        scheduler_started_at_utc="2026-06-01T11:59:50+00:00",
+        scheduler_iteration_count=1,
+        scheduler_tick_in_progress=False,
+        last_tick_started_at_utc=tick["started_at_utc"],
+        last_tick_completed_at_utc=tick["completed_at_utc"],
+        last_tick_run_id=tick["run_id"],
+        last_tick_state=tick["orchestrator_state_after"],
+        next_scheduled_tick_at_utc="2026-06-01T12:05:01+00:00",
+        consecutive_scheduler_failures=0,
+        last_scheduler_tick_started_at_utc=tick["started_at_utc"],
+        last_scheduler_tick_completed_at_utc=tick["completed_at_utc"],
+        last_scheduler_tick_state=tick["orchestrator_state_after"],
+        last_scheduler_tick_error=None,
+        next_scheduled_run_at_utc="2026-06-01T12:05:01+00:00",
+        last_tick_origin="scheduler",
+        last_tick_result=tick,
+    )
+    _write_json(metrics / SCHEDULER_STATUS_FILE, asdict(scheduler))
+    application = create_dashboard_app(dashboard_dir)
+
+    response = _request(application, "GET", "/api/v1/autopilot-status")
+
+    assert response.status_code == 200
+    assert response.json["status"] == "available"
+    assert response.json["data"]["scheduler_enabled"] is True
+    assert response.json["data"]["scheduler_running"] is True
+    assert response.json["data"]["last_tick_origin"] == "scheduler"
+    assert response.json["data"]["run_id"] == "synthetic-run"
+
+
+def test_autopilot_status_rejects_invalid_snapshot_without_weakening_dashboard_schema(
+    tmp_path: Path,
+) -> None:
+    dashboard_dir = tmp_path / "reports/dashboard"
+    dashboard_dir.mkdir(parents=True)
+    status_path = tmp_path / "reports/metrics/autopilot_status.json"
+    status_path.parent.mkdir(parents=True)
+    _write_json(status_path, {"schema_version": "1.0", "status": "invented"})
+    application = create_dashboard_app(dashboard_dir)
+
+    response = _request(application, "GET", "/api/v1/autopilot-status")
+
+    assert response.status_code == 500
+    assert response.json["detail"] == {
+        "code": "dashboard_artifact_invalid",
+        "message": "The requested dashboard artifact failed validation.",
+        "artifact_type": "autopilot_status",
+    }
 
 
 def test_valid_manifest_returns_exact_artifact_content(tmp_path: Path) -> None:
@@ -235,6 +338,13 @@ def test_configured_cors_origin_is_allowed(monkeypatch, tmp_path: Path) -> None:
     assert "access-control-allow-credentials" not in response.headers
 
 
+def test_wildcard_cors_configuration_is_rejected(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("APEX_PULSE_DASHBOARD_API_CORS_ORIGINS", "*")
+
+    with pytest.raises(ValueError, match="wildcard CORS is not allowed"):
+        create_dashboard_app(tmp_path / "dashboard")
+
+
 def test_staleness_configuration_parsing_is_robust(monkeypatch, tmp_path: Path) -> None:
     assert parse_stale_after_minutes("45") == 45
     assert parse_stale_after_minutes("bad") == DEFAULT_STALE_AFTER_MINUTES
@@ -284,6 +394,58 @@ def test_dashboard_api_cli_registration(monkeypatch, tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8765
+
+
+def test_dashboard_api_cli_uses_port_environment_binding(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def fake_run(application, *, host, port):
+        captured["application"] = application
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setenv("PORT", "9321")
+    monkeypatch.setattr("uvicorn.run", fake_run)
+
+    result = CliRunner().invoke(
+        app,
+        ["dashboard-api", "--dashboard-dir", str(tmp_path / "dashboard")],
+    )
+
+    assert result.exit_code == 0
+    assert captured["host"] == "0.0.0.0"
+    assert captured["port"] == 9321
+
+
+def test_dashboard_server_binding_preserves_local_defaults() -> None:
+    binding = resolve_dashboard_server_binding(environ={})
+
+    assert binding.host == "127.0.0.1"
+    assert binding.port == 8000
+
+
+def test_dashboard_server_binding_uses_railway_port_and_public_host() -> None:
+    binding = resolve_dashboard_server_binding(environ={"PORT": "9123"})
+
+    assert binding.host == "0.0.0.0"
+    assert binding.port == 9123
+
+
+def test_dashboard_server_binding_allows_explicit_overrides() -> None:
+    binding = resolve_dashboard_server_binding(
+        host="127.0.0.2",
+        port=8765,
+        environ={"PORT": "9123"},
+    )
+
+    assert binding.host == "127.0.0.2"
+    assert binding.port == 8765
+
+
+@pytest.mark.parametrize("value", ["bad", "0", "65536"])
+def test_dashboard_server_binding_rejects_invalid_environment_port(value: str) -> None:
+    with pytest.raises(ValueError, match="PORT must be an integer"):
+        resolve_dashboard_server_binding(environ={"PORT": value})
 
 
 class AsgiResponse:
@@ -438,3 +600,43 @@ def _write_json(path: Path, payload: dict) -> None:
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _autopilot_status_payload() -> dict[str, Any]:
+    return AutopilotTickResult(
+        schema_version="1.0",
+        run_id="synthetic-run",
+        started_at_utc="2026-06-01T12:00:00+00:00",
+        completed_at_utc="2026-06-01T12:00:01+00:00",
+        duration_seconds=1.0,
+        dry_run=False,
+        autopilot_enabled=True,
+        season=2026,
+        event="Synthetic Grand Prix",
+        event_slug="synthetic-grand-prix",
+        round_number=1,
+        event_format="conventional",
+        orchestrator_state_before="WAITING_FOR_FP1",
+        orchestrator_state_after="WAITING_FOR_FP1",
+        calendar_source="fastf1_event_schedule",
+        fp1_status="scheduled",
+        fp2_status="scheduled",
+        fp3_status="scheduled",
+        qualifying_status="scheduled",
+        forecast_exists=False,
+        settlement_exists=False,
+        action_considered="wait_for_fp1",
+        action_taken="none",
+        action_result="waiting",
+        retryable=False,
+        retry_reason=None,
+        next_recommended_check_at_utc="2026-06-02T12:00:00+00:00",
+        lock_status="acquired",
+        error_classification="none",
+        error_message_safe=None,
+        current_dashboard_lifecycle="settled_partial_coverage",
+        fastf1_cache_bytes=1024,
+        runtime_total_known_bytes=2048,
+        volume_capacity_bytes=500 * 1024 * 1024,
+        cache_warning_status="ok",
+    ).to_dict()

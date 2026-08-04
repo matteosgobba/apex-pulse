@@ -5,7 +5,11 @@ import { loadCurrentEventPageData } from "@/lib/api";
 export default async function CurrentEventPage() {
   const data = await loadCurrentEventPageData();
   return (
-    <AppShell health={data.health} generatedAt={data.currentEvent?.generated_at_utc ?? null}>
+    <AppShell
+      health={data.health}
+      generatedAt={data.currentEvent?.generated_at_utc ?? null}
+      autoRefresh
+    >
       <CurrentEventPageView data={data} />
     </AppShell>
   );

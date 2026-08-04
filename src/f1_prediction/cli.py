@@ -1,6 +1,8 @@
 """Command-line interface for data ingestion workflows."""
 
 import json
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -181,6 +183,21 @@ from f1_prediction.modeling.temporal_weighting_report import (
 )
 from f1_prediction.modeling.train_tabular import TabularTrainingSummary
 from f1_prediction.modeling.train_tabular import train_tabular_models as run_tabular_training
+from f1_prediction.modeling.weekend_orchestrator import (
+    load_autopilot_config,
+    run_autopilot_tick,
+)
+from f1_prediction.modeling.weekend_orchestrator_rehearsal import (
+    rehearse_autopilot_artifacts,
+)
+from f1_prediction.production_state import (
+    ProductionStateConflictError,
+    ProductionStateError,
+    dashboard_fingerprint,
+    export_production_state,
+    import_production_state,
+)
+from f1_prediction.runtime import create_production_runtime_report
 from f1_prediction.utils.logging import configure_logging
 
 app = typer.Typer(
@@ -2743,13 +2760,13 @@ def _print_dashboard_export_summary(summary: DashboardExportSummary, project_roo
 @app.command("dashboard-api")
 def dashboard_api_command(
     host: Annotated[
-        str,
-        typer.Option("--host", help="Development API host."),
-    ] = "127.0.0.1",
+        str | None,
+        typer.Option("--host", help="API host; defaults to 0.0.0.0 when PORT is configured."),
+    ] = None,
     port: Annotated[
-        int,
-        typer.Option("--port", min=1, max=65535, help="Development API port."),
-    ] = 8000,
+        int | None,
+        typer.Option("--port", min=1, max=65535, help="API port; defaults to PORT or 8000."),
+    ] = None,
     dashboard_dir: Annotated[
         Path | None,
         typer.Option(
@@ -2759,17 +2776,253 @@ def dashboard_api_command(
     ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """Run the read-only dashboard API development server."""
+    """Run the read-only dashboard API server."""
     configure_logging(verbose=verbose)
     try:
         import uvicorn
 
         from f1_prediction.dashboard_api.app import create_dashboard_app
+        from f1_prediction.dashboard_api.server import resolve_dashboard_server_binding
     except ImportError as exc:
         typer.echo("Error: dashboard API dependencies are not installed.", err=True)
         raise typer.Exit(code=1) from exc
+    try:
+        binding = resolve_dashboard_server_binding(host=host, port=port)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="PORT") from exc
     application = create_dashboard_app(dashboard_dir=dashboard_dir)
-    uvicorn.run(application, host=host, port=port)
+    uvicorn.run(application, host=binding.host, port=binding.port)
+
+
+@app.command("autopilot-tick")
+def autopilot_tick_command(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Inspect and report without any workflow mutation."),
+    ] = False,
+    now: Annotated[
+        str | None,
+        typer.Option(
+            "--now", help="Timezone-aware ISO timestamp used for deterministic diagnosis."
+        ),
+    ] = None,
+    season: Annotated[
+        int | None,
+        typer.Option("--season", min=1950, help="Diagnostic calendar-season override."),
+    ] = None,
+    event: Annotated[
+        str | None,
+        typer.Option("--event", help="Diagnostic event identity override."),
+    ] = None,
+    output_json: Annotated[
+        bool,
+        typer.Option("--json", help="Emit the structured tick result as JSON."),
+    ] = False,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    autopilot_config_path: Annotated[
+        Path | None,
+        typer.Option("--autopilot-config", help="Optional autopilot YAML configuration."),
+    ] = None,
+    verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
+) -> None:
+    """Evaluate one production-safe Formula 1 weekend transition."""
+    configure_logging(verbose=verbose)
+    try:
+        data_config = load_data_config(config_path=config_path)
+        model_config = load_model_config(
+            config_path=model_config_path,
+            project_root=data_config.project_root,
+        )
+        feature_config = load_feature_config(
+            config_path=features_config_path,
+            project_root=data_config.project_root,
+        )
+        parsed_now = _parse_autopilot_now(now)
+        autopilot_config = load_autopilot_config(
+            autopilot_config_path or data_config.project_root / "configs/autopilot.yaml"
+        )
+        result = run_autopilot_tick(
+            data_config,
+            model_config,
+            feature_config,
+            autopilot_config=autopilot_config,
+            now=parsed_now,
+            season=season,
+            event=event,
+            dry_run=dry_run,
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    payload = result.to_dict()
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        for field, value in payload.items():
+            typer.echo(f"{field}={value if value is not None else 'none'}")
+
+
+@app.command("production-runtime-check")
+def production_runtime_check_command() -> None:
+    """Inspect production runtime paths and seed artifacts without mutating them."""
+    try:
+        report = create_production_runtime_report()
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for field, value in report.to_dict().items():
+        rendered = (
+            "not_configured"
+            if value is None
+            else str(value).lower()
+            if isinstance(value, bool)
+            else value
+        )
+        typer.echo(f"{field}={rendered}")
+
+
+def _parse_autopilot_now(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    normalized = value.strip().replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("--now must include a UTC offset, for example 2026-08-03T12:00:00Z")
+    return parsed.astimezone(timezone.utc)
+
+
+@app.command("autopilot-rehearsal")
+def autopilot_rehearsal_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional path to the model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    autopilot_config_path: Annotated[
+        Path | None,
+        typer.Option("--autopilot-config", help="Optional autopilot YAML configuration."),
+    ] = None,
+) -> None:
+    """Rehearse four transitions against temporary copies of existing artifacts."""
+    try:
+        data_config = load_data_config(config_path=config_path)
+        model_config = load_model_config(
+            config_path=model_config_path,
+            project_root=data_config.project_root,
+        )
+        feature_config = load_feature_config(
+            config_path=features_config_path,
+            project_root=data_config.project_root,
+        )
+        autopilot_config = load_autopilot_config(
+            autopilot_config_path or data_config.project_root / "configs/autopilot.yaml"
+        )
+        summary = rehearse_autopilot_artifacts(
+            data_config,
+            model_config,
+            feature_config,
+            autopilot_config=autopilot_config,
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+    if summary.status != "passed":
+        raise typer.Exit(code=1)
+
+
+@app.command("production-state-export")
+def production_state_export_command(
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", help="Directory for the manifest and compressed bundle."),
+    ] = None,
+) -> None:
+    """Export the minimal checksummed production-state dependency closure."""
+    try:
+        result = export_production_state(output_dir=output_dir)
+    except (OSError, ValueError, ProductionStateError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo("status=exported")
+    for field in (
+        "bundle_path",
+        "manifest_path",
+        "inventory_path",
+        "summary_path",
+        "bundle_fingerprint",
+        "manifest_fingerprint",
+        "file_count",
+        "total_bytes",
+        "dashboard_fingerprint",
+    ):
+        typer.echo(f"{field}={getattr(result, field)}")
+
+
+@app.command("production-state-import")
+def production_state_import_command(
+    bundle: Annotated[
+        Path,
+        typer.Option("--bundle", exists=True, dir_okay=False, help="Production-state tarball."),
+    ],
+    runtime_root: Annotated[
+        Path,
+        typer.Option("--runtime-root", file_okay=False, help="Persistent runtime mount root."),
+    ],
+) -> None:
+    """Safely seed a persistent runtime from a verified production-state bundle."""
+    try:
+        result = import_production_state(bundle, runtime_root)
+    except ProductionStateConflictError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+    except (OSError, ValueError, ProductionStateError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for field, value in asdict(result).items():
+        typer.echo(f"{field}={value}")
+
+
+@app.command("production-dashboard-fingerprint")
+def production_dashboard_fingerprint_command(
+    dashboard_dir: Annotated[
+        Path,
+        typer.Option(
+            "--dashboard-dir",
+            file_okay=False,
+            help="Directory containing the existing validated dashboard JSON.",
+        ),
+    ] = Path("reports/dashboard"),
+) -> None:
+    """Report deterministic parity facts for existing dashboard artifacts."""
+    try:
+        result = dashboard_fingerprint(dashboard_dir.resolve())
+    except (OSError, ValueError, ProductionStateError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    for field, value in result.items():
+        if field == "files":
+            typer.echo(f"files={json.dumps(value, sort_keys=True)}")
+        else:
+            typer.echo(f"{field}={value}")
 
 
 def _print_prospective_replay_eligibility_audit_summary(

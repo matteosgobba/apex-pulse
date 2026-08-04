@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,7 @@ from f1_prediction.dashboard_api.schemas import (
 )
 from f1_prediction.dashboard_api.service import (
     DEFAULT_DASHBOARD_DIR,
+    AutopilotStatusService,
     DashboardApiError,
     DashboardArtifactService,
     parse_stale_after_minutes,
@@ -29,16 +32,36 @@ STALE_AFTER_MINUTES_ENV = "APEX_PULSE_DASHBOARD_STALE_AFTER_MINUTES"
 DEFAULT_CORS_ORIGINS = "http://localhost:3000,http://127.0.0.1:3000"
 
 
-def create_dashboard_app(dashboard_dir: Path | None = None) -> FastAPI:
+def create_dashboard_app(
+    dashboard_dir: Path | None = None,
+    *,
+    scheduler_factory: Callable[[], Any] | None = None,
+) -> FastAPI:
     """Create the read-only dashboard API app."""
     configured_dir = dashboard_dir or Path(os.getenv(DASHBOARD_DIR_ENV, DEFAULT_DASHBOARD_DIR))
     service = DashboardArtifactService(configured_dir)
+    autopilot_service = AutopilotStatusService(configured_dir)
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        from f1_prediction.autopilot_scheduler import build_production_scheduler
+
+        scheduler = (scheduler_factory or build_production_scheduler)()
+        application.state.autopilot_scheduler = scheduler
+        scheduler.start()
+        try:
+            yield
+        finally:
+            await scheduler.stop()
+
     app = FastAPI(
         title="Apex Pulse Dashboard API",
         version="1.0.0",
         description="Read-only API over validated dashboard JSON artifacts.",
+        lifespan=lifespan,
     )
     app.state.dashboard_service = service
+    app.state.autopilot_status_service = autopilot_service
     app.state.dashboard_stale_after_minutes = parse_stale_after_minutes(
         os.getenv(STALE_AFTER_MINUTES_ENV)
     )
@@ -72,6 +95,12 @@ def create_dashboard_app(dashboard_dir: Path | None = None) -> FastAPI:
             service=SERVICE_NAME,
             api_version=API_VERSION,
             dashboard_artifact_status=service.health_status(),
+        )
+
+    @app.get("/api/v1/autopilot-status")
+    def autopilot_status() -> JSONResponse:
+        return _json_response(
+            autopilot_service.load_status(), headers={"Cache-Control": "no-cache"}
         )
 
     @app.get("/api/v1/dashboard/manifest")
@@ -134,5 +163,7 @@ def _cors_origins() -> list[str]:
     raw = os.getenv(CORS_ORIGINS_ENV, DEFAULT_CORS_ORIGINS)
     origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
     if "*" in origins:
-        return ["*"] if len(origins) == 1 else [origin for origin in origins if origin != "*"]
+        raise ValueError(
+            f"{CORS_ORIGINS_ENV} must list explicit origins; wildcard CORS is not allowed"
+        )
     return origins

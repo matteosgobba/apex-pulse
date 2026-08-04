@@ -7,10 +7,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from f1_prediction.autopilot_scheduler import (
+    SCHEDULER_STATUS_FILE,
+    scheduler_environment_status,
+    validate_scheduler_status,
+)
 from f1_prediction.dashboard.schema import (
     DashboardSchemaError,
     validate_dashboard_artifact_file,
 )
+from f1_prediction.modeling.weekend_orchestrator import STATUS_FILE, validate_autopilot_status
 from f1_prediction.utils.paths import get_project_root, resolve_project_path
 
 DASHBOARD_ARTIFACTS: dict[str, str] = {
@@ -123,6 +129,45 @@ class DashboardArtifactService:
 
     def _export_manifest_exists(self) -> bool:
         return (self.dashboard_dir / DASHBOARD_ARTIFACTS["dashboard_manifest"]).is_file()
+
+
+class AutopilotStatusService:
+    """Read the separate operational snapshot without exposing a mutation path."""
+
+    def __init__(self, dashboard_dir: Path | str | None = None) -> None:
+        project_root = get_project_root()
+        configured = dashboard_dir or DEFAULT_DASHBOARD_DIR
+        resolved_dashboard = resolve_project_path(configured, project_root)
+        self.status_path = resolved_dashboard.parent / "metrics" / STATUS_FILE
+        self.scheduler_status_path = resolved_dashboard.parent / "metrics" / SCHEDULER_STATUS_FILE
+
+    def load_status(self) -> dict[str, Any]:
+        """Return a stable initialized/uninitialized operational envelope."""
+        try:
+            scheduler = self._load_scheduler_status()
+            tick = scheduler.get("last_tick_result")
+            if tick is None and self.status_path.is_file():
+                tick = json.loads(self.status_path.read_text(encoding="utf-8"))
+            validated = validate_autopilot_status(tick) if tick is not None else None
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise DashboardArtifactInvalidError(artifact_type="autopilot_status") from exc
+        scheduler_fields = {
+            key: value
+            for key, value in scheduler.items()
+            if key not in {"schema_version", "last_tick_result"}
+        }
+        data = {**(validated or {}), **scheduler_fields}
+        return {
+            "schema_version": "1.0",
+            "status": "available" if validated is not None else "not_initialized",
+            "data": data,
+        }
+
+    def _load_scheduler_status(self) -> dict[str, Any]:
+        if not self.scheduler_status_path.is_file():
+            return scheduler_environment_status()
+        payload = json.loads(self.scheduler_status_path.read_text(encoding="utf-8"))
+        return validate_scheduler_status(payload)
 
 
 def parse_stale_after_minutes(value: str | None) -> int:

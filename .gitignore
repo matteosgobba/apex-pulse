@@ -21,6 +21,7 @@ venv/
 .vscode/
 
 # Generated project artifacts
+dist/
 data/raw/*
 data/interim/*
 data/processed/*
@@ -44,6 +45,7 @@ reports/dashboard/*
 # Frontend generated files
 web/node_modules/
 web/.next/
+web/.vercel/
 web/out/
 web/coverage/
 web/.env.local

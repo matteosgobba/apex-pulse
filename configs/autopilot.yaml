@@ -1,0 +1,13 @@
+autopilot:
+  practice_initial_grace_minutes: 5
+  fp3_initial_grace_minutes: 15
+  qualifying_initial_grace_minutes: 15
+  retry_interval_minutes: 10
+  post_qualifying_event_hold_hours: 24
+  settled_check_interval_minutes: 360
+  cache_warning_mb: 400
+  session_default_duration_minutes:
+    FP1: 60
+    FP2: 60
+    FP3: 60
+    Q: 90
