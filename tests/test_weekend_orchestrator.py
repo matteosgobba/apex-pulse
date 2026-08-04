@@ -28,6 +28,7 @@ from f1_prediction.modeling.weekend_orchestrator import (
 )
 from f1_prediction.modeling.weekend_orchestrator_rehearsal import (
     rehearse_autopilot_artifacts,
+    rehearse_live_weekend_sequence,
 )
 
 UTC = timezone.utc
@@ -584,6 +585,34 @@ def test_artifact_rehearsal_uses_copies_and_preserves_sources(tmp_path: Path) ->
         "would_run_canonical_after_qualifying"
     )
     assert {path.name: path.read_bytes() for path in metrics.iterdir()} == before
+
+
+def test_full_live_weekend_rehearsal_covers_fourteen_transitions(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+
+    summary = rehearse_live_weekend_sequence(
+        _data_config(tmp_path),
+        load_model_config(project_root=project_root),
+        load_feature_config(project_root=project_root),
+        autopilot_config=AutopilotConfig(),
+    )
+
+    assert summary.status == "passed"
+    assert summary.source_artifacts_unchanged is True
+    assert len(summary.scenarios) == 14
+    assert (
+        summary.scenarios["unsupported_event_finishes"]["orchestrator_state_after"]
+        == "UNSUPPORTED_WEEKEND_FORMAT"
+    )
+    assert summary.scenarios["fp3_elapsed_data_pending"]["action_taken"] == "none"
+    assert summary.scenarios["fp3_ready"]["action_result"] == (
+        "would_run_canonical_before_qualifying"
+    )
+    assert summary.scenarios["qualifying_elapsed_data_pending"]["action_taken"] == "none"
+    assert summary.scenarios["qualifying_ready"]["action_result"] == (
+        "would_run_canonical_after_qualifying"
+    )
+    assert all(scenario["trigger_source"] == "rehearsal" for scenario in summary.scenarios.values())
 
 
 def _tick(

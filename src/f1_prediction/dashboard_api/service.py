@@ -16,6 +16,10 @@ from f1_prediction.dashboard.schema import (
     DashboardSchemaError,
     validate_dashboard_artifact_file,
 )
+from f1_prediction.modeling.live_event_integrity import (
+    LIVE_VALIDATION_STATUS_FILE,
+    validate_live_validation_status,
+)
 from f1_prediction.modeling.weekend_orchestrator import STATUS_FILE, validate_autopilot_status
 from f1_prediction.utils.paths import get_project_root, resolve_project_path
 
@@ -168,6 +172,35 @@ class AutopilotStatusService:
             return scheduler_environment_status()
         payload = json.loads(self.scheduler_status_path.read_text(encoding="utf-8"))
         return validate_scheduler_status(payload)
+
+
+class LiveValidationStatusService:
+    """Read live-weekend proof metadata without touching canonical workflow state."""
+
+    def __init__(self, dashboard_dir: Path | str | None = None) -> None:
+        project_root = get_project_root()
+        configured = dashboard_dir or DEFAULT_DASHBOARD_DIR
+        resolved_dashboard = resolve_project_path(configured, project_root)
+        self.status_path = resolved_dashboard.parent / "metrics" / LIVE_VALIDATION_STATUS_FILE
+
+    def load_status(self) -> dict[str, Any]:
+        """Return a normal waiting envelope until a scheduler observation exists."""
+        if not self.status_path.is_file():
+            return {
+                "schema_version": "1.0",
+                "status": "not_initialized",
+                "data": {
+                    "phase": "waiting_for_live_validation",
+                    "operator_attention_required": False,
+                    "operator_attention_category": "NONE",
+                },
+            }
+        try:
+            payload = json.loads(self.status_path.read_text(encoding="utf-8"))
+            validated = validate_live_validation_status(payload)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            raise DashboardArtifactInvalidError(artifact_type="live_validation_status") from exc
+        return {"schema_version": "1.0", "status": "available", "data": validated}
 
 
 def parse_stale_after_minutes(value: str | None) -> int:

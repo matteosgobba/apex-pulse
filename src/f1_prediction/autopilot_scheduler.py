@@ -251,13 +251,31 @@ def build_production_scheduler(
     autopilot_config = load_autopilot_config(data_config.project_root / "configs/autopilot.yaml")
 
     def tick() -> AutopilotTickResult:
-        return run_autopilot_tick(
+        result = run_autopilot_tick(
             data_config,
             model_config,
             feature_config,
             autopilot_config=autopilot_config,
             environ=environment,
+            trigger_source="scheduler",
         )
+        try:
+            from f1_prediction.modeling.live_event_integrity import (
+                observe_live_validation_tick,
+            )
+
+            observe_live_validation_tick(
+                data_config,
+                result.to_dict(),
+                trigger_source="scheduler",
+                scheduler_enabled=settings.enabled,
+                scheduler_running=True,
+            )
+        except Exception:
+            # Observability must never turn a completed canonical workflow into a
+            # scheduler failure or cause a second attempt at the same mutation.
+            LOGGER.exception("Live-validation observation failed after scheduler tick")
+        return result
 
     return AutopilotScheduler(
         settings,

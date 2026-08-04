@@ -190,6 +190,7 @@ class AutopilotTickResult:
     volume_capacity_bytes: int | None
     cache_warning_status: str
     operational_event: dict[str, Any] | None = None
+    trigger_source: str = "manual"
 
     def to_dict(self) -> dict[str, Any]:
         """Return the stable API/audit representation."""
@@ -446,8 +447,11 @@ def run_autopilot_tick(
     after_workflow: Callable[..., MonitoringWorkflowSummary] = run_monitoring_after_qualifying,
     environ: Mapping[str, str] | None = None,
     allow_mutation_when_disabled: bool = False,
+    trigger_source: str = "manual",
 ) -> AutopilotTickResult:
     """Inspect once, perform at most one canonical transition, record, and return."""
+    if trigger_source not in {"scheduler", "manual", "rehearsal"}:
+        raise ValueError("trigger_source must be scheduler, manual, or rehearsal")
     environment = os.environ if environ is None else environ
     instant = _aware_utc(now or datetime.now(timezone.utc))
     started_monotonic = time.monotonic()
@@ -478,7 +482,7 @@ def run_autopilot_tick(
                 f"{AUTOPILOT_ENABLED_ENV} must be true before a mutating tick is allowed."
             ),
             lock_status="not_attempted",
-            storage=storage,
+            storage={**storage, "trigger_source": trigger_source},
         )
 
     if not dry_run and not lock.acquire():
@@ -497,7 +501,7 @@ def run_autopilot_tick(
             next_check=instant + timedelta(minutes=autopilot_config.retry_interval_minutes),
             lock_status="contended",
             error_classification=ErrorClassification.RETRYABLE,
-            storage=storage,
+            storage={**storage, "trigger_source": trigger_source},
         )
 
     try:
@@ -525,7 +529,7 @@ def run_autopilot_tick(
                 before_workflow,
                 after_workflow,
                 "not_required_dry_run" if dry_run else lock.status,
-                storage,
+                {**storage, "trigger_source": trigger_source},
             )
         except Exception as exc:
             message = _safe_message(exc)
@@ -554,7 +558,7 @@ def run_autopilot_tick(
                     ErrorClassification.RETRYABLE if retryable else ErrorClassification.BLOCKING
                 ),
                 error_message=message,
-                storage=storage,
+                storage={**storage, "trigger_source": trigger_source},
             )
         if not dry_run:
             _write_operational_record(metrics_dir, result)
@@ -1475,6 +1479,7 @@ def _result(
         volume_capacity_bytes=storage["volume_capacity_bytes"],
         cache_warning_status=str(storage["cache_warning_status"]),
         operational_event=_operational_event_snapshot(event, now) if event else None,
+        trigger_source=str(storage.get("trigger_source", "manual")),
     )
 
 
@@ -1493,7 +1498,10 @@ def _write_operational_record(metrics_dir: Path, result: AutopilotTickResult) ->
 
 def validate_autopilot_status(payload: Any) -> dict[str, Any]:
     """Validate the separate operational status schema used by the read-only API."""
-    required = set(AutopilotTickResult.__dataclass_fields__) - {"operational_event"}
+    required = set(AutopilotTickResult.__dataclass_fields__) - {
+        "operational_event",
+        "trigger_source",
+    }
     if not isinstance(payload, dict) or required - set(payload):
         raise ValueError("Autopilot status schema is incomplete")
     if payload.get("schema_version") != AUTOPILOT_SCHEMA_VERSION:
@@ -1502,6 +1510,8 @@ def validate_autopilot_status(payload: Any) -> dict[str, Any]:
         raise ValueError("Invalid autopilot state")
     if payload.get("operational_event") is not None:
         _validate_operational_event(payload["operational_event"])
+    if payload.get("trigger_source", "manual") not in {"scheduler", "manual", "rehearsal"}:
+        raise ValueError("Invalid autopilot trigger source")
     return payload
 
 

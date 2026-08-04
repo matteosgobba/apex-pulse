@@ -86,6 +86,16 @@ from f1_prediction.modeling.diagnostics import DiagnosticsReportSummary
 from f1_prediction.modeling.diagnostics import create_diagnostics_report as run_diagnostics_report
 from f1_prediction.modeling.evaluate_baselines import BaselineEvaluationSummary
 from f1_prediction.modeling.evaluate_baselines import evaluate_baselines as run_baseline_evaluation
+from f1_prediction.modeling.live_event_integrity import (
+    LIVE_VALIDATION_DIR,
+    PRE_WEEKEND_BASELINE_FILE,
+    SUCCESSFUL_CLASSIFICATIONS,
+    compare_live_integrity,
+    create_live_integrity_baseline,
+    create_live_validation_checkpoint,
+    observe_live_validation_tick,
+    write_live_integrity_baseline,
+)
 from f1_prediction.modeling.monitoring_data_integrity_audit import (
     MonitoringDataIntegrityAuditSummary,
 )
@@ -189,6 +199,7 @@ from f1_prediction.modeling.weekend_orchestrator import (
 )
 from f1_prediction.modeling.weekend_orchestrator_rehearsal import (
     rehearse_autopilot_artifacts,
+    rehearse_live_weekend_sequence,
 )
 from f1_prediction.production_state import (
     ProductionStateConflictError,
@@ -2861,7 +2872,16 @@ def autopilot_tick_command(
             season=season,
             event=event,
             dry_run=dry_run,
+            trigger_source="manual",
         )
+        if not dry_run:
+            observe_live_validation_tick(
+                data_config,
+                result.to_dict(),
+                trigger_source="manual",
+                scheduler_enabled=False,
+                scheduler_running=False,
+            )
     except (FileNotFoundError, OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(code=1) from exc
@@ -2871,6 +2891,102 @@ def autopilot_tick_command(
     else:
         for field, value in payload.items():
             typer.echo(f"{field}={value if value is not None else 'none'}")
+
+
+@app.command("live-integrity-baseline")
+def live_integrity_baseline_command(
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            help="Optional new checkpoint path. Existing files are never overwritten.",
+        ),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+) -> None:
+    """Fingerprint pre-existing immutable monitoring evidence event by event."""
+    try:
+        data_config = load_data_config(config_path=config_path)
+        payload = (
+            write_live_integrity_baseline(data_config, output)
+            if output is not None
+            else create_live_integrity_baseline(data_config)
+        )
+    except (FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+@app.command("live-integrity-compare")
+def live_integrity_compare_command(
+    baseline: Annotated[
+        Path,
+        typer.Option("--baseline", help="Previously captured event-scoped baseline JSON."),
+    ],
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+) -> None:
+    """Classify current state as unchanged, valid append, or blocking mutation."""
+    try:
+        payload = compare_live_integrity(
+            load_data_config(config_path=config_path), baseline.expanduser().resolve()
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    if payload["classification"] not in SUCCESSFUL_CLASSIFICATIONS:
+        raise typer.Exit(code=1)
+
+
+@app.command("live-validation-checkpoint")
+def live_validation_checkpoint_command(
+    stage: Annotated[
+        str,
+        typer.Option(
+            "--stage",
+            help="Checkpoint label such as post_forecast_validation.",
+        ),
+    ],
+    baseline: Annotated[
+        Path | None,
+        typer.Option("--baseline", help="Baseline path; defaults to the runtime baseline."),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", help="New checkpoint path; defaults under live_validation/."),
+    ] = None,
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+) -> None:
+    """Write lightweight live-validation metadata without copying ML artifacts."""
+    if not stage.strip() or any(character in stage for character in ("/", "\\", "..")):
+        raise typer.BadParameter("--stage must be a non-empty filename-safe label")
+    try:
+        data_config = load_data_config(config_path=config_path)
+        live_dir = data_config.metrics_output_dir / LIVE_VALIDATION_DIR
+        baseline_path = baseline or live_dir / PRE_WEEKEND_BASELINE_FILE
+        output_path = output or live_dir / f"{stage}.json"
+        payload = create_live_validation_checkpoint(
+            data_config,
+            baseline_path.expanduser().resolve(),
+            output_path.expanduser().resolve(),
+            stage=stage,
+        )
+    except (FileExistsError, FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    if not payload["integrity"]["success"]:
+        raise typer.Exit(code=1)
 
 
 @app.command("production-runtime-check")
@@ -2940,6 +3056,46 @@ def autopilot_rehearsal_command(
             model_config,
             feature_config,
             autopilot_config=autopilot_config,
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+    if summary.status != "passed":
+        raise typer.Exit(code=1)
+
+
+@app.command("live-validation-rehearsal")
+def live_validation_rehearsal_command(
+    config_path: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional path to the data YAML configuration."),
+    ] = None,
+    model_config_path: Annotated[
+        Path | None,
+        typer.Option("--model-config", help="Optional model YAML configuration."),
+    ] = None,
+    features_config_path: Annotated[
+        Path | None,
+        typer.Option("--features-config", help="Optional features YAML configuration."),
+    ] = None,
+    autopilot_config_path: Annotated[
+        Path | None,
+        typer.Option("--autopilot-config", help="Optional autopilot YAML configuration."),
+    ] = None,
+) -> None:
+    """Rehearse fourteen live-weekend transitions on isolated temporary state."""
+    try:
+        data_config = load_data_config(config_path=config_path)
+        summary = rehearse_live_weekend_sequence(
+            data_config,
+            load_model_config(config_path=model_config_path, project_root=data_config.project_root),
+            load_feature_config(
+                config_path=features_config_path, project_root=data_config.project_root
+            ),
+            autopilot_config=load_autopilot_config(
+                autopilot_config_path or data_config.project_root / "configs/autopilot.yaml"
+            ),
         )
     except (FileNotFoundError, OSError, ValueError) as exc:
         typer.echo(f"Error: {exc}", err=True)

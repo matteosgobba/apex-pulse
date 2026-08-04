@@ -69,6 +69,67 @@ def test_autopilot_status_returns_normal_not_initialized_envelope(tmp_path: Path
     assert response.json["data"]["last_tick_origin"] is None
 
 
+def test_live_validation_status_returns_normal_waiting_envelope(tmp_path: Path) -> None:
+    response = _request(
+        create_dashboard_app(tmp_path / "dashboard"),
+        "GET",
+        "/api/v1/live-validation-status",
+    )
+
+    assert response.status_code == 200
+    assert response.json == {
+        "schema_version": "1.0",
+        "status": "not_initialized",
+        "data": {
+            "phase": "waiting_for_live_validation",
+            "operator_attention_required": False,
+            "operator_attention_category": "NONE",
+        },
+    }
+
+
+def test_live_validation_status_is_validated_read_only(tmp_path: Path) -> None:
+    dashboard_dir = tmp_path / "reports/dashboard"
+    dashboard_dir.mkdir(parents=True)
+    status_path = tmp_path / "reports/metrics/live_validation_status.json"
+    status_path.parent.mkdir(parents=True)
+    payload = {
+        "schema_version": "1.0",
+        "target_event": "Synthetic GP",
+        "target_event_slug": "synthetic-gp",
+        "season": 2026,
+        "round_number": 12,
+        "event_format": "conventional",
+        "supported_format": True,
+        "phase": "pre_forecast_observation",
+        "trigger_source": "scheduler",
+        "orchestrator_state": "WAITING_FOR_FP1",
+        "pre_weekend_baseline_status": "verified",
+        "forecast_status": "not_created",
+        "forecast_row_count": 0,
+        "settlement_status": "not_created",
+        "settlement_row_count": 0,
+        "historical_integrity_status": "UNCHANGED",
+        "static_invariants_status": "verified",
+        "operator_attention_required": False,
+        "operator_attention_category": "NONE",
+        "timeline": {},
+        "last_updated_at_utc": GENERATED_AT,
+    }
+    _write_json(status_path, payload)
+    before = status_path.read_bytes()
+
+    response = _request(
+        create_dashboard_app(dashboard_dir), "GET", "/api/v1/live-validation-status"
+    )
+
+    assert response.status_code == 200
+    assert response.json["status"] == "available"
+    assert response.json["data"] == payload
+    assert response.headers["cache-control"] == "no-cache"
+    assert status_path.read_bytes() == before
+
+
 def test_autopilot_status_returns_validated_read_only_snapshot(tmp_path: Path) -> None:
     dashboard_dir = tmp_path / "reports/dashboard"
     dashboard_dir.mkdir(parents=True)

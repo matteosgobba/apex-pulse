@@ -23,6 +23,7 @@ from f1_prediction.dashboard_api.service import (
     AutopilotStatusService,
     DashboardApiError,
     DashboardArtifactService,
+    LiveValidationStatusService,
     parse_stale_after_minutes,
 )
 
@@ -41,6 +42,7 @@ def create_dashboard_app(
     configured_dir = dashboard_dir or Path(os.getenv(DASHBOARD_DIR_ENV, DEFAULT_DASHBOARD_DIR))
     service = DashboardArtifactService(configured_dir)
     autopilot_service = AutopilotStatusService(configured_dir)
+    live_validation_service = LiveValidationStatusService(configured_dir)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -62,6 +64,7 @@ def create_dashboard_app(
     )
     app.state.dashboard_service = service
     app.state.autopilot_status_service = autopilot_service
+    app.state.live_validation_status_service = live_validation_service
     app.state.dashboard_stale_after_minutes = parse_stale_after_minutes(
         os.getenv(STALE_AFTER_MINUTES_ENV)
     )
@@ -101,6 +104,12 @@ def create_dashboard_app(
     def autopilot_status() -> JSONResponse:
         return _json_response(
             autopilot_service.load_status(), headers={"Cache-Control": "no-cache"}
+        )
+
+    @app.get("/api/v1/live-validation-status")
+    def live_validation_status() -> JSONResponse:
+        return _json_response(
+            live_validation_service.load_status(), headers={"Cache-Control": "no-cache"}
         )
 
     @app.get("/api/v1/dashboard/manifest")
