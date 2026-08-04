@@ -125,9 +125,11 @@ export default function MethodologyPage() {
           />
           <div className="relative mt-10">
             <div
-              className="absolute left-[10%] right-[10%] top-5 hidden h-px bg-apex-border lg:block"
+              className="pointer-events-none absolute inset-x-0 top-5 hidden grid-cols-4 gap-x-7 lg:grid"
               aria-hidden="true"
-            />
+            >
+              <span className="col-start-1 col-end-4 -mr-12 ml-5 h-px bg-apex-border" />
+            </div>
             <ol className="grid gap-x-7 gap-y-9 md:grid-cols-2 lg:grid-cols-4">
               {PROCESS.map((section) => (
                 <li key={section.number} className="relative border-l border-apex-border pl-5 md:border-l-0 md:pl-0">
