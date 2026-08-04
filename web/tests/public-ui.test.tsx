@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { act, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { SessionCountdown } from "@/components/session-countdown";
 import type { EventSchedule } from "@/lib/dashboard-types";
@@ -21,6 +21,10 @@ const SCHEDULE: EventSchedule = {
     { session: "Q", display_name: "Qualifying", scheduled_start_utc: "2026-07-25T14:00:00Z" }
   ]
 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("session countdown", () => {
   test("selects FP1 before the weekend begins", () => {
@@ -66,6 +70,41 @@ describe("session countdown", () => {
       />
     );
     expect(screen.getByRole("heading", { name: "Session schedule unavailable" })).toBeInTheDocument();
+  });
+
+  test("ticks each second, rolls to the next supplied session, and cleans up", () => {
+    vi.useFakeTimers();
+    const sprintSchedule: EventSchedule = {
+      available: true,
+      sessions: [
+        {
+          session: "SQ",
+          display_name: "Sprint Qualifying",
+          scheduled_start_utc: "2026-07-24T14:00:00Z"
+        },
+        {
+          session: "S",
+          display_name: "Sprint",
+          scheduled_start_utc: "2026-07-24T15:00:00Z"
+        }
+      ]
+    };
+    const view = render(
+      <SessionCountdown
+        schedule={sprintSchedule}
+        lifecycle="practice_in_progress"
+        initialNow="2026-07-24T13:59:59Z"
+      />
+    );
+    const countdown = screen.getByLabelText("Countdown to Sprint Qualifying");
+    expect(within(countdown).getByText("01")).toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(1_000));
+
+    expect(screen.getByRole("heading", { name: "Sprint" })).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    view.unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

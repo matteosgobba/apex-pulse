@@ -52,6 +52,18 @@ describe("dashboard freshness", () => {
     expect(screen.getByRole("status")).toBeInTheDocument();
   });
 
+  test("terminal lifecycle can render old artifact age as settled rather than stale", () => {
+    const freshness = evaluateFreshness("2026-07-02T12:00:00Z", {
+      now: new Date("2026-07-06T12:00:00Z"),
+      staleAfterMinutes: 180
+    });
+    render(<DataFreshnessNotice freshness={freshness} terminal />);
+
+    expect(screen.getByText("Settled · Updated 4 days ago")).toBeInTheDocument();
+    expect(screen.queryByText(/Data may be stale/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   test("missing timestamp renders safe unknown state without stale warning", () => {
     render(<DataFreshnessNotice freshness={evaluateFreshness(null)} />);
 

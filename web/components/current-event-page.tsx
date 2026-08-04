@@ -3,12 +3,13 @@ import { EventHero } from "@/components/event-hero";
 import { EventMetrics } from "@/components/event-metrics";
 import { ForecastRanking } from "@/components/forecast-ranking";
 import { MethodologyPreview } from "@/components/methodology-preview";
+import { OperationalWeekendCard } from "@/components/operational-weekend-card";
 import { PredictionOfficialComparison } from "@/components/prediction-official-comparison";
-import { SessionCountdown } from "@/components/session-countdown";
 import { TechnicalDetails } from "@/components/technical-details";
 import { WeekendTimeline } from "@/components/weekend-timeline";
 import type { CurrentEventPageData } from "@/lib/dashboard-types";
 import { adaptCurrentEvent } from "@/lib/public-view-model";
+import { availableOperationalEvent } from "@/lib/operational-event";
 
 export function CurrentEventPageView({
   data,
@@ -34,16 +35,15 @@ export function CurrentEventPageView({
       />
     );
   }
+  const operationalEvent = availableOperationalEvent(data.operationalStatus);
 
   return (
     <div className="space-y-16">
-      <EventHero event={event} />
-      <div className="grid gap-5 lg:grid-cols-[0.85fr_1.15fr]">
-        <SessionCountdown
-          schedule={event.schedule}
-          lifecycle={event.lifecycle}
-          initialNow={now?.toISOString()}
-        />
+      {operationalEvent ? (
+        <OperationalWeekendCard event={operationalEvent} initialNow={now?.toISOString()} />
+      ) : null}
+      <EventHero event={event} primary={!operationalEvent} />
+      <div>
         <WeekendTimeline
           schedule={event.schedule}
           sessions={event.sessions}

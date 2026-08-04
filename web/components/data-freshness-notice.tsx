@@ -1,7 +1,13 @@
 import type { FreshnessStatus } from "@/lib/freshness";
 
-export function DataFreshnessNotice({ freshness }: { freshness: FreshnessStatus }) {
-  const stale = freshness.state === "stale";
+export function DataFreshnessNotice({
+  freshness,
+  terminal = false
+}: {
+  freshness: FreshnessStatus;
+  terminal?: boolean;
+}) {
+  const stale = freshness.state === "stale" && !terminal;
   return (
     <div
       role={stale ? "status" : undefined}
@@ -15,7 +21,11 @@ export function DataFreshnessNotice({ freshness }: { freshness: FreshnessStatus 
           stale ? "bg-apex-warning" : "bg-apex-muted"
         }`}
       />
-      {stale ? `Data may be stale · ${freshness.relativeLabel}` : freshness.relativeLabel}
+      {stale
+        ? `Data may be stale · ${freshness.relativeLabel}`
+        : terminal
+          ? `Settled · ${freshness.relativeLabel}`
+          : freshness.relativeLabel}
     </div>
   );
 }

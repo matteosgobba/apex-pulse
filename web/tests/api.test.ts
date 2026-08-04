@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   fetchDashboard,
+  loadCurrentEventPageData,
   loadForecastPageData,
   loadMonitoringHistoryPageData,
   loadPracticePageData,
@@ -100,6 +101,52 @@ describe("dashboard API client", () => {
       code: "dashboard_api_unavailable",
       message: "The dashboard API is unavailable. Start the read-only API server first."
     });
+  });
+
+  test("operational status failure is additive and does not hide latest dashboard state", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/autopilot-status")) {
+        return jsonResponse(
+          { detail: { code: "not_initialized", message: "Not initialized" } },
+          503
+        );
+      }
+      if (url.endsWith("/api/v1/health")) {
+        return jsonResponse({
+          status: "ok",
+          service: "apex-pulse-dashboard-api",
+          api_version: "v1",
+          dashboard_artifact_status: "complete"
+        });
+      }
+      const artifactType = url.endsWith("/manifest")
+        ? "dashboard_manifest"
+        : url.endsWith("/practice-status")
+          ? "event_practice_status"
+          : url.endsWith("/forecast")
+            ? "event_forecast"
+            : url.endsWith("/settlement")
+              ? "event_settlement"
+              : url.endsWith("/historical-monitoring")
+                ? "historical_monitoring_summary"
+                : "current_event";
+      return jsonResponse({
+        schema_version: "1.0",
+        artifact_type: artifactType,
+        generated_at_utc: "2026-08-01T00:00:00Z",
+        source_artifacts: [],
+        source_fingerprints: {},
+        status: "complete",
+        data: {}
+      });
+    });
+
+    const data = await loadCurrentEventPageData();
+
+    expect(data.error).toBeNull();
+    expect(data.currentEvent?.artifact_type).toBe("current_event");
+    expect(data.operationalStatus).toBeNull();
   });
 
   test("forecast endpoint failure maps to a safe page error", async () => {

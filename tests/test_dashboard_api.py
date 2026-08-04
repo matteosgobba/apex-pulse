@@ -131,6 +131,31 @@ def test_autopilot_status_exposes_scheduler_origin_and_last_tick(tmp_path: Path)
     assert response.json["data"]["scheduler_running"] is True
     assert response.json["data"]["last_tick_origin"] == "scheduler"
     assert response.json["data"]["run_id"] == "synthetic-run"
+    assert response.json["data"]["operational_event"]["event"] == "Synthetic Grand Prix"
+    assert response.json["data"]["operational_event"]["sessions"][0]["session"] == "FP1"
+
+
+def test_autopilot_status_api_reads_persisted_schedule_without_fastf1(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dashboard_dir = tmp_path / "reports/dashboard"
+    dashboard_dir.mkdir(parents=True)
+    metrics = tmp_path / "reports/metrics"
+    metrics.mkdir()
+    payload = _autopilot_status_payload()
+    _write_json(metrics / "autopilot_status.json", payload)
+    before = (metrics / "autopilot_status.json").read_bytes()
+    monkeypatch.setattr(
+        "fastf1.get_event_schedule",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("API called FastF1")),
+    )
+
+    response = _request(create_dashboard_app(dashboard_dir), "GET", "/api/v1/autopilot-status")
+
+    assert response.status_code == 200
+    assert response.json["data"]["operational_event"]["schedule_available"] is True
+    assert (metrics / "autopilot_status.json").read_bytes() == before
 
 
 def test_autopilot_status_rejects_invalid_snapshot_without_weakening_dashboard_schema(
@@ -639,4 +664,27 @@ def _autopilot_status_payload() -> dict[str, Any]:
         runtime_total_known_bytes=2048,
         volume_capacity_bytes=500 * 1024 * 1024,
         cache_warning_status="ok",
+        operational_event={
+            "season": 2026,
+            "event": "Synthetic Grand Prix",
+            "event_slug": "synthetic-grand-prix",
+            "round_number": 1,
+            "event_format": "conventional",
+            "calendar_source": "fastf1_event_schedule",
+            "supported": True,
+            "prediction_support_reason": None,
+            "schedule_available": True,
+            "timezone": "UTC",
+            "sessions": [
+                {
+                    "sequence": 1,
+                    "session": "FP1",
+                    "display_name": "Practice 1",
+                    "scheduled_start_utc": "2026-06-02T10:00:00+00:00",
+                    "scheduled_end_utc": "2026-06-02T11:00:00+00:00",
+                    "end_source": "configured_default_duration",
+                    "schedule_status": "scheduled",
+                }
+            ],
+        },
     ).to_dict()

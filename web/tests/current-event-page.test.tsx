@@ -4,6 +4,7 @@ import { describe, expect, test } from "vitest";
 import MethodologyPage from "@/app/methodology/page";
 import { CurrentEventPageView } from "@/components/current-event-page";
 import type {
+  AutopilotStatusEnvelope,
   CurrentEventEnvelope,
   CurrentEventPageData,
   ForecastEnvelope,
@@ -68,6 +69,68 @@ describe("CurrentEventPageView", () => {
       name: "Prediction and official result comparison"
     });
     expect(within(comparison).getByText("McLaren")).toBeInTheDocument();
+  });
+
+  test("terminal settled artifacts keep neutral age text without a stale warning", () => {
+    renderPage({
+      currentEvent: {
+        ...settledCurrentEvent(),
+        generated_at_utc: "2026-07-20T12:00:00Z"
+      },
+      settlement: partialSettlement()
+    });
+
+    expect(screen.getByText(/Settled · Updated 4 days ago/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Data may be stale/i)).not.toBeInTheDocument();
+  });
+
+  test("active old forecast retains the stale-data warning", () => {
+    renderPage({
+      currentEvent: {
+        ...(readyCurrentEvent as CurrentEventEnvelope),
+        generated_at_utc: "2026-07-20T12:00:00Z"
+      }
+    });
+
+    expect(screen.getByText(/Data may be stale/i)).toBeInTheDocument();
+  });
+
+  test("Dutch Sprint is operational while Hungary remains the latest immutable result", () => {
+    renderPage({
+      operationalStatus: sprintOperationalStatus(),
+      currentEvent: hungarianSettledCurrentEvent(),
+      settlement: partialSettlement()
+    });
+
+    expect(screen.getByRole("heading", { name: "Dutch Grand Prix", level: 1 })).toBeInTheDocument();
+    expect(screen.getByText("Current weekend")).toBeInTheDocument();
+    expect(screen.getByText("Sprint weekend")).toBeInTheDocument();
+    expect(
+      screen.getByText(/does not create predictions for Sprint weekends yet/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Sprint Qualifying" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Hungarian Grand Prix", level: 2 })
+    ).toBeInTheDocument();
+    expect(screen.queryByText("UNSUPPORTED_WEEKEND_FORMAT")).not.toBeInTheDocument();
+    expect(screen.getByText("Forecast coverage: 2/3")).toBeInTheDocument();
+  });
+
+  test("unavailable operational status leaves the latest result functional", () => {
+    renderPage({
+      operationalStatus: {
+        schema_version: "1.0",
+        status: "not_initialized",
+        data: {}
+      },
+      currentEvent: hungarianSettledCurrentEvent(),
+      settlement: partialSettlement()
+    });
+
+    expect(screen.queryByLabelText("Operational Formula 1 weekend")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Hungarian Grand Prix", level: 1 })
+    ).toBeInTheDocument();
   });
 
   test("missing official entrant is never given a retrospective prediction", () => {
@@ -187,6 +250,83 @@ function settledCurrentEvent(): CurrentEventEnvelope {
         forecast_coverage: "2/3",
         forecast_coverage_percentage: 66.67,
         unforecasted_actual_entrants: [{ driver: "PER", driver_code: "PER" }]
+      }
+    }
+  };
+}
+
+function hungarianSettledCurrentEvent(): CurrentEventEnvelope {
+  const current = settledCurrentEvent();
+  return {
+    ...current,
+    data: {
+      ...current.data,
+      event_identity: {
+        ...current.data.event_identity,
+        season: 2026,
+        event: "Hungarian Grand Prix",
+        event_slug: "hungarian-grand-prix",
+        event_order: 11
+      }
+    }
+  };
+}
+
+function sprintOperationalStatus(): AutopilotStatusEnvelope {
+  return {
+    schema_version: "1.0",
+    status: "available",
+    data: {
+      orchestrator_state_after: "UNSUPPORTED_WEEKEND_FORMAT",
+      operational_event: {
+        season: 2026,
+        event: "Dutch Grand Prix",
+        event_slug: "dutch-grand-prix",
+        round_number: 12,
+        event_format: "sprint_qualifying",
+        calendar_source: "fastf1_event_schedule",
+        supported: false,
+        prediction_support_reason: "Synthetic unsupported format reason.",
+        schedule_available: true,
+        timezone: "UTC",
+        sessions: [
+          {
+            sequence: 1,
+            session: "FP1",
+            display_name: "Practice 1",
+            scheduled_start_utc: "2026-07-24T10:00:00+00:00",
+            scheduled_end_utc: "2026-07-24T11:00:00+00:00",
+            end_source: "fastf1_schedule",
+            schedule_status: "calendar_time_elapsed_data_not_proven"
+          },
+          {
+            sequence: 2,
+            session: "SQ",
+            display_name: "Sprint Qualifying",
+            scheduled_start_utc: "2026-07-24T14:00:00+00:00",
+            scheduled_end_utc: "2026-07-24T15:00:00+00:00",
+            end_source: "fastf1_schedule",
+            schedule_status: "scheduled"
+          },
+          {
+            sequence: 3,
+            session: "S",
+            display_name: "Sprint",
+            scheduled_start_utc: "2026-07-25T10:00:00+00:00",
+            scheduled_end_utc: "2026-07-25T11:00:00+00:00",
+            end_source: "fastf1_schedule",
+            schedule_status: "scheduled"
+          },
+          {
+            sequence: 4,
+            session: "Q",
+            display_name: "Qualifying",
+            scheduled_start_utc: "2026-07-25T14:00:00+00:00",
+            scheduled_end_utc: "2026-07-25T15:30:00+00:00",
+            end_source: "fastf1_schedule",
+            schedule_status: "scheduled"
+          }
+        ]
       }
     }
   };

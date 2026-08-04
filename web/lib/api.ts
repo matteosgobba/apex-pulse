@@ -1,5 +1,6 @@
 import { getApiBaseUrl } from "@/lib/config";
 import type {
+  AutopilotStatusEnvelope,
   CurrentEventEnvelope,
   CurrentEventPageData,
   DashboardApiErrorPayload,
@@ -36,10 +37,11 @@ export class DashboardClientError extends Error {
 export async function loadCurrentEventPageData(): Promise<CurrentEventPageData> {
   try {
     const health = await fetchDashboard<HealthResponse>("/api/v1/health");
-    const [manifest, currentEvent, practiceStatus] = await Promise.all([
+    const [manifest, currentEvent, practiceStatus, operationalStatus] = await Promise.all([
       fetchDashboard<ManifestEnvelope>("/api/v1/dashboard/manifest"),
       fetchDashboard<CurrentEventEnvelope>("/api/v1/dashboard/current-event"),
-      fetchDashboard<PracticeStatusEnvelope>("/api/v1/dashboard/current-event/practice-status")
+      fetchDashboard<PracticeStatusEnvelope>("/api/v1/dashboard/current-event/practice-status"),
+      fetchDashboard<AutopilotStatusEnvelope>("/api/v1/autopilot-status").catch(() => null)
     ]);
     const forecast = await fetchDashboard<ForecastEnvelope>(
       "/api/v1/dashboard/current-event/forecast"
@@ -58,6 +60,7 @@ export async function loadCurrentEventPageData(): Promise<CurrentEventPageData> 
       forecast,
       settlement,
       historicalMonitoring,
+      operationalStatus,
       error: null
     };
   } catch (error) {
@@ -69,6 +72,7 @@ export async function loadCurrentEventPageData(): Promise<CurrentEventPageData> 
       forecast: null,
       settlement: null,
       historicalMonitoring: null,
+      operationalStatus: null,
       error: normalizeClientError(error)
     };
   }

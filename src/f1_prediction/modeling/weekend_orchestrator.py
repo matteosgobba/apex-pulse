@@ -127,6 +127,7 @@ class WeekendEvent:
     event_format: str
     sessions: Mapping[str, SessionWindow]
     aliases: tuple[str, ...] = ()
+    operational_sessions: tuple[SessionWindow, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -188,6 +189,7 @@ class AutopilotTickResult:
     runtime_total_known_bytes: int
     volume_capacity_bytes: int | None
     cache_warning_status: str
+    operational_event: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return the stable API/audit representation."""
@@ -228,7 +230,12 @@ class FastF1ScheduleProvider:
             event_name = str(row.get("EventName") or row.get("Location") or "").strip()
             if not event_name:
                 continue
-            sessions = _session_windows(row, self.config)
+            operational_sessions = _operational_session_windows(row, self.config)
+            sessions = {
+                session.code: session
+                for session in operational_sessions
+                if session.code in REQUIRED_SESSIONS
+            }
             raw_format = str(row.get("EventFormat") or "").strip().lower()
             event_format = raw_format or (
                 "conventional" if set(REQUIRED_SESSIONS).issubset(sessions) else "unknown"
@@ -256,6 +263,7 @@ class FastF1ScheduleProvider:
                     event_format=event_format,
                     sessions=sessions,
                     aliases=aliases,
+                    operational_sessions=operational_sessions,
                 )
             )
         return tuple(sorted(events, key=lambda item: item.round_number))
@@ -1466,6 +1474,7 @@ def _result(
         runtime_total_known_bytes=int(storage["runtime_total_known_bytes"]),
         volume_capacity_bytes=storage["volume_capacity_bytes"],
         cache_warning_status=str(storage["cache_warning_status"]),
+        operational_event=_operational_event_snapshot(event, now) if event else None,
     )
 
 
@@ -1484,21 +1493,26 @@ def _write_operational_record(metrics_dir: Path, result: AutopilotTickResult) ->
 
 def validate_autopilot_status(payload: Any) -> dict[str, Any]:
     """Validate the separate operational status schema used by the read-only API."""
-    required = set(AutopilotTickResult.__dataclass_fields__)
+    required = set(AutopilotTickResult.__dataclass_fields__) - {"operational_event"}
     if not isinstance(payload, dict) or required - set(payload):
         raise ValueError("Autopilot status schema is incomplete")
     if payload.get("schema_version") != AUTOPILOT_SCHEMA_VERSION:
         raise ValueError("Unsupported autopilot status schema")
     if payload.get("orchestrator_state_after") not in {state.value for state in OrchestratorState}:
         raise ValueError("Invalid autopilot state")
+    if payload.get("operational_event") is not None:
+        _validate_operational_event(payload["operational_event"])
     return payload
 
 
-def _session_windows(row: pd.Series, config: AutopilotConfig) -> dict[str, SessionWindow]:
-    result: dict[str, SessionWindow] = {}
+def _operational_session_windows(
+    row: pd.Series,
+    config: AutopilotConfig,
+) -> tuple[SessionWindow, ...]:
+    result: list[SessionWindow] = []
     for index in range(1, 6):
         name = str(row.get(f"Session{index}") or "").strip()
-        code = _session_code(name)
+        code = _operational_session_code(name)
         if code is None:
             continue
         start = _row_datetime(row, f"Session{index}DateUtc", f"Session{index}Date")
@@ -1510,24 +1524,31 @@ def _session_windows(row: pd.Series, config: AutopilotConfig) -> dict[str, Sessi
             f"Session{index}EndDate",
         )
         if explicit_end is None:
-            explicit_end = start + timedelta(
-                minutes=int(config.session_default_duration_minutes[code])
-            )
+            explicit_end = start + timedelta(minutes=_default_session_duration(code, config))
             source = "configured_default_duration"
         else:
             source = "fastf1_schedule"
-        result[code] = SessionWindow(code, name, start, explicit_end, source)
-    return result
+        result.append(SessionWindow(code, name, start, explicit_end, source))
+    return tuple(result)
 
 
-def _session_code(name: str) -> str | None:
+def _operational_session_code(name: str) -> str | None:
     normalized = name.strip().lower().replace("free practice", "practice")
     return {
         "practice 1": "FP1",
         "practice 2": "FP2",
         "practice 3": "FP3",
         "qualifying": "Q",
+        "sprint qualifying": "SQ",
+        "sprint shootout": "SQ",
+        "sprint": "S",
     }.get(normalized)
+
+
+def _default_session_duration(code: str, config: AutopilotConfig) -> int:
+    if code in config.session_default_duration_minutes:
+        return int(config.session_default_duration_minutes[code])
+    return 60
 
 
 def _row_datetime(row: pd.Series, *columns: str) -> datetime | None:
@@ -1551,6 +1572,105 @@ def _scheduled_statuses(event: WeekendEvent, now: datetime) -> dict[str, str]:
         else:
             result[code] = "scheduled_time_elapsed_data_not_proven"
     return result
+
+
+def _operational_event_snapshot(event: WeekendEvent, now: datetime) -> dict[str, Any]:
+    sessions = event.operational_sessions or tuple(
+        sorted(event.sessions.values(), key=lambda item: item.start_utc)
+    )
+    missing = sorted(set(REQUIRED_SESSIONS) - set(event.sessions))
+    supported = event.event_format in SUPPORTED_EVENT_FORMATS and not missing
+    reason = None
+    if not supported:
+        reason = (
+            "Apex Pulse predictions currently require a conventional FP1, FP2, FP3 and "
+            "qualifying weekend. This format remains visible but is not forecast-supported."
+        )
+    return {
+        "season": event.season,
+        "event": event.event,
+        "event_slug": event.event_slug,
+        "round_number": event.round_number,
+        "event_format": event.event_format,
+        "calendar_source": CALENDAR_SOURCE,
+        "supported": supported,
+        "prediction_support_reason": reason,
+        "schedule_available": bool(sessions),
+        "timezone": "UTC",
+        "sessions": [
+            {
+                "sequence": sequence,
+                "session": session.code,
+                "display_name": session.name,
+                "scheduled_start_utc": _iso(session.start_utc),
+                "scheduled_end_utc": _iso(session.end_utc),
+                "end_source": session.end_source,
+                "schedule_status": _calendar_session_status(session, now),
+            }
+            for sequence, session in enumerate(sessions, start=1)
+        ],
+    }
+
+
+def _calendar_session_status(session: SessionWindow, now: datetime) -> str:
+    if now < session.start_utc:
+        return "scheduled"
+    if now < session.end_utc:
+        return "calendar_window_open_data_not_proven"
+    return "calendar_time_elapsed_data_not_proven"
+
+
+def _validate_operational_event(value: Any) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("Operational event snapshot must be an object")
+    required = {
+        "season",
+        "event",
+        "event_slug",
+        "round_number",
+        "event_format",
+        "calendar_source",
+        "supported",
+        "schedule_available",
+        "timezone",
+        "sessions",
+    }
+    if required - set(value):
+        raise ValueError("Operational event snapshot is incomplete")
+    if not isinstance(value["supported"], bool) or not isinstance(
+        value["schedule_available"], bool
+    ):
+        raise ValueError("Operational event support fields are invalid")
+    if value["timezone"] != "UTC" or not isinstance(value["sessions"], list):
+        raise ValueError("Operational event schedule fields are invalid")
+    for session in value["sessions"]:
+        if not isinstance(session, dict):
+            raise ValueError("Operational session must be an object")
+        session_required = {
+            "sequence",
+            "session",
+            "display_name",
+            "scheduled_start_utc",
+            "scheduled_end_utc",
+            "end_source",
+            "schedule_status",
+        }
+        if session_required - set(session):
+            raise ValueError("Operational session is incomplete")
+        start = _parse_aware_datetime(session["scheduled_start_utc"])
+        end = _parse_aware_datetime(session["scheduled_end_utc"])
+        if end <= start:
+            raise ValueError("Operational session end must follow its start")
+
+
+def _parse_aware_datetime(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("Operational session timestamps must be strings")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("Operational session timestamp is invalid") from exc
+    return _aware_utc(parsed)
 
 
 def runtime_storage_diagnostics(

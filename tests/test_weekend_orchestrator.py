@@ -118,8 +118,26 @@ def test_fastf1_schedule_provider_normalizes_official_schedule_and_rejectable_fo
     assert set(events[0].sessions) == {"FP1", "FP2", "FP3", "Q"}
     assert events[0].sessions["FP1"].start_utc.tzinfo == UTC
     assert events[0].sessions["FP1"].end_source == "configured_default_duration"
+    assert [session.code for session in events[0].operational_sessions] == [
+        "FP1",
+        "FP2",
+        "FP3",
+        "Q",
+    ]
     assert events[1].event_format == "sprint_qualifying"
     assert set(events[1].sessions) == {"FP1", "Q"}
+    assert [session.code for session in events[1].operational_sessions] == [
+        "FP1",
+        "SQ",
+        "S",
+        "Q",
+    ]
+    assert [session.name for session in events[1].operational_sessions] == [
+        "Practice 1",
+        "Sprint Qualifying",
+        "Sprint",
+        "Qualifying",
+    ]
 
 
 def test_fastf1_readiness_probe_loads_minimum_data_without_network_in_unit_test(
@@ -321,6 +339,28 @@ def test_sprint_weekend_is_explicitly_unsupported_without_probe_or_mutation(tmp_
     assert result.error_classification == "blocking_permanent"
     assert "event_format=sprint" in str(result.error_message_safe)
     assert readiness.calls == []
+    assert result.operational_event is not None
+    assert result.operational_event["supported"] is False
+    assert result.operational_event["schedule_available"] is True
+    assert result.operational_event["timezone"] == "UTC"
+    assert result.operational_event["sessions"][0]["scheduled_start_utc"].endswith("+00:00")
+
+
+def test_operational_schedule_is_additive_and_old_status_remains_valid(tmp_path: Path) -> None:
+    result = _tick(tmp_path, now=datetime(2026, 5, 31, 12, tzinfo=UTC))
+    payload = result.to_dict()
+
+    assert validate_autopilot_status(payload) == payload
+    assert payload["operational_event"]["event"] == "Test Grand Prix"
+    assert [session["session"] for session in payload["operational_event"]["sessions"]] == [
+        "FP1",
+        "FP2",
+        "FP3",
+        "Q",
+    ]
+    legacy_payload = dict(payload)
+    legacy_payload.pop("operational_event")
+    assert validate_autopilot_status(legacy_payload) == legacy_payload
 
 
 def test_mutating_tick_requires_explicit_enable_flag(tmp_path: Path) -> None:
@@ -607,7 +647,17 @@ def _event(
         if code not in (omit or set())
     }
     slug = name.lower().replace(" ", "-")
-    return WeekendEvent(2026, name, slug, round_number, event_format, sessions, (slug,))
+    operational_sessions = tuple(sorted(sessions.values(), key=lambda item: item.start_utc))
+    return WeekendEvent(
+        2026,
+        name,
+        slug,
+        round_number,
+        event_format,
+        sessions,
+        (slug,),
+        operational_sessions,
+    )
 
 
 def _data_config(root: Path) -> DataConfig:

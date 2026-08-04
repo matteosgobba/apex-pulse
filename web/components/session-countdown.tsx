@@ -22,13 +22,20 @@ export function SessionCountdown({
     initialNow ? Date.parse(initialNow) : null
   );
   useEffect(() => {
-    if (initialNow) {
-      return;
-    }
-    const startup = window.setTimeout(() => setNowMs(Date.now()), 0);
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    const startup = initialNow
+      ? undefined
+      : window.setTimeout(() => setNowMs(Date.now()), 0);
+    const timer = window.setInterval(
+      () =>
+        setNowMs((current) =>
+          initialNow ? (current ?? Date.parse(initialNow)) + 1_000 : Date.now()
+        ),
+      1_000
+    );
     return () => {
-      window.clearTimeout(startup);
+      if (startup !== undefined) {
+        window.clearTimeout(startup);
+      }
       window.clearInterval(timer);
     };
   }, [initialNow]);
@@ -63,7 +70,9 @@ export function SessionCountdown({
   if (parts.complete) {
     return <CountdownShell title="Session starting" detail="Countdown reached zero." complete />;
   }
-  const name = sessionDisplayName(selection.session?.session ?? "Session");
+  const name =
+    selection.session?.display_name ??
+    sessionDisplayName(selection.session?.session ?? "Session");
   const localDate = new Intl.DateTimeFormat(undefined, {
     weekday: "short",
     month: "short",

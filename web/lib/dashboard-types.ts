@@ -447,6 +447,44 @@ export interface HealthResponse {
     | "unavailable";
 }
 
+export interface OperationalSession {
+  sequence: number;
+  session: string;
+  display_name: string;
+  scheduled_start_utc: string;
+  scheduled_end_utc: string;
+  end_source: string;
+  schedule_status: string;
+}
+
+export interface OperationalEvent {
+  season: number;
+  event: string;
+  event_slug: string;
+  round_number: number;
+  event_format: string;
+  calendar_source: string;
+  supported: boolean;
+  prediction_support_reason?: string | null;
+  schedule_available: boolean;
+  timezone: "UTC";
+  sessions: OperationalSession[];
+}
+
+export interface AutopilotStatusData extends Record<string, unknown> {
+  operational_event?: OperationalEvent | null;
+  orchestrator_state_after?: string | null;
+  scheduler_enabled?: boolean;
+  scheduler_running?: boolean;
+  last_tick_completed_at_utc?: string | null;
+}
+
+export interface AutopilotStatusEnvelope {
+  schema_version: "1.0";
+  status: "available" | "not_initialized";
+  data: AutopilotStatusData;
+}
+
 export interface DashboardApiErrorPayload {
   detail: {
     code: string;
@@ -471,6 +509,7 @@ export interface CurrentEventPageData {
   forecast: ForecastEnvelope | null;
   settlement: SettlementEnvelope | null;
   historicalMonitoring: HistoricalMonitoringEnvelope | null;
+  operationalStatus?: AutopilotStatusEnvelope | null;
   error: SafeDashboardError | null;
 }
 
