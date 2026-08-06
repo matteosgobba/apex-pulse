@@ -3,196 +3,566 @@
 </p>
 
 <p align="center">
-  Machine-learning system for Formula 1 qualifying prediction from practice-session data.
+  <strong>Production-deployed machine-learning system for Formula 1 qualifying prediction.</strong><br />
+  Checkpoint-safe forecasting from free-practice data, with chronological validation, prospective monitoring and automated live operations.
 </p>
 
 <p align="center">
-  <strong>Checkpoint-safe forecasting of Formula 1 qualifying pace from free-practice evidence.</strong><br />
-  An event-level machine-learning pipeline using FastF1 session data.
+  <a href="https://apex-pulse-ten.vercel.app"><strong>Live Demo</strong></a>
+  ·
+  <a href="#results">Results</a>
+  ·
+  <a href="#architecture">Architecture</a>
+  ·
+  <a href="#quick-start">Quick Start</a>
+  ·
+  <a href="#methodology">Methodology</a>
 </p>
 
 <p align="center">
-  <a href="#prediction-problem">Prediction problem</a> ·
-  <a href="#feature-design-and-f1-rationale">Feature design</a> ·
-  <a href="#evaluation">Evaluation</a> ·
-  <a href="#quick-start">Quick start</a>
-</p>
-
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white" alt="Python 3.13" />
-  <img src="https://img.shields.io/badge/FastF1-session%20data-E10600" alt="FastF1" />
-  <img src="https://img.shields.io/badge/pandas-data%20engineering-150458?logo=pandas&logoColor=white" alt="pandas" />
-  <img src="https://img.shields.io/badge/scikit--learn-machine%20learning-F7931E?logo=scikitlearn&logoColor=white" alt="scikit-learn" />
-  <img src="https://img.shields.io/badge/Typer-CLI-009688" alt="Typer" />
-  <img src="https://img.shields.io/badge/Pytest-tested-0A9EDC?logo=pytest&logoColor=white" alt="pytest" />
-  <img src="https://img.shields.io/badge/Ruff-linted-D7FF64?logo=ruff&logoColor=black" alt="Ruff" />
+  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/FastF1-data-E10600" alt="FastF1" />
+  <img src="https://img.shields.io/badge/scikit--learn-ML-F7931E?logo=scikitlearn&logoColor=white" alt="scikit-learn" />
+  <img src="https://img.shields.io/badge/FastAPI-API-009688?logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Next.js-frontend-000000?logo=nextdotjs&logoColor=white" alt="Next.js" />
+  <img src="https://img.shields.io/badge/Railway-backend-0B0D0E?logo=railway&logoColor=white" alt="Railway" />
+  <img src="https://img.shields.io/badge/Vercel-frontend-000000?logo=vercel&logoColor=white" alt="Vercel" />
 </p>
 
 ---
 
 ## Overview
 
-**Apex Pulse** estimates Formula 1 qualifying performance using only signals observable by a selected free-practice checkpoint: after FP1, FP2, or FP3. The central output is a driver's **qualifying gap to pole** in seconds; qualifying position and Q2/Q3 progression are supported as secondary targets.
+**Apex Pulse** predicts Formula 1 qualifying performance using only information that would have been available at the time of prediction.
 
-The task is deliberately framed as a constrained forecast rather than a post-hoc performance explanation. A prediction produced after FP2, for example, can depend on FP1 and FP2 data plus pre-existing historical information, but never on FP3 or qualifying outcomes. This restriction is enforced during dataset construction and validation.
+Forecasts are produced at three checkpoints:
 
-```text
-FastF1 session data
-    ↓
-Lap cleaning, session normalisation, and quality flags
-    ↓
-Driver × weekend × checkpoint feature table
-    ↓
-Checkpoint-safe baselines and ML candidates
-    ↓
-Chronological backtests, champion selection, and diagnostics
-    ↓
-Metrics, failure-case analysis, uncertainty estimates, reports
+* **after FP1**
+* **after FP2**
+* **after FP3**
+
+The primary target is each driver's **qualifying gap to pole in seconds**. Predicted qualifying order is obtained from those gaps, while Q2/Q3 progression and uncertainty are supported as secondary outputs.
+
+Unlike a conventional retrospective ML project, Apex Pulse also includes the infrastructure required to operate the forecasting pipeline prospectively: guarded event ingestion, immutable forecast snapshots, post-qualifying settlement, integrity auditing, an autonomous weekend state machine, a read-only API and a deployed public frontend.
+
+### Current scope
+
+|                            |                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| Historical seasons         | **2023–2025**                                                                        |
+| Conventional race weekends | **44**                                                                               |
+| Modeling rows              | **2,634**                                                                            |
+| Features / columns         | **182**                                                                              |
+| Drivers                    | **28**                                                                               |
+| Teams                      | **11**                                                                               |
+| Walk-forward folds         | **39 / 39**                                                                          |
+| Primary data source        | **FastF1**                                                                           |
+| Public frontend            | [apex-pulse-ten.vercel.app](https://apex-pulse-ten.vercel.app)                       |
+| Production API             | [apex-pulse-production.up.railway.app](https://apex-pulse-production.up.railway.app) |
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[FastF1 sessions] --> B[Lap cleaning & push-lap detection]
+    B --> C[Checkpoint-safe feature engineering]
+    C --> D[Historical modeling dataset]
+    D --> E[Walk-forward backtesting]
+    E --> F[Champion / policy governance]
+    F --> G[Prospective monitoring protocol]
+
+    G --> H[Pre-Q guarded forecast]
+    H --> I[Immutable forecast snapshot]
+    I --> J[Post-Q target validation]
+    J --> K[Settlement & integrity audits]
+    K --> L[Dashboard artifacts]
+
+    L --> M[FastAPI<br/>Railway]
+    M --> N[Next.js<br/>Vercel]
+
+    O[5-minute scheduler] --> P[Weekend orchestrator]
+    P --> G
 ```
 
-## Prediction problem
+The public API is deliberately **read-only**. Forecasting, settlement and monitoring mutations remain inside the guarded backend workflows rather than being exposed through HTTP endpoints.
 
-Each row represents one **driver–race weekend–forecast checkpoint**. The model must infer relative qualifying pace from practice runs whose underlying programmes are only partially observed.
+---
 
-| Element | Definition |
-|---|---|
-| Unit of prediction | Driver × event × checkpoint |
-| Primary target | Qualifying gap to pole, in seconds |
-| Secondary targets | Qualifying position; reached Q2; reached Q3 |
-| Available checkpoints | After FP1, FP2, FP3 |
-| Data source | FastF1 public session data with local cache |
-| Experimental scope | Conventional 2023–2024 F1 weekends; expanded iteratively |
-| Generalisation unit | A future race weekend, not a random driver row |
+## What makes Apex Pulse technically interesting
 
-Qualifying is an appropriate target because it is a relatively concentrated performance setting: drivers target a short, low-fuel, high-grip run on soft tyres, with track evolution and session conditions becoming critical. Free practice is informative but imperfect: teams trade off setup exploration, tyre work, long-run simulation, traffic management, and race preparation. The modelling objective is therefore not to assume that the fastest practice lap *is* qualifying pace, but to recover a robust estimate from several imperfect observations.
+### Checkpoint-safe forecasting
 
-## Feature design and F1 rationale
+The core data contract is:
 
-### Why raw fastest laps are insufficient
+> A prediction may use only information that existed when that prediction would have been issued.
 
-A single fastest lap is an unstable measurement. It can be inflated or suppressed by tyre compound, tyre age, fuel load, track evolution, traffic, red flags, aborted laps, changing weather, and an individual team's run plan. Comparing raw times across drivers also mixes car performance with circuit length and session-specific conditions.
+An `after_fp2` row can therefore use FP1 and FP2, but never FP3 or qualifying information.
 
-Apex Pulse therefore turns lap-level records into checkpoint-safe **driver-level summaries** and contextual comparisons. The design goal is to preserve the parts of practice that are informative about qualifying while reducing sensitivity to one anomalous lap or one non-representative run.
+Leakage controls are enforced through:
 
-### Feature families
+* explicit FP1 / FP2 / FP3 feature provenance;
+* qualifying columns excluded from predictors;
+* historical features computed only from earlier events;
+* event-level rather than driver-row train/test splits;
+* chronological walk-forward evaluation;
+* prior-fold-only model selection and uncertainty calibration.
 
-| Feature family | Technical treatment | F1 interpretation |
-|---|---|---|
-| **Absolute pace** | Robust lap-time summaries, best/representative laps, quantiles, valid-lap counts, and recent-session signals | Captures the driver's observed one-lap ceiling and the consistency of the available pace sample. |
-| **Tyre and stint context** | Compound usage, tyre-life summaries, stint structure, and counts conditional on available compounds | A soft-tyre, fresh-tyre effort is generally more indicative of qualifying intent than a worn medium/hard long run. Stint context prevents treating them as equivalent. |
-| **Session-relative pace** | Gaps and ranks relative to session benchmarks; normalised pace features | Removes much of the circuit-length and session-level timing scale, making signals more comparable across venues and weekends. |
-| **Teammate comparison** | Driver-minus-teammate pace and availability features within the same session | Teammates share the same car concept and operate under closely related track conditions, creating a useful local reference for driver execution and setup direction. |
-| **Team signals** | Team-level pace aggregates and within-team context | Team pace is a partial proxy for machinery competitiveness and helps distinguish a strong individual lap in a weak package from a broadly competitive car. |
-| **Historical form** | Lagged driver/team aggregates built only from prior eligible events | Carries stable information that a short or disrupted practice session may fail to reveal, without importing future-event outcomes. |
-| **Data-quality and anomaly flags** | Missingness, low sample size, incomplete session, and extreme-signal indicators | Makes unreliable evidence visible to models and diagnostics rather than silently imputing confidence into a poor session. |
+### F1-specific feature engineering
 
-### Aggregation strategy
+Raw fastest laps are poor qualifying predictors because practice programmes differ in fuel load, tyre age, run plan, traffic and setup work.
 
-The pipeline does not pool every lap indiscriminately. It first applies cleaning and validity rules, then produces feature aggregates separately by session and checkpoint. A row at `after_fp2` can use FP1 and FP2 aggregates; an `after_fp1` row cannot inherit later-session information. Feature names and build paths retain checkpoint provenance so that data availability can be audited.
+Apex Pulse therefore combines:
 
-Robust summaries are preferred over a single minimum lap because the minimum is highly exposed to outliers. At the same time, best-lap-style features are retained because qualifying rewards peak one-lap pace. This combination lets the model weigh ceiling pace against sample reliability rather than hard-coding either interpretation.
+| Feature family           | Examples                                                                     |
+| ------------------------ | ---------------------------------------------------------------------------- |
+| **Practice pace**        | best/median valid lap, push-lap pace, theoretical best lap, sector summaries |
+| **Session-relative**     | gap to session best, percentage gap, session rank                            |
+| **Teammate-relative**    | driver-to-teammate pace deltas and team rank                                 |
+| **Team context**         | team-best pace and within-team comparisons                                   |
+| **Tyre / stint context** | compound use, tyre life, stint structure                                     |
+| **Historical form**      | rolling and expanding driver/team qualifying performance                     |
+| **Data quality**         | missing-session indicators, valid/push-lap counts, extreme-signal flags      |
 
-Relative features are especially important for cross-event learning. A 0.3-second gap has different practical meaning at Monaco and Silverstone in raw absolute terms; pace relative to the session field, teammate, and team benchmark is more portable. Historical features are lagged at the event level to prevent an event from influencing its own forecast.
+Push-like laps are identified using deterministic validity and pace rules rather than assuming every timed lap is representative.
 
-### Leakage controls
+### Model governance, not leaderboard chasing
 
-The data contract follows a simple rule: **a feature may only encode information that would have existed when the prediction was issued.** In practice, this means:
+The project evaluates:
 
-- qualifying results are targets only and never predictors;
-- checkpoint datasets exclude later practice sessions;
-- historical aggregates use previous eligible events only;
-- splits are event-based and chronological, so rows from a held-out weekend never appear in training;
-- model selection procedures are evaluated within backtest structure rather than tuned against the same future events being reported.
+* robust non-ML practice baselines;
+* **Ridge Regression**;
+* **Random Forest**;
+* **HistGradientBoostingRegressor**;
+* feature-group ablations;
+* static, nested and stabilized champion policies;
+* guarded policy switching;
+* season-aware temporal weighting;
+* conformal uncertainty variants.
 
-## Modelling and baselines
+A key design principle is that a candidate is **not promoted simply because it wins a retrospective aggregate metric**.
 
-The system benchmarks regularised linear models, random forests, and boosted tabular candidates against credible pace-based baselines. Baselines are not included merely as a formality: early practice is often weakly informative, so a complex model must demonstrate out-of-sample value over simple, transparent estimates.
+A season-aware FP3 Random Forest candidate significantly improved historical aligned MAE, but the production policy remained conservative after prospective and retrain-based validation produced mixed evidence.
 
-Model and feature-policy selection is checkpoint-specific. This reflects the fact that the information regime changes materially from FP1 to FP3: FP1 is sparse and exploratory, FP2 often contains the most representative qualifying simulations, and FP3 is closer to qualifying but can be unusually sensitive to interruptions or track-condition changes.
+### Prospective replay
 
-A champion-policy layer evaluates candidate model/feature combinations under static, nested, and replay-oriented selection procedures. Reports include residual and interval diagnostics, selection metadata, and event-level failure cases.
+Historical walk-forward evaluation is complemented by a stricter deployment simulation.
 
-## Evaluation
+For every held-out event, Apex Pulse can:
 
-Random train/test splits would leak weekend-level structure: drivers, teams, circuit conditions, and shared session context would be represented on both sides of the split. Apex Pulse instead evaluates at the event level.
+1. rebuild the candidate using only legally available historical rows;
+2. freeze policy thresholds before the event;
+3. forecast the held-out weekend;
+4. persist diagnostic shadow candidates separately;
+5. reveal the result only during settlement;
+6. make settled evidence available to later events.
 
-- **Repeated event holdout** tests whether patterns transfer to unseen weekends.
-- **Walk-forward backtesting** trains on earlier events and predicts subsequent events in chronological order.
-- **Fold-consistent comparisons** ensure baselines and candidates are assessed on the same event set.
-- **Ablations and diagnostics** identify whether gains come from pace, relative, historical, or contextual feature groups.
-- **Uncertainty estimates** assess interval coverage and width rather than reporting only point-error metrics.
+This makes the replay substantially closer to real deployment than consuming one globally generated backtest artifact.
 
-This is intentionally a difficult setting. A model that performs well only on clean, representative practice sessions is not enough; the reporting layer surfaces weak-signal weekends and conditions in which the forecast should be treated cautiously.
+### Immutable live monitoring
+
+Prospective forecasts and settlements are treated as historical records, not replaceable outputs.
+
+The live integrity layer fingerprints:
+
+* event registry identity;
+* forecast blocks;
+* settlement blocks;
+* model/training evidence;
+* entry-list evidence;
+* per-event features and targets;
+* historical dashboard records;
+* frozen protocol and modeling data.
+
+Valid future appends are allowed while mutation of an already recorded event is treated as a blocking integrity failure.
+
+---
+
+## Results
+
+The most informative checkpoint is **FP3**, where practice contains the strongest qualifying signal.
+
+### 2023–2025 aligned FP3 comparison
+
+| Model / policy                            |      FP3 MAE | Evaluation                       |
+| ----------------------------------------- | -----------: | -------------------------------- |
+| Uniform Random Forest + relative features |  **0.920 s** | 39 chronological folds           |
+| Season-aware RF candidate                 |  **0.729 s** | Same 774 rows / 39 folds         |
+| Difference                                | **−0.191 s** | Retrospective aligned comparison |
+
+The season-aware candidate uses the same Random Forest and feature family while changing the training policy to prioritize legally available current-season evidence.
+
+Performance is strongly regime-dependent: the gain is concentrated after sufficient same-season history exists, while cold-start events show little or no benefit.
+
+### Prospective evidence
+
+A stricter frozen-policy evaluation produced:
+
+| Split                       | Static FP3 MAE | Season-aware FP3 MAE |
+| --------------------------- | -------------: | -------------------: |
+| Train 2023 → test 2024      |    **0.946 s** |              0.951 s |
+| Train 2023–2024 → test 2025 |        0.788 s |          **0.528 s** |
+
+A fully retrain-based prospective replay was more conservative: the frozen weighted candidate was not selected by the live gates, and the project retained the static production policy.
+
+**Production decision:** keep the more stable policy until additional genuinely prospective evidence justifies promotion.
+
+This distinction between *best historical candidate* and *deployed policy* is intentional.
+
+---
+
+## Production system
+
+Apex Pulse is deployed as a small single-writer production system.
+
+### Backend
+
+**Railway · Docker · FastAPI · persistent volume**
+
+The backend provides:
+
+* FastF1 cache persistence;
+* frozen modeling/protocol state;
+* append-only monitoring artifacts;
+* guarded forecast and settlement workflows;
+* an autonomous weekend orchestrator;
+* a restart-safe scheduler;
+* artifact and runtime integrity checks;
+* read-only public dashboard endpoints.
+
+The scheduler evaluates the F1 weekend every **5 minutes**.
+
+Calendar time alone does not imply data readiness: session data are independently probed before any workflow transition is allowed.
+
+### Frontend
+
+**Next.js · TypeScript · Vercel**
+
+The public interface exposes:
+
+* current / next operational weekend;
+* local session countdowns;
+* latest immutable prediction;
+* prediction vs official qualifying result;
+* historical monitored events;
+* methodology and model information;
+* partial-coverage diagnostics;
+* dark/light themes;
+* automatic server-data refresh.
+
+The browser never runs FastF1, trains a model or creates a forecast.
+
+### Safe automation
+
+The weekend state machine distinguishes states such as:
+
+```text
+WAITING_FOR_FP1
+FP1_COMPLETE
+FP2_COMPLETE
+FP3_TIME_ELAPSED_DATA_PENDING
+READY_FOR_FORECAST
+FORECAST_AVAILABLE
+QUALIFYING_TIME_ELAPSED_DATA_PENDING
+READY_FOR_SETTLEMENT
+SETTLED
+SETTLED_PARTIAL_COVERAGE
+UNSUPPORTED_WEEKEND_FORMAT
+BLOCKED
+TRANSIENT_ERROR
+```
+
+Unsupported Sprint formats are intentionally treated as safe no-ops rather than being remapped to incompatible FP2/FP3 sessions.
+
+---
+
+## Methodology
+
+### Prediction unit
+
+Each modeling row represents:
+
+```text
+season × event × checkpoint × driver
+```
+
+### Targets
+
+Primary:
+
+```text
+quali_gap_to_pole_sec
+```
+
+Also derived:
+
+```text
+quali_position
+reached_q2
+reached_q3
+```
+
+Predicted positions are obtained by ranking predicted gaps within each event/checkpoint.
+
+### Current champion policy
+
+The engineering policy is checkpoint-specific because the information available after FP1 is fundamentally different from the information available after FP3.
+
+| Checkpoint | Default method                         |
+| ---------- | -------------------------------------- |
+| After FP1  | Robust practice baseline               |
+| After FP2  | Robust theoretical-best baseline       |
+| After FP3  | Random Forest + base/relative features |
+
+Dynamic nested policies were evaluated as well, including minimum-history requirements, hysteresis and FP3 guardrails.
+
+A specific guard prevents unstable historical evidence from replacing the FP3 Random Forest with a simple practice baseline unless the switch is sufficiently justified.
+
+### Uncertainty
+
+Apex Pulse supports prior-residual and conformal prediction intervals.
+
+Calibration always uses **previous folds only**. A deployable predicted-gap-bucket variant can adapt calibration to different predicted performance regimes without observing the true qualifying gap.
+
+---
+
+## Quick start
+
+### 1. Install
+
+```bash
+git clone https://github.com/matteosgobba/apex-pulse.git
+cd apex-pulse
+
+python3 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install -e ".[dev]"
+```
+
+Inspect the CLI:
+
+```bash
+python -m f1_prediction.cli --help
+```
+
+### 2. Build the historical dataset
+
+```bash
+python -m f1_prediction.cli build-season-dataset \
+  --seasons 2023 2024 2025 \
+  --preset conventional
+```
+
+Generated data are stored locally and intentionally excluded from Git.
+
+### 3. Evaluate the models
+
+```bash
+python -m f1_prediction.cli dataset-report
+
+python -m f1_prediction.cli evaluate-baselines
+
+python -m f1_prediction.cli ablation-backtest \
+  --strategy walk_forward \
+  --temporal-weighting uniform \
+  --min-events 10 \
+  --min-train-events 5
+
+python -m f1_prediction.cli champion-backtest \
+  --strategy walk_forward \
+  --selection-mode static \
+  --min-events 10 \
+  --min-train-events 5
+```
+
+Generate consolidated reporting:
+
+```bash
+python -m f1_prediction.cli backtest-report
+python -m f1_prediction.cli portfolio-report
+```
+
+### 4. Run the public application locally
+
+Terminal 1:
+
+```bash
+python -m f1_prediction.cli dashboard-export
+python -m f1_prediction.cli dashboard-api
+```
+
+Terminal 2:
+
+```bash
+cd web
+npm install
+cp .env.example .env.local
+npm run dev
+```
+
+Frontend:
+
+```text
+http://localhost:3000
+```
+
+API:
+
+```text
+http://127.0.0.1:8000
+```
+
+### 5. Inspect the autonomous weekend state
+
+Safe read-only diagnostic:
+
+```bash
+python -m f1_prediction.cli autopilot-tick --dry-run --json
+```
+
+The production scheduler invokes the same canonical one-shot orchestrator used by the manual monitoring workflow; it does not implement a separate forecasting path.
+
+---
 
 ## Repository layout
 
 ```text
-src/f1_prediction/          # Package source code and Typer CLI
-configs/                    # Runtime and model configuration
-tests/                      # Automated tests
-data/                       # Local raw/interim/processed artefacts (ignored)
-models/                     # Serialized local models (ignored)
-reports/                    # Generated metrics and diagnostics
+.
+├── configs/                    # Data, feature, model and autopilot configuration
+├── data/                       # Generated raw/interim/processed data
+├── deploy/                     # Production runtime initialization
+├── docs/                       # Operational runbooks
+├── models/                     # Generated model artifacts
+├── reports/
+│   ├── dashboard/              # Validated public JSON artifacts
+│   ├── figures/                # Generated evaluation figures
+│   └── metrics/                # Backtests, diagnostics and monitoring state
+├── src/f1_prediction/
+│   ├── data/                   # FastF1 ingestion and monitoring onboarding
+│   ├── features/               # Cleaning and feature engineering
+│   ├── modeling/               # Models, backtests, policies and live workflows
+│   ├── dashboard/              # Dashboard artifact export
+│   └── dashboard_api/          # Read-only FastAPI service
+├── tests/                      # Python test suite
+├── web/                        # Next.js public frontend
+├── Dockerfile
+├── railway.toml
+└── pyproject.toml
 ```
 
-## Quick start
+Generated data, model and reporting artifacts are not committed to the repository.
+
+---
+
+## Testing and verification
+
+Backend:
 
 ```bash
-git clone git@github.com:matteosgobba/apex-pulse.git
-cd apex-pulse
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-python -m f1_prediction.cli --help
+python -m pytest -v
+python -m ruff check .
+python -m ruff format --check .
 ```
 
-A representative multi-season workflow:
+Frontend:
 
 ```bash
-# Build driver-weekend-checkpoint datasets
-python -m f1_prediction.cli build-season-dataset --seasons 2023 2024
-
-# Audit feature availability and dataset quality
-python -m f1_prediction.cli dataset-report
-
-# Benchmark tabular candidates chronologically
-python -m f1_prediction.cli backtest-tabular-models --strategy walk_forward
-
-# Select and evaluate a checkpoint-specific champion policy
-python -m f1_prediction.cli champion-backtest --strategy walk_forward
-
-# Produce consolidated metrics and diagnostics
-python -m f1_prediction.cli backtest-report
+cd web
+npm test
+npm run lint
+npm run typecheck
+npm run build
 ```
 
-Use `--help` for command options available in the current checkout.
+Latest production-hardening verification:
 
-## Current status
+```text
+642 Python tests passed
+86 frontend tests passed
+Ruff check passed
+Ruff format check passed
+Next.js lint passed
+TypeScript checks passed
+Production build passed
+14-step autonomous workflow rehearsal passed
+```
 
-**Active development.** The repository currently includes multi-season dataset construction, lap/session normalisation, checkpoint-specific feature policies, baseline and tabular-model backtesting, champion selection, uncertainty diagnostics, data-quality reporting, ablation analysis, and prospective replay eligibility checks.
+The live-validation rehearsal covers the complete lifecycle from pre-FP1 through forecast creation, qualifying readiness, settlement reuse and next-event advancement without mutating the real production ledgers.
 
-Reported results are research-style backtest evidence, not a claim of reliable qualifying prediction in every Formula 1 context. Performance is expected to vary substantially with unobserved fuel loads, run plans, session disruption, weather, and changes in technical or sporting regimes.
+---
 
-## Limitations and planned extensions
+## Current production status
 
-- FastF1-accessible public data do not expose full fuel-load, setup, tyre-degradation, traffic, or proprietary simulation information.
-- Practice programmes are latent: a lap can be quick for reasons unrelated to qualifying intent, or slow despite strong ultimate pace.
-- The sample remains small relative to the diversity of circuits, regulations, weather states, driver line-ups, and team development trajectories.
-- Next steps include broader seasonal coverage, richer track-condition proxies, calibration refinement, and continuing prospective event-by-event evaluation.
+**Production deployed — live validation Phase A complete.**
+
+The scheduler, persistent runtime, API, frontend and live-integrity observers are operational.
+
+The remaining validation step intentionally requires the first naturally selected **supported conventional FP1/FP2/FP3/Q weekend** to pass through the complete production lifecycle. It is not simulated and no artificial live result is created simply to mark the test complete.
+
+Sprint/non-standard weekends remain unsupported for forecasting.
+
+---
+
+## Limitations
+
+Apex Pulse uses public F1 data and therefore cannot observe several important latent variables:
+
+* fuel load;
+* exact engine modes and energy deployment;
+* setup configuration;
+* private tyre temperatures;
+* internal simulation data;
+* team strategy instructions.
+
+Practice run intent is also unobserved. Two visually similar laps may have been executed under very different programmes.
+
+Other current limitations:
+
+* Sprint-format prediction is not implemented;
+* the historical dataset focuses on conventional 2023–2025 weekends;
+* qualifying classification targets use simplified public-result semantics;
+* uncertainty intervals remain sensitive to high-gap/outlier regimes;
+* season-aware ML gains are weaker during early-season cold start.
+
+These limitations are treated explicitly rather than hidden through retrospective corrections.
+
+---
 
 ## Tech stack
 
-**Python · FastF1 · pandas · NumPy · scikit-learn · Typer · joblib · Pytest · Ruff · Parquet**
+**Machine learning & data**
 
-## Acknowledgements
+Python · FastF1 · pandas · NumPy · scikit-learn · PyArrow · Parquet · joblib · matplotlib
 
-This project uses the [FastF1](https://github.com/theOehrly/Fast-F1) ecosystem for Formula 1 session data access. Formula 1 names, marks, and data remain the property of their respective owners. Apex Pulse is an independent educational project.
+**Backend & operations**
+
+FastAPI · Uvicorn · Typer · Docker · Railway · persistent runtime storage
+
+**Frontend**
+
+Next.js · React · TypeScript · Tailwind CSS · Vercel
+
+**Quality**
+
+Pytest · Ruff · ESLint · TypeScript
+
+---
+
+## Data and trademark notice
+
+Apex Pulse uses the [FastF1](https://github.com/theOehrly/Fast-F1) ecosystem for publicly accessible Formula 1 timing and session data.
+
+Formula 1, team names, driver names, logos and related marks belong to their respective owners. Apex Pulse is an independent educational and research project and is not affiliated with Formula 1, the FIA or any Formula 1 team.
+
+---
 
 ## Author
 
-Matteo Sgobba
+**Matteo Sgobba**
+M.Sc. Data Science and Engineering — Politecnico di Torino
 
-- M.Sc. Data Science and Engineering @ Politecnico di Torino
-- Contact: matteo.sgobba@studenti.polito.it
-- LinkedIn: https://www.linkedin.com/in/matteosgobba/
+[GitHub](https://github.com/matteosgobba) ·
+[LinkedIn](https://www.linkedin.com/in/matteosgobba/) ·
+[Live Apex Pulse](https://apex-pulse-ten.vercel.app/)
