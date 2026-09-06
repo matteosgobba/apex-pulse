@@ -1200,7 +1200,7 @@ def _workflow_result(
             next_check=now + timedelta(minutes=config.settled_check_interval_minutes),
         )
     reason = _workflow_failure_reason(summary)
-    retryable = _transient_message(reason)
+    retryable = bool(summary.retryable_error) or _transient_message(reason)
     return _event_result(
         now,
         started_monotonic,
@@ -1246,7 +1246,7 @@ def _workflow_exception_result(
     config: AutopilotConfig,
 ) -> AutopilotTickResult:
     message = _safe_message(exc)
-    retryable = _transient_message(message)
+    retryable = bool(getattr(exc, "retryable", False)) or _transient_message(message)
     return _event_result(
         now,
         started_monotonic,

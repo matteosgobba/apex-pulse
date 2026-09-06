@@ -136,6 +136,9 @@ def create_prospective_monitoring_rehearsal(
                 protocol_name=protocol_name,
                 event=event,
                 event_slug=event_slug,
+                diagnostic_rehearsal=(
+                    synthetic and synthetic_rehearsal_event_slug(event_slug)
+                ),
             ),
         ),
         (
@@ -511,6 +514,7 @@ def _forecast_event(
     protocol_name: str,
     event: str,
     event_slug: str,
+    diagnostic_rehearsal: bool,
 ) -> dict[str, Any]:
     existing = _event_rows(
         config.metrics_output_dir / "prospective_monitoring_forecasts.parquet",
@@ -525,6 +529,7 @@ def _forecast_event(
         feature_config,
         protocol_name=protocol_name,
         event=event,
+        diagnostic_rehearsal=diagnostic_rehearsal,
     )
     forecasts = _event_rows(
         config.metrics_output_dir / "prospective_monitoring_forecasts.parquet",

@@ -31,6 +31,7 @@ from f1_prediction.data.monitoring_onboarding import (
     write_json,
 )
 from f1_prediction.data.qualifying_entry_list import (
+    QualifyingRosterError,
     audit_qualifying_entry_list,
     qualifying_entry_list_artifact_paths,
 )
@@ -45,6 +46,7 @@ from f1_prediction.modeling.monitoring_data_integrity_audit import (
 from f1_prediction.modeling.prospective_monitoring import (
     PREFLIGHT_ALREADY_FORECASTED,
     PREFLIGHT_READY,
+    assert_pre_qualifying_window_artifacts,
     create_prospective_monitoring_forecast,
     create_prospective_monitoring_preflight,
     create_prospective_monitoring_report,
@@ -104,6 +106,8 @@ class MonitoringWorkflowSummary:
     scheduled_event_date: str
     event_order_resolution_source: str
     dashboard_current_event: str | None
+    retryable_error: bool = False
+    error_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -376,6 +380,8 @@ class _WorkflowRecorder:
         self.summary_values: dict[str, Any] = {}
         self.blocked = False
         self.blocking_reason = ""
+        self.retryable_error = False
+        self.error_code: str | None = None
         self.current_stage = "not_started"
 
     def run(
@@ -408,6 +414,8 @@ class _WorkflowRecorder:
         except (FileNotFoundError, ValueError, OSError) as exc:
             self.blocked = True
             self.blocking_reason = str(exc)
+            self.retryable_error = bool(getattr(exc, "retryable", False))
+            self.error_code = getattr(exc, "error_code", None)
             self._stage(
                 stage,
                 "blocked",
@@ -417,6 +425,8 @@ class _WorkflowRecorder:
                 (),
                 str(exc),
                 _recommended_action(stage),
+                retryable=self.retryable_error,
+                error_code=self.error_code,
             )
             return
         for key, value in result.items():
@@ -445,6 +455,8 @@ class _WorkflowRecorder:
         artifact_paths: tuple[Path, ...],
         reason: str,
         recommended_action: str,
+        retryable: bool = False,
+        error_code: str | None = None,
     ) -> None:
         self.stage_status[stage] = status
         self.stage_rows.append(
@@ -464,6 +476,8 @@ class _WorkflowRecorder:
                 "completed_at_utc": completed,
                 "reason": reason,
                 "recommended_action": recommended_action,
+                "retryable": bool(retryable),
+                "error_code": error_code or "",
                 "artifact_paths": "|".join(
                     _project_relative(path, self.config.project_root) for path in artifact_paths
                 ),
@@ -506,6 +520,9 @@ class _WorkflowRecorder:
             "event_order_resolution_source": self.event_order_resolution_source,
             "completed": completed,
             "blocking_failure_count": blocking_count,
+            "blocking_reason": self.blocking_reason,
+            "retryable_error": self.retryable_error,
+            "error_code": self.error_code,
             "warning_count": warning_count,
             "current_stage": self.current_stage,
             "forecast_status": self.summary_values.get("forecast_status", "not_run"),
@@ -587,6 +604,8 @@ class _WorkflowRecorder:
             scheduled_event_date=self.scheduled_event_date,
             event_order_resolution_source=self.event_order_resolution_source,
             dashboard_current_event=summary["dashboard_current_event"],
+            retryable_error=self.retryable_error,
+            error_code=self.error_code,
         )
 
 
@@ -727,11 +746,16 @@ def _resolve_entry_list(
     )
     if not audit.forecast_allowed:
         reasons = "; ".join(audit.summary.get("blocking_reasons", []))
-        raise ValueError(f"Qualifying entry list blocks forecast workflow: {reasons}")
+        raise QualifyingRosterError(
+            f"Qualifying entry list blocks forecast workflow: {reasons}",
+            error_code="qualifying_roster_ambiguous",
+            retryable=bool(audit.summary.get("roster_ambiguity_retryable", False)),
+        )
     return {
         "artifact_paths": (
             audit.summary_path,
             audit.drivers_path,
+            audit.practice_evidence_path,
             audit.exclusions_path,
             audit.failures_path,
         ),
@@ -867,6 +891,7 @@ def _create_or_reuse_forecast(
         protocol_name,
         event_slug,
     ):
+        assert_pre_qualifying_window_artifacts(config, season, event)
         summary = create_prospective_monitoring_forecast(
             config,
             model_config,

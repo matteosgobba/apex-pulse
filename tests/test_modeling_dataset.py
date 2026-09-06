@@ -71,13 +71,41 @@ def test_checkpoint_dataset_keeps_target_driver_missing_from_practice() -> None:
     verstappen = dataset[dataset["driver"].eq("VER")]
 
     assert len(verstappen) == len(CHECKPOINT_SESSIONS)
-    practice_columns = [
-        column for column in get_feature_columns(dataset) if column.startswith("fp")
+    direct_practice_columns = [
+        column
+        for column in get_feature_columns(dataset)
+        if column.startswith("fp")
+        and "team_" not in column
+        and "driver_practice_participation" not in column
     ]
-    assert verstappen[practice_columns].isna().all().all()
+    assert verstappen[direct_practice_columns].isna().all().all()
+    assert ~verstappen.filter(like="driver_practice_participation").all(axis=None)
     assert verstappen["practice_signal_quality_score"].eq(0).all()
     assert ~verstappen["has_any_practice_time"].all()
     assert verstappen["quali_position"].eq(1).all()
+
+
+def test_fp1_substitute_contributes_team_evidence_without_copying_direct_pace() -> None:
+    practice = _practice_features()
+    practice = practice[~(practice["session"].eq("FP1") & practice["driver"].eq("VER"))]
+    rookie = practice[practice["session"].eq("FP1") & practice["driver"].eq("NOR")].copy()
+    rookie["driver"] = "R01"
+    rookie["team"] = "Red Bull Racing"
+    rookie["best_push_lap_time_sec"] = 79.5
+    practice = pd.concat([practice, rookie], ignore_index=True)
+    targets = _small_targets().copy()
+    targets["team"] = ["Red Bull Racing", "McLaren"]
+
+    dataset = build_checkpoint_modeling_dataset(practice, targets)
+    fp1 = dataset[dataset["checkpoint"].eq("after_fp1")].set_index("driver")
+
+    assert set(fp1.index) == {"VER", "NOR"}
+    assert "R01" not in fp1.index
+    assert pd.isna(fp1.loc["VER", "fp1_best_push_lap_time_sec"])
+    assert fp1.loc["VER", "fp1_driver_practice_participation"] == 0
+    assert fp1.loc["VER", "fp1_team_best_push_lap_time_sec"] == pytest.approx(79.5)
+    assert fp1.loc["VER", "fp1_team_observed_driver_count"] == 1
+    assert fp1.loc["VER", "fp1_team_evidence_from_other_driver"] == 1
 
 
 def test_modeling_output_path(tmp_path: Path) -> None:

@@ -19,7 +19,11 @@ from f1_prediction.features.data_quality import (
 )
 from f1_prediction.features.historical_features import HISTORICAL_FEATURE_COLUMNS
 from f1_prediction.features.qualifying_targets import TARGET_COLUMNS, build_qualifying_targets
-from f1_prediction.features.relative_features import add_relative_practice_features
+from f1_prediction.features.relative_features import (
+    TEAM_SESSION_FEATURE_COLUMNS,
+    add_relative_practice_features,
+    build_team_session_features,
+)
 from f1_prediction.utils.paths import ensure_directory, slugify
 
 CHECKPOINT_SESSIONS: dict[str, tuple[str, ...]] = {
@@ -85,11 +89,13 @@ def build_checkpoint_modeling_dataset(
     _validate_target_columns(qualifying_targets)
     _validate_unique_session_driver_rows(practice_features)
     practice_features = add_relative_practice_features(practice_features)
-    source_feature_columns = [
+    team_session_features = build_team_session_features(practice_features)
+    direct_feature_columns = [
         column
         for column in practice_features.columns
         if column not in SESSION_IDENTIFIER_COLUMNS
         and not column.lower().startswith(("q_", "quali_"))
+        and column not in TEAM_SESSION_FEATURE_COLUMNS
     ]
     team_map = _driver_team_map(practice_features)
     checkpoint_frames: list[pd.DataFrame] = []
@@ -106,10 +112,36 @@ def build_checkpoint_modeling_dataset(
 
         for session in available_sessions:
             session_rows = practice_features[practice_features["session"].eq(session)]
-            renamed = session_rows.loc[:, ["driver_key", *source_feature_columns]].rename(
-                columns={column: f"{session.lower()}_{column}" for column in source_feature_columns}
+            direct_rows = session_rows.loc[:, ["driver_key", *direct_feature_columns]].copy()
+            direct_rows["driver_practice_participation"] = True
+            renamed = direct_rows.rename(
+                columns={
+                    column: f"{session.lower()}_{column}"
+                    for column in [*direct_feature_columns, "driver_practice_participation"]
+                }
             )
             frame = frame.merge(renamed, on="driver_key", how="left", validate="one_to_one")
+            prefix = session.lower()
+            team_rows = team_session_features[
+                team_session_features["session_slug"].eq(prefix)
+            ].loc[:, ["team_key", *TEAM_SESSION_FEATURE_COLUMNS]]
+            team_rows = team_rows.rename(
+                columns={column: f"{prefix}_{column}" for column in TEAM_SESSION_FEATURE_COLUMNS}
+            )
+            frame = frame.merge(team_rows, on="team_key", how="left", validate="many_to_one")
+            direct = (
+                frame[f"{prefix}_driver_practice_participation"]
+                .astype("boolean")
+                .fillna(False)
+                .astype(bool)
+            )
+            observed = pd.to_numeric(
+                frame[f"{prefix}_team_observed_driver_count"], errors="coerce"
+            )
+            frame[f"{prefix}_driver_practice_participation"] = direct
+            frame[f"{prefix}_team_evidence_from_other_driver"] = observed.gt(
+                direct.astype(int)
+            )
 
         checkpoint_frames.append(frame)
 

@@ -16,6 +16,12 @@ LEGACY_RANK_COLUMNS: dict[str, str] = {
     "push_lap_rank": "best_push_rank",
     "valid_lap_rank": "best_valid_rank",
 }
+TEAM_SESSION_FEATURE_COLUMNS: tuple[str, ...] = (
+    "team_best_push_lap_time_sec",
+    "team_best_valid_lap_time_sec",
+    "team_theoretical_best_lap_time_sec",
+    "team_observed_driver_count",
+)
 
 
 def add_relative_practice_features(practice_features: pd.DataFrame) -> pd.DataFrame:
@@ -60,6 +66,45 @@ def add_relative_practice_features(practice_features: pd.DataFrame) -> pd.DataFr
         )
         _add_team_features(features, metric, feature_name)
     return features
+
+
+def build_team_session_features(practice_features: pd.DataFrame) -> pd.DataFrame:
+    """Return one evidence row per session and current team identity.
+
+    The input must still contain every practice participant.  These aggregates are
+    intentionally separate from driver rows so an FP1-only substitute can inform
+    the car/team signal without becoming a direct feature source for another driver.
+    """
+    features = add_identity_columns(practice_features)
+    for metric_column in METRIC_COLUMNS.values():
+        if metric_column not in features:
+            features[metric_column] = float("nan")
+    required = {*SESSION_GROUP_COLUMNS, "team_key", "driver_key"}
+    missing = sorted(required - set(features.columns))
+    if missing:
+        raise ValueError(
+            "Practice features are missing team-evidence identifiers: "
+            + ", ".join(missing)
+        )
+    valid = features[
+        features["team_key"].notna() & features["team_key"].astype(str).str.strip().ne("")
+    ].copy()
+    if valid.empty:
+        return pd.DataFrame(
+            columns=[*SESSION_GROUP_COLUMNS, "team_key", *TEAM_SESSION_FEATURE_COLUMNS]
+        )
+    grouped = valid.groupby(
+        [*SESSION_GROUP_COLUMNS, "team_key"],
+        dropna=False,
+        sort=False,
+    )
+    rows = grouped.agg(
+        team_best_push_lap_time_sec=("best_push_lap_time_sec", "min"),
+        team_best_valid_lap_time_sec=("best_valid_lap_time_sec", "min"),
+        team_theoretical_best_lap_time_sec=("theoretical_best_lap_time_sec", "min"),
+        team_observed_driver_count=("driver_key", "nunique"),
+    )
+    return rows.reset_index()
 
 
 def _add_team_features(

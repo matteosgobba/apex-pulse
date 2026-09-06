@@ -43,6 +43,24 @@ def test_fp3_is_selected_before_q_on_conventional_weekend(tmp_path: Path) -> Non
     assert audit.exclusions.empty
 
 
+def test_fp2_is_used_when_fp3_is_not_locally_available(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_session(config, "FP1", ("ALO", "STR", "R01"))
+    _write_session(config, "FP2", ("ALO", "STR"))
+
+    audit = audit_qualifying_entry_list(
+        config,
+        season=2026,
+        event="Belgian Grand Prix",
+        allow_fastf1=False,
+    )
+
+    assert audit.forecast_allowed
+    assert audit.summary["resolution_source"] == f"{LATEST_PRE_Q_SOURCE_PREFIX}:FP2"
+    assert set(audit.drivers["driver"]) == {"ALO", "STR"}
+    assert audit.exclusions["driver"].tolist() == ["R01"]
+
+
 def test_latest_session_not_union_excludes_fp1_fp2_only_driver(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_practice(
@@ -59,9 +77,12 @@ def test_latest_session_not_union_excludes_fp1_fp2_only_driver(tmp_path: Path) -
         allow_fastf1=False,
     )
 
-    assert not audit.forecast_allowed
-    assert "identity_or_team_mismatch" in set(audit.failures["check_name"])
+    assert audit.forecast_allowed
     assert "DEV" not in set(audit.drivers["driver"])
+    assert audit.exclusions["driver"].tolist() == ["DEV"]
+    assert audit.exclusions["exclusion_is_safe"].all()
+    assert audit.summary["roster_validation"]["set_equality_required"] is False
+    assert audit.summary["roster_validation"]["earlier_practice_only_driver_count"] == 1
 
 
 def test_replacement_present_in_fp3_is_included_with_authoritative_roster(tmp_path: Path) -> None:
@@ -163,7 +184,11 @@ def test_alternative_weekend_uses_latest_completed_session_before_q(
         ),
     )
 
-    audit = audit_qualifying_entry_list(config, season=2026, event="Belgian Grand Prix")
+    audit = audit_qualifying_entry_list(
+        config,
+        season=2026,
+        event="Belgian Grand Prix",
+    )
 
     assert audit.forecast_allowed
     assert audit.summary["resolution_source"] == f"{LATEST_PRE_Q_SOURCE_PREFIX}:S"
@@ -232,11 +257,65 @@ def test_q_results_source_is_valid_after_q_when_no_pre_q_source(
         lambda *_args, **_kwargs: _Session(),
     )
 
-    audit = audit_qualifying_entry_list(config, season=2026, event="Belgian Grand Prix")
+    audit = audit_qualifying_entry_list(
+        config,
+        season=2026,
+        event="Belgian Grand Prix",
+        allow_post_qualifying_sources=True,
+    )
 
     assert audit.forecast_allowed
     assert audit.summary["resolution_source"] == "fastf1_q_results"
     assert audit.summary["q_data_available"] is True
+
+
+def test_multiple_fp1_only_drivers_do_not_block_or_hardcode_roster_size(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    roster = tuple(f"D{index:02d}" for index in range(22))
+    practice_only = ("R01", "R02", "R03", "R04")
+    _write_practice(
+        config,
+        fp1=(*roster, *practice_only),
+        fp2=roster,
+        fp3=roster,
+    )
+
+    audit = audit_qualifying_entry_list(
+        config,
+        season=2026,
+        event="Belgian Grand Prix",
+        allow_fastf1=False,
+    )
+
+    assert audit.forecast_allowed
+    assert audit.summary["practice_participant_count"] == len(roster) + len(practice_only)
+    assert audit.summary["forecast_eligible_driver_count"] == len(roster)
+    assert audit.summary["excluded_practice_only_driver_count"] == len(practice_only)
+    assert set(audit.summary["excluded_practice_only_drivers"]) == set(practice_only)
+    assert audit.practice_evidence_path.is_file()
+    assert set(audit.practice_evidence["driver"]) == set((*roster, *practice_only))
+
+
+def test_missing_team_in_latest_source_is_retryable_roster_ambiguity(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_practice(config, fp1=("VER", "NOR"), fp2=("VER", "NOR"), fp3=("VER", "NOR"))
+    fp3 = build_lap_output_path(config.lap_output_dir, 2026, "Belgian Grand Prix", "FP3")
+    laps = pd.read_parquet(fp3)
+    laps.loc[laps["Driver"].eq("NOR"), "Team"] = pd.NA
+    laps.to_parquet(fp3, index=False)
+
+    audit = audit_qualifying_entry_list(
+        config,
+        season=2026,
+        event="Belgian Grand Prix",
+        allow_fastf1=False,
+    )
+
+    assert not audit.forecast_allowed
+    assert audit.summary["roster_ambiguity_retryable"] is True
+    assert any("missing team identity" in reason for reason in audit.summary["blocking_reasons"])
 
 
 def test_fp1_only_rookie_is_excluded_from_qualifying_entry_list(tmp_path: Path) -> None:

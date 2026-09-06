@@ -75,6 +75,49 @@ def test_excluded_holdout_event_is_not_used_by_later_training_history() -> None:
     assert event_three["driver_rolling3_quali_gap_mean"] == pytest.approx(0.2)
 
 
+def test_driver_history_follows_driver_while_team_history_uses_current_event_team() -> None:
+    rows: list[dict[str, object]] = []
+    event_one = {
+        "NOR": ("Team A", 0.5),
+        "PIA": ("Team A", 0.7),
+        "VER": ("Team B", 0.0),
+        "PER": ("Team B", 0.2),
+    }
+    event_two = {
+        "NOR": ("Team B", 0.4),
+        "PIA": ("Team A", 0.6),
+        "VER": ("Team A", 0.1),
+        "PER": ("Team B", 0.3),
+    }
+    for order, (event, entrants) in enumerate(
+        (("event-1", event_one), ("event-2", event_two)), start=1
+    ):
+        for driver, (team, gap) in entrants.items():
+            rows.append(
+                {
+                    "season": 2026,
+                    "event": event,
+                    "event_slug": event,
+                    "event_order": order,
+                    "checkpoint": "after_fp3",
+                    "driver": driver,
+                    "team": team,
+                    "quali_gap_to_pole_sec": gap,
+                    "quali_position": 1,
+                    "reached_q3": 1,
+                }
+            )
+
+    features = add_historical_features(pd.DataFrame(rows)).set_index(["event_slug", "driver"])
+
+    swapped_nor = features.loc[("event-2", "NOR")]
+    swapped_ver = features.loc[("event-2", "VER")]
+    assert swapped_nor["driver_rolling3_quali_gap_mean"] == pytest.approx(0.5)
+    assert swapped_nor["team_rolling3_quali_gap_mean"] == pytest.approx(0.1)
+    assert swapped_ver["driver_rolling3_quali_gap_mean"] == pytest.approx(0.0)
+    assert swapped_ver["team_rolling3_quali_gap_mean"] == pytest.approx(0.6)
+
+
 def _historical_dataset() -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     gaps = {

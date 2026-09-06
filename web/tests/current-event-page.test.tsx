@@ -9,6 +9,7 @@ import type {
   CurrentEventPageData,
   ForecastEnvelope,
   HealthResponse,
+  HistoricalMonitoringEnvelope,
   PracticeStatusEnvelope,
   SettlementEnvelope
 } from "@/lib/dashboard-types";
@@ -116,6 +117,83 @@ describe("CurrentEventPageView", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText("UNSUPPORTED_WEEKEND_FORMAT")).not.toBeInTheDocument();
     expect(screen.getByText("Forecast coverage: 2/3")).toBeInTheDocument();
+  });
+
+  test("missed forecast window distinguishes monitored weekend from last completed forecast", () => {
+    renderPage({
+      operationalStatus: missedForecastOperationalStatus(),
+      currentEvent: hungarianSettledCurrentEvent(),
+      settlement: partialSettlement()
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "Italian Grand Prix\u00A0🇮🇹", level: 1 })
+    ).toBeInTheDocument();
+    expect(screen.getByText("Recently monitored weekend")).toBeInTheDocument();
+    expect(screen.getByText("Forecast not generated")).toBeInTheDocument();
+    expect(screen.getByText(/window closed before a safe forecast/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/no pre-qualifying forecast was generated for this weekend/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/preserved prediction can now be compared/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Last completed prediction")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Hungarian Grand Prix\u00A0🇭🇺", level: 2 })
+    ).toBeInTheDocument();
+    expect(screen.queryByText("forecast_window_missed")).not.toBeInTheDocument();
+  });
+
+  test("history supplies the last completed forecast when current artifacts have no forecast", () => {
+    const currentWithoutForecast = {
+      ...(readyCurrentEvent as CurrentEventEnvelope),
+      data: {
+        ...(readyCurrentEvent as CurrentEventEnvelope).data,
+        event_identity: {
+          season: 2026,
+          event: "Italian Grand Prix",
+          event_slug: "italian-grand-prix",
+          event_order: 14
+        },
+        lifecycle: {
+          state: "blocked",
+          display_label: "Blocked",
+          reason: "forecast_window_missed"
+        }
+      }
+    } as CurrentEventEnvelope;
+    renderPage({
+      operationalStatus: missedForecastOperationalStatus(),
+      currentEvent: currentWithoutForecast,
+      forecast: null,
+      settlement: null,
+      historicalMonitoring: historicalHungaryForecast()
+    });
+
+    expect(screen.getByText("Forecast not generated")).toBeInTheDocument();
+    expect(screen.getByText("Last completed prediction")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Hungarian Grand Prix\u00A0🇭🇺", level: 2 })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Predicted qualifying ranking" })).toBeInTheDocument();
+  });
+
+  test("operational weekend remains visible when current artifacts are absent", () => {
+    renderPage({
+      operationalStatus: missedForecastOperationalStatus(),
+      currentEvent: null,
+      forecast: null,
+      settlement: null,
+      historicalMonitoring: historicalHungaryForecast()
+    });
+
+    expect(
+      screen.getByRole("heading", { name: "Italian Grand Prix\u00A0🇮🇹", level: 1 })
+    ).toBeInTheDocument();
+    expect(screen.getByText("Forecast not generated")).toBeInTheDocument();
+    expect(screen.getByText("Last completed prediction")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Hungarian Grand Prix\u00A0🇭🇺", level: 2 })
+    ).toBeInTheDocument();
   });
 
   test("unavailable operational status leaves the latest result functional", () => {
@@ -343,6 +421,87 @@ function sprintOperationalStatus(): AutopilotStatusEnvelope {
       }
     }
   };
+}
+
+function missedForecastOperationalStatus(): AutopilotStatusEnvelope {
+  return {
+    schema_version: "1.0",
+    status: "available",
+    data: {
+      orchestrator_state_after: "BLOCKED",
+      forecast_exists: false,
+      settlement_exists: false,
+      action_result: "forecast_window_missed",
+      retryable: false,
+      error_classification: "blocking_permanent",
+      operational_event: {
+        season: 2026,
+        event: "Italian Grand Prix",
+        event_slug: "italian-grand-prix",
+        round_number: 14,
+        event_format: "conventional",
+        calendar_source: "fastf1_event_schedule",
+        supported: true,
+        prediction_support_reason: null,
+        schedule_available: true,
+        timezone: "UTC",
+        sessions: [
+          {
+            sequence: 1,
+            session: "FP1",
+            display_name: "Practice 1",
+            scheduled_start_utc: "2026-07-22T10:00:00+00:00",
+            scheduled_end_utc: "2026-07-22T11:00:00+00:00",
+            end_source: "fastf1_schedule",
+            schedule_status: "complete"
+          },
+          {
+            sequence: 2,
+            session: "Q",
+            display_name: "Qualifying",
+            scheduled_start_utc: "2026-07-23T14:00:00+00:00",
+            scheduled_end_utc: "2026-07-23T15:30:00+00:00",
+            end_source: "fastf1_schedule",
+            schedule_status: "complete"
+          }
+        ]
+      }
+    }
+  };
+}
+
+function historicalHungaryForecast(): HistoricalMonitoringEnvelope {
+  return {
+    schema_version: "1.0",
+    artifact_type: "historical_monitoring_summary",
+    generated_at_utc: "2026-07-23T16:00:00Z",
+    source_artifacts: [],
+    source_fingerprints: {},
+    status: "complete",
+    data: {
+      valid_prospective_monitoring: {
+        event_count: 1,
+        forecasted_event_count: 1,
+        settled_event_count: 1,
+        events: [
+          {
+            event_identity: {
+              season: 2026,
+              event: "Hungarian Grand Prix",
+              event_slug: "hungarian-grand-prix",
+              event_order: 13
+            },
+            lifecycle_state: "settled",
+            forecast_available: true,
+            forecasted: true,
+            forecast_checkpoint: "after_fp3",
+            forecast_rows: (readyForecast as ForecastEnvelope).data
+              .qualifying_eligible_forecast_rows as Array<Record<string, unknown>>
+          }
+        ]
+      }
+    }
+  } as HistoricalMonitoringEnvelope;
 }
 
 function partialSettlement(): SettlementEnvelope {

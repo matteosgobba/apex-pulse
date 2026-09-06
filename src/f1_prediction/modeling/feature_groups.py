@@ -21,6 +21,9 @@ _RELATIVE_PATTERNS = (
     "team_rank",
     "driver_gap_to_team",
     "gap_to_session_best",
+    "driver_practice_participation",
+    "team_observed_driver_count",
+    "team_evidence_from_other_driver",
 )
 _HISTORICAL_PATTERNS = ("rolling", "expanding", "prev_events")
 _QUALITY_PATTERNS = (

@@ -3,19 +3,22 @@
 import { useEffect, useState } from "react";
 
 import { SessionCountdown } from "@/components/session-countdown";
-import type { OperationalEvent } from "@/lib/dashboard-types";
+import type { AutopilotStatusData, OperationalEvent } from "@/lib/dashboard-types";
 import { formatEventNameWithFlag } from "@/lib/event-display";
 import {
   operationalEventSchedule,
+  operationalForecastNotice,
   operationalFormatLabel,
   operationalWeekendLabel
 } from "@/lib/operational-event";
 
 export function OperationalWeekendCard({
   event,
+  status,
   initialNow
 }: {
   event: OperationalEvent;
+  status?: AutopilotStatusData | null;
   initialNow?: string;
 }) {
   const [nowMs, setNowMs] = useState<number | null>(
@@ -33,7 +36,7 @@ export function OperationalWeekendCard({
     };
   }, [initialNow]);
   const schedule = operationalEventSchedule(event);
-  const supported = event.supported;
+  const forecastNotice = operationalForecastNotice(event, status);
   const weekendLabel =
     nowMs === null ? "Monitored weekend" : operationalWeekendLabel(event, new Date(nowMs));
 
@@ -58,28 +61,22 @@ export function OperationalWeekendCard({
         </div>
         <div
           className={`mt-6 rounded-2xl border px-4 py-4 text-sm leading-6 ${
-            supported
-              ? "border-apex-border bg-apex-surface text-apex-secondary"
-              : "border-apex-warning/35 bg-apex-warning/10 text-apex-secondary"
+            forecastNotice.tone === "warning"
+              ? "border-apex-warning/35 bg-apex-warning/10 text-apex-secondary"
+              : forecastNotice.tone === "success"
+                ? "border-apex-success/35 bg-apex-success/10 text-apex-secondary"
+                : "border-apex-border bg-apex-surface text-apex-secondary"
           }`}
         >
-          {supported ? (
-            <p>
-              Apex Pulse is monitoring the conventional practice-to-qualifying schedule for the
-              next guarded prediction window.
-            </p>
-          ) : (
-            <p>
-              Apex Pulse does not create predictions for Sprint weekends yet. This weekend remains
-              visible and monitored, but no qualifying forecast will be generated.
-            </p>
-          )}
+          <p className="font-semibold text-apex-text">{forecastNotice.label}</p>
+          <p className="mt-1">{forecastNotice.detail}</p>
         </div>
       </div>
       <SessionCountdown
         schedule={schedule}
         lifecycle="practice_in_progress"
         initialNow={initialNow}
+        forecastAvailable={event.supported ? (status?.forecast_exists ?? undefined) : false}
       />
     </section>
   );

@@ -2667,6 +2667,10 @@ def _print_qualifying_entry_list_audit_summary(
     typer.echo(f"Forecast allowed: {payload.get('forecast_allowed')}")
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Drivers: {_display_path(summary.drivers_path, project_root)}")
+    typer.echo(
+        "Practice evidence: "
+        f"{_display_path(summary.practice_evidence_path, project_root)}"
+    )
     typer.echo(f"Exclusions: {_display_path(summary.exclusions_path, project_root)}")
     typer.echo(f"Failures: {_display_path(summary.failures_path, project_root)}")
 

@@ -18,6 +18,8 @@ def test_relative_historical_and_quality_patterns_are_classified() -> None:
 
     assert "fp1_best_push_gap_to_teammate_sec" in groups["relative_features"]
     assert "fp1_team_best_push_lap_time_sec" in groups["relative_features"]
+    assert "fp1_team_observed_driver_count" in groups["relative_features"]
+    assert "fp1_team_evidence_from_other_driver" in groups["relative_features"]
     assert "fp1_best_push_gap_pct_to_session_best" in groups["relative_features"]
     assert "driver_rolling3_quali_gap_mean" in groups["historical_features"]
     assert "team_expanding_q3_rate" in groups["historical_features"]
@@ -45,6 +47,8 @@ def _dataset() -> pd.DataFrame:
             "fp1_n_push_laps": [4],
             "fp1_best_push_gap_to_teammate_sec": [0.1],
             "fp1_team_best_push_lap_time_sec": [79.9],
+            "fp1_team_observed_driver_count": [2],
+            "fp1_team_evidence_from_other_driver": [True],
             "fp1_best_push_gap_pct_to_session_best": [0.002],
             "driver_rolling3_quali_gap_mean": [0.3],
             "team_expanding_q3_rate": [0.5],

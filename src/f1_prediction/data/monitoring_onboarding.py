@@ -34,7 +34,11 @@ from f1_prediction.features.modeling_dataset import (
     get_feature_columns,
 )
 from f1_prediction.features.qualifying_targets import build_qualifying_targets
-from f1_prediction.features.relative_features import add_relative_practice_features
+from f1_prediction.features.relative_features import (
+    TEAM_SESSION_FEATURE_COLUMNS,
+    add_relative_practice_features,
+    build_team_session_features,
+)
 from f1_prediction.utils.paths import ensure_directory, slugify
 
 MONITORING_CHECKPOINT = "after_fp3"
@@ -514,23 +518,49 @@ def build_fp3_safe_feature_rows(
 ) -> pd.DataFrame:
     """Build targetless after-FP3 rows from practice aggregates."""
     practice = add_relative_practice_features(add_identity_columns(practice_features))
-    source_columns = [
+    team_session_features = build_team_session_features(practice)
+    direct_columns = [
         column
         for column in practice.columns
         if column not in SESSION_IDENTIFIER_COLUMNS
         and not column.lower().startswith(("q_", "quali_"))
         and column not in FORBIDDEN_TARGET_COLUMNS
         and "target" not in column.lower()
+        and column not in TEAM_SESSION_FEATURE_COLUMNS
     ]
     identity = latest_driver_identity(practice)
     frame = identity.copy()
     frame["checkpoint"] = MONITORING_CHECKPOINT
     for session in DEFAULT_PRACTICE_SESSIONS:
         rows = practice[practice["session"].astype(str).eq(session)]
-        renamed = rows.loc[:, ["driver_key", *source_columns]].rename(
-            columns={column: f"{session.lower()}_{column}" for column in source_columns}
+        direct_rows = rows.loc[:, ["driver_key", *direct_columns]].copy()
+        direct_rows["driver_practice_participation"] = True
+        renamed = direct_rows.rename(
+            columns={
+                column: f"{session.lower()}_{column}"
+                for column in [*direct_columns, "driver_practice_participation"]
+            }
         )
         frame = frame.merge(renamed, on="driver_key", how="left", validate="one_to_one")
+        prefix = session.lower()
+        team_rows = team_session_features[
+            team_session_features["session_slug"].astype(str).eq(prefix)
+        ].loc[:, ["team_key", *TEAM_SESSION_FEATURE_COLUMNS]]
+        team_rows = team_rows.rename(
+            columns={column: f"{prefix}_{column}" for column in TEAM_SESSION_FEATURE_COLUMNS}
+        )
+        frame = frame.merge(team_rows, on="team_key", how="left", validate="many_to_one")
+        direct = (
+            frame[f"{prefix}_driver_practice_participation"]
+            .astype("boolean")
+            .fillna(False)
+            .astype(bool)
+        )
+        observed = pd.to_numeric(
+            frame[f"{prefix}_team_observed_driver_count"], errors="coerce"
+        )
+        frame[f"{prefix}_driver_practice_participation"] = direct
+        frame[f"{prefix}_team_evidence_from_other_driver"] = observed.gt(direct.astype(int))
     quality = feature_config.data_quality if feature_config is not None else None
     settings = (
         DataQualitySettings(

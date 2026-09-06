@@ -474,6 +474,11 @@ export interface OperationalEvent {
 export interface AutopilotStatusData extends Record<string, unknown> {
   operational_event?: OperationalEvent | null;
   orchestrator_state_after?: string | null;
+  forecast_exists?: boolean | null;
+  settlement_exists?: boolean | null;
+  action_result?: string | null;
+  retryable?: boolean | null;
+  error_classification?: string | null;
   scheduler_enabled?: boolean;
   scheduler_running?: boolean;
   last_tick_completed_at_utc?: string | null;

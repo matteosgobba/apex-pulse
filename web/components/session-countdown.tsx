@@ -12,11 +12,13 @@ import {
 export function SessionCountdown({
   schedule,
   lifecycle,
-  initialNow
+  initialNow,
+  forecastAvailable
 }: {
   schedule: EventSchedule | null;
   lifecycle: LifecycleState;
   initialNow?: string;
+  forecastAvailable?: boolean;
 }) {
   const [nowMs, setNowMs] = useState<number | null>(
     initialNow ? Date.parse(initialNow) : null
@@ -59,7 +61,11 @@ export function SessionCountdown({
     return (
       <CountdownShell
         title="Qualifying complete"
-        detail="The preserved prediction can now be compared with the official result."
+        detail={
+          forecastAvailable === false
+            ? "Qualifying is complete. No pre-qualifying forecast was generated for this weekend."
+            : "The preserved prediction can now be compared with the official result."
+        }
         complete
       />
     );

@@ -13,6 +13,8 @@ from typing import Any
 import pandas as pd
 
 from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig
+from f1_prediction.data.fastf1_loader import build_lap_output_path
+from f1_prediction.data.ingest import build_metadata_output_path
 from f1_prediction.data.monitoring_onboarding import (
     REGISTRY_ONBOARDING_COLUMNS,
     ensure_registry_columns,
@@ -28,6 +30,7 @@ from f1_prediction.data.monitoring_onboarding import (
 )
 from f1_prediction.data.qualifying_entry_list import (
     ENTRY_LIST_PARITY_PASSED,
+    QualifyingRosterError,
     audit_qualifying_entry_list,
     constrain_features_to_entry_list,
 )
@@ -207,6 +210,7 @@ def create_prospective_monitoring_forecast(
     protocol_name: str,
     event: str,
     uncertainty: str = "conformal_predicted_gap_bucket",
+    diagnostic_rehearsal: bool = False,
 ) -> ProspectiveMonitoringSummary:
     """Create an immutable pre-qualification forecast snapshot for one monitored event."""
     metrics_dir = config.metrics_output_dir
@@ -226,6 +230,12 @@ def create_prospective_monitoring_forecast(
         )
     ):
         raise ValueError(f"Monitoring preflight is not ready: {preflight.status}")
+    if diagnostic_rehearsal and not synthetic_rehearsal_event_slug(slugify(event)):
+        raise ValueError(
+            "Post-qualifying rehearsal bypass is restricted to reserved synthetic events."
+        )
+    if not diagnostic_rehearsal:
+        assert_pre_qualifying_window_artifacts(config, int(protocol["monitor_season"]), event)
     preflight_payload = _read_json(preflight.summary_path)
     dataset, dataset_status = read_monitoring_dataset(
         resolve_protocol_dataset_path(config, protocol)
@@ -3747,6 +3757,34 @@ def assert_forecast_not_exists(metrics_dir: Path, protocol_name: str, event_slug
     ].astype(str).eq(event_slug)
     if bool(exists.any()):
         raise ValueError(f"Forecast snapshot already exists for {event_slug}")
+
+
+def assert_pre_qualifying_window_artifacts(
+    config: DataConfig,
+    season: int,
+    event: str,
+) -> None:
+    """Reject forecast creation once locally published qualifying evidence exists."""
+    q_laps = build_lap_output_path(config.lap_output_dir, season, event, "Q")
+    q_metadata = build_metadata_output_path(
+        config.session_metadata_output_dir,
+        season,
+        event,
+        "Q",
+    )
+    metadata_success = False
+    if q_metadata.is_file():
+        try:
+            metadata_success = _read_json(q_metadata).get("status") == "success"
+        except (OSError, json.JSONDecodeError):
+            metadata_success = False
+    if q_laps.is_file() or metadata_success:
+        raise QualifyingRosterError(
+            "Qualifying data is already available and no immutable forecast exists; "
+            "retrospective forecast creation is forbidden.",
+            error_code="forecast_window_missed",
+            retryable=False,
+        )
 
 
 def assert_forecast_can_be_created(

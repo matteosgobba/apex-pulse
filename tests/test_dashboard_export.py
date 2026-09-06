@@ -464,6 +464,35 @@ def test_event_selection_is_deterministic_and_registry_order_aware(tmp_path: Pat
     assert current["data"]["event_identity"]["event_order"] == 9
 
 
+def test_newer_blocked_weekend_is_current_ahead_of_last_settled_forecast(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(
+        config,
+        [_registry_event("Hungarian Grand Prix", 13), _registry_event("Monza", 14)],
+    )
+    _write_forecasts(config, "Hungarian Grand Prix", [("NOR", "McLaren", 0.1)])
+    _write_settlements(config, "Hungarian Grand Prix", [("NOR", 0.2, 0.1)])
+    _write_preflight(
+        config,
+        "Monza",
+        status="forecast_window_missed",
+        forecast_allowed=False,
+        blocking_check_count=1,
+    )
+
+    export_dashboard_artifacts(config)
+    current = _read_dashboard(config, "current_event.json")
+    forecast = _read_dashboard(config, "event_forecast.json")
+
+    assert current["data"]["event_identity"]["event_slug"] == "monza"
+    assert current["data"]["lifecycle"]["state"] == "blocked"
+    assert current["data"]["forecast_status"]["available"] is False
+    assert forecast["data"]["leaderboard"]["available"] is False
+
+
 def test_preflight_for_one_event_does_not_leak_into_another_event(tmp_path: Path) -> None:
     config = _config(tmp_path)
     _write_protocol(config)

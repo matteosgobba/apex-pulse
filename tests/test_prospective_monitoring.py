@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 from f1_prediction.config import DataConfig, load_feature_config, load_model_config
+from f1_prediction.data.qualifying_entry_list import QualifyingRosterError
 from f1_prediction.modeling.backtest_report import build_backtest_report_payload
 from f1_prediction.modeling.prospective_monitoring import (
     build_event_metrics,
@@ -302,6 +303,31 @@ def test_preflight_blocks_preexisting_target_artifact(tmp_path: Path) -> None:
 
     assert summary.status == "blocked"
     assert "no_existing_target_artifact_before_forecast" in set(failures["check_name"])
+
+
+def test_direct_forecast_creation_refuses_published_q_data(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    dataset_path = _write_dataset(config)
+    _init(config, dataset_path)
+    q_path = config.lap_output_dir / "2026/bahrain/q_laps.parquet"
+    q_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"Driver": ["VER"], "Team": ["Team 0"]}).to_parquet(
+        q_path,
+        index=False,
+    )
+
+    with pytest.raises(QualifyingRosterError) as error:
+        create_prospective_monitoring_forecast(
+            config,
+            load_model_config(),
+            load_feature_config(),
+            protocol_name="season_2026_v1",
+            event="Bahrain",
+        )
+
+    assert error.value.error_code == "forecast_window_missed"
+    assert error.value.retryable is False
+    assert not (config.metrics_output_dir / "prospective_monitoring_forecasts.parquet").exists()
 
 
 def test_preflight_existing_forecast_returns_already_forecasted(tmp_path: Path) -> None:

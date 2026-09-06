@@ -123,6 +123,25 @@ Apex Pulse combines:
 
 Push-like laps are identified with deterministic validity and pace rules rather than assuming every timed lap represents qualifying intent.
 
+### Qualifying roster and practice evidence
+
+The pre-qualifying workflow keeps two event-scoped populations separate:
+
+* `forecast_eligible_drivers` is the authoritative weekend roster that receives predictions;
+* `practice_evidence_drivers` contains everyone who produced usable FP1/FP2/FP3 data.
+
+On a conventional weekend the latest complete, internally valid pre-qualifying session normally
+defines the roster (FP3, with FP2 as a fallback when FP3 is not yet available). An FP1-only test or
+substitute driver is excluded from the forecast ranking without invalidating that roster. Their lap
+times remain available to session-and-team aggregates, which are joined to eligible drivers through
+the current weekend `team_key`; direct driver features remain missing when the eligible driver did
+not take part in that session.
+
+Audit outputs record the selected roster source, all practice participants and observed sessions,
+safe pre-qualifying exclusions, current weekend team mapping, and retryable or blocking ambiguity.
+No qualifying data is used to create a pre-qualifying forecast, and a missed forecast window is never
+backfilled retrospectively.
+
 ### Model and policy governance
 
 The evaluation framework includes:
@@ -362,8 +381,8 @@ npm run build
 Latest production-hardening verification:
 
 ```text
-642 Python tests passed
-86 frontend tests passed
+653 Python tests passed
+98 frontend tests passed
 Ruff / ESLint / TypeScript checks passed
 Production builds passed
 14-step autonomous workflow rehearsal passed

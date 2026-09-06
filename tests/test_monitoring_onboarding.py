@@ -10,6 +10,7 @@ from f1_prediction.data.monitoring_onboarding import (
     FORBIDDEN_TARGET_COLUMNS,
     add_monitoring_targets,
     artifact_fingerprint,
+    build_fp3_safe_feature_rows,
     build_target_artifacts_with_coverage,
     create_monitoring_data_readiness_report,
     feature_artifact_path,
@@ -40,6 +41,41 @@ def test_prepare_event_writes_fp3_safe_features_without_targets(tmp_path: Path) 
     assert not any(column.startswith("quali_") for column in features.columns)
     assert manifest["forbidden_target_column_count"] == 0
     assert manifest["driver_row_count"] == 4
+
+
+def test_live_fp3_features_keep_fp1_substitute_as_team_only_evidence() -> None:
+    rows: list[dict[str, object]] = []
+    participants = {
+        "FP1": (("R01", "Team A", 80.0), ("NOR", "Team B", 80.2)),
+        "FP2": (("VER", "Team A", 79.8), ("NOR", "Team B", 80.0)),
+        "FP3": (("VER", "Team A", 79.5), ("NOR", "Team B", 79.7)),
+    }
+    for session, session_rows in participants.items():
+        for driver, team, lap_time in session_rows:
+            rows.append(
+                {
+                    "season": 2026,
+                    "event": "Bahrain",
+                    "event_slug": "bahrain",
+                    "session": session,
+                    "session_slug": session.lower(),
+                    "driver": driver,
+                    "team": team,
+                    "best_push_lap_time_sec": lap_time,
+                    "best_valid_lap_time_sec": lap_time,
+                    "theoretical_best_lap_time_sec": lap_time - 0.1,
+                    "n_push_laps": 1,
+                    "n_valid_laps": 1,
+                }
+            )
+
+    features = build_fp3_safe_feature_rows(pd.DataFrame(rows)).set_index("driver")
+
+    assert pd.isna(features.loc["VER", "fp1_best_push_lap_time_sec"])
+    assert not bool(features.loc["VER", "fp1_driver_practice_participation"])
+    assert features.loc["VER", "fp1_team_best_push_lap_time_sec"] == pytest.approx(80.0)
+    assert bool(features.loc["VER", "fp1_team_evidence_from_other_driver"])
+    assert features.loc["R01", "fp1_best_push_lap_time_sec"] == pytest.approx(80.0)
 
 
 def test_prepare_event_fails_when_local_practice_raw_is_missing(tmp_path: Path) -> None:
@@ -309,7 +345,7 @@ def test_forecast_and_settlement_use_separate_feature_and_target_artifacts(
         dataset_path=dataset_path,
     )
     _write_practice_raw(config, 2026, "Bahrain")
-    _write_q_raw(config, 2026, "Bahrain")
+    _write_entry_list(config, 2026, "Bahrain")
     prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
     register_monitoring_event(
         config,
@@ -338,6 +374,7 @@ def test_forecast_and_settlement_use_separate_feature_and_target_artifacts(
             event="Bahrain",
         )
 
+    _write_q_raw(config, 2026, "Bahrain")
     add_monitoring_targets(config, season=2026, event="Bahrain")
     create_prospective_monitoring_settlement(
         config,
@@ -366,7 +403,6 @@ def test_partial_coverage_settlement_preserves_forecast_rows_and_scores_evaluabl
     )
     _write_practice_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC", "HAM"))
     _write_entry_list(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC", "HAM"))
-    _write_q_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC"))
     prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
     register_monitoring_event(
         config,
@@ -385,6 +421,7 @@ def test_partial_coverage_settlement_preserves_forecast_rows_and_scores_evaluabl
     forecast_path = config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
     forecast_fingerprint = artifact_fingerprint(forecast_path)
 
+    _write_q_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "LEC"))
     add_monitoring_targets(config, season=2026, event="Bahrain")
     create_prospective_monitoring_settlement(
         config,

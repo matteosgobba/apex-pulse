@@ -4,6 +4,7 @@ import type {
   EventSchedule,
   ForecastLeaderboardRow,
   LifecycleState,
+  HistoricalMonitoringEnvelope,
   SessionStatus,
   SettlementDriverComparisonRow,
   UnforecastedActualEntrant
@@ -21,6 +22,68 @@ export interface PublicRankingRow {
   intervalUpperSec: number | null;
 }
 
+export function adaptLatestCompletedForecast(
+  history: HistoricalMonitoringEnvelope | null | undefined,
+  options: { excludeEventSlug?: string | null; now?: Date } = {}
+): PublicEventViewModel | null {
+  const events = history?.data.valid_prospective_monitoring?.events ?? [];
+  const candidates = events
+    .filter((row) => {
+      const slug = row.event_identity?.event_slug;
+      return (
+        slug !== options.excludeEventSlug &&
+        (row.forecast_available === true || row.forecasted === true) &&
+        (row.forecast_rows?.length ?? 0) > 0
+      );
+    })
+    .sort(
+      (left, right) =>
+        (left.event_identity?.season ?? -1) - (right.event_identity?.season ?? -1) ||
+        (left.event_identity?.event_order ?? -1) - (right.event_identity?.event_order ?? -1)
+    );
+  const latest = candidates.at(-1);
+  if (!latest) {
+    return null;
+  }
+  const identity = latest.event_identity;
+  const lifecycle = latest.lifecycle_state ?? "forecast_available";
+  const ranking = (latest.forecast_rows ?? []).map(adaptRankingRow).sort(byPredictedPosition);
+  return {
+    available: true,
+    season: identity?.season ?? null,
+    eventName: identity?.event ?? null,
+    eventSlug: identity?.event_slug ?? null,
+    eventOrder: identity?.event_order ?? null,
+    location: null,
+    circuit: null,
+    lifecycle,
+    lifecycleLabel: publicLifecycleLabel(lifecycle),
+    lifecycleDetail: publicLifecycleDetail(lifecycle, null, null, [], true),
+    checkpoint: latest.forecast_checkpoint ?? null,
+    checkpointLabel: predictionCheckpointLabel(latest.forecast_checkpoint),
+    generatedAtUtc: null,
+    freshness: evaluateFreshness(null, { now: options.now }),
+    schedule: null,
+    sessions: [],
+    ranking,
+    comparison: [],
+    hasForecast: true,
+    hasSettlement: false,
+    metrics: {
+      maeGapSec: latest.mae_gap_sec ?? null,
+      rmseGapSec: null,
+      meanAbsolutePositionError: null,
+      top3Agreement: null,
+      top5Agreement: null,
+      top10Agreement: null,
+      coverage: latest.forecast_coverage ?? null,
+      coveragePercentage: latest.forecast_coverage_percentage ?? null
+    },
+    unforecastedEntrants: latest.unforecasted_actual_entrants ?? [],
+    technical: [{ label: "Artifact lifecycle", value: lifecycle }]
+  };
+}
+
 export interface PublicComparisonRow extends PublicRankingRow {
   actualPosition: number | null;
   actualGapSec: number | null;
@@ -31,6 +94,7 @@ export interface PublicEventViewModel {
   available: boolean;
   season: number | null;
   eventName: string | null;
+  eventSlug: string | null;
   eventOrder: number | null;
   location: string | null;
   circuit: string | null;
@@ -45,6 +109,7 @@ export interface PublicEventViewModel {
   sessions: SessionStatus[];
   ranking: PublicRankingRow[];
   comparison: PublicComparisonRow[];
+  hasForecast: boolean;
   hasSettlement: boolean;
   metrics: {
     maeGapSec: number | null;
@@ -104,6 +169,7 @@ export function adaptCurrentEvent(
     ),
     season: identity?.season ?? null,
     eventName: identity?.event ?? null,
+    eventSlug: identity?.event_slug ?? null,
     eventOrder: identity?.event_order ?? null,
     location: schedule?.location ?? null,
     circuit: schedule?.circuit ?? null,
@@ -115,7 +181,8 @@ export function adaptCurrentEvent(
       summary?.actual_qualifying_driver_count ??
         currentData?.settlement_status?.actual_qualifying_driver_count ??
         null,
-      unforecastedEntrants
+      unforecastedEntrants,
+      ranking.length > 0
     ),
     checkpoint,
     checkpointLabel: predictionCheckpointLabel(checkpoint),
@@ -125,6 +192,7 @@ export function adaptCurrentEvent(
     sessions: page.practiceStatus?.data.sessions ?? [],
     ranking,
     comparison,
+    hasForecast: ranking.length > 0,
     hasSettlement: comparison.length > 0,
     metrics: {
       maeGapSec: summary?.mae_gap_sec ?? null,
@@ -216,8 +284,12 @@ function publicLifecycleDetail(
   lifecycle: LifecycleState,
   evaluated: number | null,
   actual: number | null,
-  missing: UnforecastedActualEntrant[]
+  missing: UnforecastedActualEntrant[],
+  hasForecast: boolean
 ): string {
+  if (!hasForecast && (lifecycle === "settled" || lifecycle === "settled_partial_coverage")) {
+    return "No pre-qualifying forecast was generated for this event, so no retrospective comparison is shown.";
+  }
   if (lifecycle === "settled_partial_coverage") {
     const denominator =
       typeof evaluated === "number" && typeof actual === "number"

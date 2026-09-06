@@ -37,6 +37,15 @@ class EntryDriverResolution(NamedTuple):
     metadata: dict[str, Any]
 
 
+class QualifyingRosterError(ValueError):
+    """Typed operational failure for a qualifying-roster decision."""
+
+    def __init__(self, message: str, *, error_code: str, retryable: bool) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.retryable = retryable
+
+
 @dataclass(frozen=True)
 class QualifyingEntryListAudit:
     """Resolved entry-list audit payload and artifact paths."""
@@ -45,10 +54,12 @@ class QualifyingEntryListAudit:
     forecast_allowed: bool
     summary_path: Path
     drivers_path: Path
+    practice_evidence_path: Path
     exclusions_path: Path
     failures_path: Path
     summary: dict[str, Any]
     drivers: pd.DataFrame
+    practice_evidence: pd.DataFrame
     exclusions: pd.DataFrame
     failures: pd.DataFrame
 
@@ -62,6 +73,7 @@ def audit_qualifying_entry_list(
     feature_rows: pd.DataFrame | None = None,
     forecast_rows: pd.DataFrame | None = None,
     allow_fastf1: bool = True,
+    allow_post_qualifying_sources: bool = False,
 ) -> QualifyingEntryListAudit:
     """Resolve and validate the qualifying-eligible forecast universe for one event."""
     event_slug = slugify(event)
@@ -71,6 +83,7 @@ def audit_qualifying_entry_list(
         season=season,
         event=event,
         allow_fastf1=allow_fastf1,
+        allow_post_qualifying_sources=allow_post_qualifying_sources,
     )
     drivers = resolution.drivers
     practice = _practice_participants(config, season, event)
@@ -93,11 +106,16 @@ def audit_qualifying_entry_list(
                 True,
                 resolution.reason or "No authoritative qualifying entry-list source was available.",
                 "Provide or refresh an authoritative event entry-list artifact before forecasting.",
+                retryable=True,
             )
         )
     identity_failures = [
         str(reason) for reason in resolution.metadata.get("identity_failure_reasons", [])
     ]
+    if not drivers.empty:
+        for reason in _source_identity_failures(drivers):
+            if reason not in identity_failures:
+                identity_failures.append(reason)
     for reason in identity_failures:
         failures.append(
             _failure(
@@ -105,6 +123,7 @@ def audit_qualifying_entry_list(
                 True,
                 reason,
                 "Correct the source session driver/team identity metadata before forecasting.",
+                retryable=True,
             )
         )
     duplicate_count = _duplicate_count(drivers, "driver_key")
@@ -115,6 +134,7 @@ def audit_qualifying_entry_list(
                 True,
                 "The resolved qualifying entry list contains duplicate driver identifiers.",
                 "Correct the upstream entry-list source and rerun the audit.",
+                retryable=True,
             )
         )
     missing_features = _missing_driver_keys(drivers, features) if feature_rows is not None else []
@@ -130,6 +150,7 @@ def audit_qualifying_entry_list(
                 True,
                 f"Missing feature rows for eligible drivers: {', '.join(missing_features)}.",
                 "Rebuild practice features after the correct entry list is available.",
+                retryable=True,
             )
         )
     if missing_checkpoint_features:
@@ -140,6 +161,7 @@ def audit_qualifying_entry_list(
                 "Eligible drivers lack compatible latest-checkpoint feature values: "
                 f"{', '.join(missing_checkpoint_features)}.",
                 "Rebuild leakage-safe latest-checkpoint features before forecasting.",
+                retryable=True,
             )
         )
     feature_extra = _extra_driver_keys(features, drivers) if not features.empty else []
@@ -151,6 +173,7 @@ def audit_qualifying_entry_list(
                 True,
                 f"Driver-team mapping mismatch: {', '.join(team_mismatches)}.",
                 "Correct the entry-list or feature metadata before forecasting.",
+                retryable=True,
             )
         )
     forecast_missing = _missing_driver_keys(drivers, forecasts) if not forecasts.empty else []
@@ -189,6 +212,7 @@ def audit_qualifying_entry_list(
             )
         )
     blocking = [row for row in failures if row["blocking"]]
+    practice_evidence = _practice_evidence_rows(practice, drivers, exclusions, resolution.source)
     resolution_status = ENTRY_LIST_RESOLVED if not drivers.empty else ENTRY_LIST_UNRESOLVED
     parity_status = (
         ENTRY_LIST_PARITY_PASSED
@@ -232,6 +256,9 @@ def audit_qualifying_entry_list(
         ),
         "resolution_timestamp_utc": generated_at,
         "entry_list_driver_count": int(drivers["driver_key"].nunique()) if not drivers.empty else 0,
+        "forecast_eligible_driver_count": int(drivers["driver_key"].nunique())
+        if not drivers.empty
+        else 0,
         "practice_participant_count": int(practice["driver_key"].nunique())
         if not practice.empty
         else 0,
@@ -245,6 +272,24 @@ def audit_qualifying_entry_list(
         "extra_forecast_driver_count": int(len(forecast_extra)),
         "duplicate_count": int(duplicate_count + forecast_duplicate_count),
         "team_mapping_mismatch_count": int(len(team_mismatches)),
+        "forecast_eligible_drivers": sorted(drivers["driver"].astype(str).unique().tolist())
+        if not drivers.empty
+        else [],
+        "practice_evidence_drivers": sorted(
+            practice["driver"].astype(str).unique().tolist()
+        )
+        if not practice.empty
+        else [],
+        "excluded_practice_only_drivers": sorted(
+            exclusions["driver"].astype(str).unique().tolist()
+        )
+        if not exclusions.empty
+        else [],
+        "roster_validation": resolution.metadata.get("roster_validation", {}),
+        "roster_ambiguity_status": "blocking" if blocking else "none",
+        "roster_ambiguity_retryable": bool(
+            blocking and all(bool(row.get("retryable", False)) for row in blocking)
+        ),
         "forecast_allowed": bool(resolution_status == ENTRY_LIST_RESOLVED and not blocking),
         "blocking_reasons": [str(row["reason"]) for row in blocking],
         "generated_at_utc": generated_at,
@@ -253,6 +298,7 @@ def audit_qualifying_entry_list(
     ensure_directory(paths["summary"].parent)
     _write_json(paths["summary"], summary)
     drivers.to_csv(paths["drivers"], index=False)
+    practice_evidence.to_csv(paths["practice_evidence"], index=False)
     exclusions.to_csv(paths["exclusions"], index=False)
     failure_frame = pd.DataFrame(failures, columns=_failure_columns())
     failure_frame.to_csv(paths["failures"], index=False)
@@ -261,10 +307,12 @@ def audit_qualifying_entry_list(
         forecast_allowed=bool(summary["forecast_allowed"]),
         summary_path=paths["summary"],
         drivers_path=paths["drivers"],
+        practice_evidence_path=paths["practice_evidence"],
         exclusions_path=paths["exclusions"],
         failures_path=paths["failures"],
         summary=summary,
         drivers=drivers,
+        practice_evidence=practice_evidence,
         exclusions=exclusions,
         failures=failure_frame,
     )
@@ -290,7 +338,11 @@ def constrain_features_to_entry_list(
     )
     if not audit.forecast_allowed:
         reasons = "; ".join(audit.summary.get("blocking_reasons", []))
-        raise ValueError(f"Qualifying entry-list audit blocks forecast creation: {reasons}")
+        raise QualifyingRosterError(
+            f"Qualifying entry-list audit blocks forecast creation: {reasons}",
+            error_code="qualifying_roster_unresolved",
+            retryable=bool(audit.summary.get("roster_ambiguity_retryable", False)),
+        )
     accepted = set(audit.drivers["driver_key"].astype(str))
     features = _normalize_feature_rows(feature_rows)
     constrained = features[features["driver_key"].astype(str).isin(accepted)].copy()
@@ -308,6 +360,7 @@ def qualifying_entry_list_artifact_paths(
     return {
         "summary": base / "qualifying_entry_list_summary.json",
         "drivers": base / "qualifying_entry_list_drivers.csv",
+        "practice_evidence": base / "qualifying_entry_list_practice_evidence.csv",
         "exclusions": base / "qualifying_entry_list_exclusions.csv",
         "failures": base / "qualifying_entry_list_failures.csv",
     }
@@ -375,24 +428,10 @@ def _resolve_entry_drivers(
     season: int,
     event: str,
     allow_fastf1: bool,
+    allow_post_qualifying_sources: bool,
 ) -> EntryDriverResolution:
     trace: list[dict[str, Any]] = []
     q_status = _q_availability_status(config, season, event)
-    for path in local_entry_list_candidate_paths(config, season, event):
-        if path.is_file():
-            source = LOCAL_PROCESSED_SOURCE if "processed" in path.parts else LOCAL_RAW_SOURCE
-            trace.append(_trace(source, "selected", _project_relative(path, config.project_root)))
-            return EntryDriverResolution(
-                _normalize_entry_rows(_read_entry_artifact(path), season, event, source),
-                source,
-                path,
-                "",
-                _resolution_metadata(
-                    q_status=q_status,
-                    q_required=False,
-                    trace=trace,
-                ),
-            )
     for path in local_race_roster_candidate_paths(config, season, event):
         if path.is_file():
             trace.append(
@@ -412,37 +451,23 @@ def _resolve_entry_drivers(
                 AUTHORITATIVE_ROSTER_SOURCE,
                 path,
                 "",
-                _resolution_metadata(q_status=q_status, q_required=False, trace=trace),
-            )
-    q_metadata = build_metadata_output_path(config.session_metadata_output_dir, season, event, "Q")
-    if q_metadata.is_file():
-        rows = _drivers_from_session_metadata(q_metadata, require_success=True)
-        if rows:
-            trace.append(
-                _trace(
-                    LOCAL_Q_METADATA_SOURCE,
-                    "selected",
-                    _project_relative(q_metadata, config.project_root),
-                )
-            )
-            return EntryDriverResolution(
-                _normalize_entry_rows(pd.DataFrame(rows), season, event, LOCAL_Q_METADATA_SOURCE),
-                LOCAL_Q_METADATA_SOURCE,
-                q_metadata,
-                "",
                 _resolution_metadata(
                     q_status=q_status,
                     q_required=False,
                     trace=trace,
                 ),
             )
-        trace.append(
-            _trace(
-                LOCAL_Q_METADATA_SOURCE,
-                "skipped",
-                "Q metadata is absent or does not contain successful driver metadata.",
+    for path in local_entry_list_candidate_paths(config, season, event):
+        if path.is_file():
+            source = LOCAL_PROCESSED_SOURCE if "processed" in path.parts else LOCAL_RAW_SOURCE
+            trace.append(_trace(source, "selected", _project_relative(path, config.project_root)))
+            return EntryDriverResolution(
+                _normalize_entry_rows(_read_entry_artifact(path), season, event, source),
+                source,
+                path,
+                "",
+                _resolution_metadata(q_status=q_status, q_required=False, trace=trace),
             )
-        )
     latest = _resolve_latest_pre_qualifying_session(
         config,
         season=season,
@@ -451,11 +476,41 @@ def _resolve_entry_drivers(
         trace=trace,
         q_status=q_status,
     )
-    if not latest.drivers.empty or (
-        latest.metadata.get("blocking_latest_session_failure")
-        and not q_status.get("available", False)
-    ):
+    if not latest.drivers.empty or latest.metadata.get("blocking_latest_session_failure"):
         return latest
+    if not allow_post_qualifying_sources:
+        trace.append(
+            _trace(
+                "post_qualifying_sources",
+                "forbidden",
+                "Q data cannot resolve a pre-qualifying forecast roster.",
+            )
+        )
+        return EntryDriverResolution(
+            pd.DataFrame(columns=_driver_columns()),
+            "",
+            None,
+            "No authoritative pre-qualifying entry-list source found.",
+            _resolution_metadata(q_status=q_status, q_required=False, trace=trace),
+        )
+    q_metadata = build_metadata_output_path(config.session_metadata_output_dir, season, event, "Q")
+    if q_metadata.is_file():
+        rows = _drivers_from_session_metadata(q_metadata, require_success=True)
+        if rows:
+            trace.append(
+                _trace(
+                    LOCAL_Q_METADATA_SOURCE,
+                    "selected_post_qualifying_only",
+                    _project_relative(q_metadata, config.project_root),
+                )
+            )
+            return EntryDriverResolution(
+                _normalize_entry_rows(pd.DataFrame(rows), season, event, LOCAL_Q_METADATA_SOURCE),
+                LOCAL_Q_METADATA_SOURCE,
+                q_metadata,
+                "",
+                _resolution_metadata(q_status=q_status, q_required=True, trace=trace),
+            )
     q_lap_rows = _drivers_from_verified_q_lap_artifact(config, season, event)
     if q_lap_rows:
         source = LOCAL_Q_METADATA_SOURCE
@@ -587,10 +642,38 @@ def _resolve_latest_pre_qualifying_session(
             "",
             _resolution_metadata(q_status=q_status, q_required=True, trace=trace),
         )
-    selected = session_rows[-1]
+    selected: dict[str, Any] | None = None
+    completion: dict[str, Any] = {}
+    for candidate in reversed(session_rows):
+        candidate_code = str(candidate["session_code"])
+        candidate_completion = _completed_local_session_drivers(
+            config, season, event, candidate_code
+        )
+        if candidate_completion["status"] == "completed":
+            selected = candidate
+            completion = candidate_completion
+            break
+        if candidate_completion["status"] != "laps_missing":
+            selected = candidate
+            completion = candidate_completion
+            break
+        trace.append(
+            _trace(
+                f"{LATEST_PRE_Q_SOURCE_PREFIX}:{candidate_code}",
+                "unavailable_fallback",
+                f"{candidate_code} is not locally complete; checking an earlier session.",
+            )
+        )
+    if selected is None:
+        return EntryDriverResolution(
+            pd.DataFrame(columns=_driver_columns()),
+            "",
+            None,
+            "No completed pre-qualifying session is available.",
+            _resolution_metadata(q_status=q_status, q_required=False, trace=trace),
+        )
     session_code = str(selected["session_code"])
     session_source = f"{LATEST_PRE_Q_SOURCE_PREFIX}:{session_code}"
-    completion = _completed_local_session_drivers(config, season, event, session_code)
     if completion["status"] != "completed":
         reason = (
             f"Selected pre-qualifying source session {session_code} is not completed: "
@@ -615,12 +698,14 @@ def _resolve_latest_pre_qualifying_session(
     rows = completion["rows"]
     normalized = _normalize_entry_rows(pd.DataFrame(rows), season, event, session_source)
     identity_failures = _source_identity_failures(normalized)
-    if not _latest_session_consistent_with_prior_sessions(config, season, event, session_code):
-        identity_failures.append(
-            "Latest completed pre-qualifying session is not authoritative without a matching "
-            "race-driver roster; earlier completed practice sessions contain a different "
-            "entrant set."
-        )
+    roster_validation = _semantic_latest_session_validation(
+        config,
+        season,
+        event,
+        session_code,
+        normalized,
+    )
+    identity_failures.extend(roster_validation["blocking_reasons"])
     status = "blocked" if identity_failures else "selected"
     trace.append(
         _trace(
@@ -643,6 +728,7 @@ def _resolve_latest_pre_qualifying_session(
             completion=completion,
             latest_source=True,
             identity_failure_reasons=identity_failures,
+            roster_validation=roster_validation,
         ),
     )
 
@@ -868,6 +954,7 @@ def _resolution_metadata(
     latest_source: bool = False,
     blocking_latest_session_failure: bool = False,
     identity_failure_reasons: list[str] | None = None,
+    roster_validation: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected_session = selected_session or {}
     completion = completion or {}
@@ -883,6 +970,7 @@ def _resolution_metadata(
         "latest_session_source": bool(latest_source),
         "blocking_latest_session_failure": bool(blocking_latest_session_failure),
         "identity_failure_reasons": identity_failure_reasons or [],
+        "roster_validation": roster_validation or {},
     }
 
 
@@ -1061,6 +1149,7 @@ def _practice_exclusions(
         return pd.DataFrame(columns=_exclusion_columns())
     rows = []
     grouped = practice.groupby("driver_key", sort=True)
+    exclusion_is_safe = bool(entry_driver_keys)
     for driver_key, group in grouped:
         if str(driver_key) in entry_driver_keys:
             continue
@@ -1093,9 +1182,98 @@ def _practice_exclusions(
                 "latest_session": latest_session,
                 "sessions": ",".join(sessions),
                 "exclusion_reason": reason,
+                "exclusion_classification": (
+                    "practice_only_pre_qualifying_exclusion"
+                    if exclusion_is_safe
+                    else "unresolved_roster_participant"
+                ),
+                "exclusion_is_safe": exclusion_is_safe,
+                "safe_exclusion_reason": (
+                    "Driver is absent from the selected event-scoped qualifying roster; "
+                    "their practice laps remain available only to team aggregates."
+                    if exclusion_is_safe
+                    else "No forecast roster was resolved, so exclusion safety is undetermined."
+                ),
             }
         )
     return pd.DataFrame(rows, columns=_exclusion_columns())
+
+
+def _practice_evidence_rows(
+    practice: pd.DataFrame,
+    drivers: pd.DataFrame,
+    exclusions: pd.DataFrame,
+    resolution_source: str,
+) -> pd.DataFrame:
+    """Annotate all observed practice drivers without changing the forecast roster."""
+    columns = [
+        "season",
+        "event",
+        "event_slug",
+        "driver",
+        "driver_key",
+        "observed_sessions",
+        "observed_session_count",
+        "observed_teams",
+        "observed_team_keys",
+        "weekend_team",
+        "weekend_team_key",
+        "forecast_eligible",
+        "evidence_classification",
+        "roster_resolution_source",
+        "exclusion_reason",
+    ]
+    if practice.empty:
+        return pd.DataFrame(columns=columns)
+    eligible = (
+        drivers.drop_duplicates("driver_key", keep="last")
+        .set_index("driver_key")[["team", "team_key"]]
+        .to_dict("index")
+        if not drivers.empty
+        else {}
+    )
+    exclusion_reasons = (
+        exclusions.set_index("driver_key")["exclusion_reason"].astype(str).to_dict()
+        if not exclusions.empty
+        else {}
+    )
+    rows: list[dict[str, Any]] = []
+    session_order = {"FP1": 1, "FP2": 2, "FP3": 3, "SQ": 4, "S": 5}
+    for driver_key, group in practice.groupby("driver_key", sort=True):
+        ordered = group.assign(
+            _session_order=group["session"].map(session_order).fillna(0)
+        ).sort_values("_session_order", kind="stable")
+        current = eligible.get(str(driver_key))
+        latest = ordered.iloc[-1]
+        is_eligible = current is not None
+        rows.append(
+            {
+                "season": int(group["season"].iloc[0]),
+                "event": str(group["event"].iloc[0]),
+                "event_slug": str(group["event_slug"].iloc[0]),
+                "driver": str(group["driver"].iloc[0]),
+                "driver_key": str(driver_key),
+                "observed_sessions": ",".join(sorted(set(group["session"].astype(str)))),
+                "observed_session_count": int(group["session"].nunique()),
+                "observed_teams": ",".join(
+                    sorted(set(group["team"].dropna().astype(str)))
+                ),
+                "observed_team_keys": ",".join(
+                    sorted(set(group["team_key"].dropna().astype(str)))
+                ),
+                "weekend_team": current["team"] if current else latest.get("team", ""),
+                "weekend_team_key": (
+                    current["team_key"] if current else latest.get("team_key", "")
+                ),
+                "forecast_eligible": is_eligible,
+                "evidence_classification": (
+                    "forecast_eligible_driver" if is_eligible else "practice_evidence_only_driver"
+                ),
+                "roster_resolution_source": resolution_source,
+                "exclusion_reason": exclusion_reasons.get(str(driver_key), ""),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
 
 
 def _missing_driver_keys(expected: pd.DataFrame, observed: pd.DataFrame) -> list[str]:
@@ -1144,19 +1322,22 @@ def _missing_latest_checkpoint_feature_keys(
     return sorted(missing)
 
 
-def _latest_session_consistent_with_prior_sessions(
+def _semantic_latest_session_validation(
     config: DataConfig,
     season: int,
     event: str,
     latest_session: str,
-) -> bool:
-    latest_path = build_lap_output_path(config.lap_output_dir, season, event, latest_session)
-    latest_keys = {
-        _driver_key(value)
-        for value in pd.read_parquet(latest_path).get("Driver", pd.Series(dtype=str)).dropna()
-    }
-    if not latest_keys:
-        return False
+    latest_drivers: pd.DataFrame,
+) -> dict[str, Any]:
+    """Validate roster meaning while treating earlier sessions as supporting evidence.
+
+    Earlier-only participants are expected for replacement-driver programmes.  The
+    selected latest completed session owns current driver/team identity; earlier
+    sessions are used to audit continuity and exclusions, never to require set equality.
+    """
+    latest_keys = set(latest_drivers["driver_key"].dropna().astype(str))
+    prior_keys: set[str] = set()
+    observations: list[dict[str, Any]] = []
     for session in ("FP1", "FP2", "FP3", "SQ", "S"):
         if session == latest_session:
             continue
@@ -1167,9 +1348,37 @@ def _latest_session_consistent_with_prior_sessions(
             _driver_key(value)
             for value in pd.read_parquet(path).get("Driver", pd.Series(dtype=str)).dropna()
         }
-        if keys and keys != latest_keys:
-            return False
-    return True
+        if not keys:
+            continue
+        prior_keys.update(keys)
+        observations.append(
+            {
+                "session": session,
+                "participant_count": len(keys),
+                "supports_selected_driver_count": len(keys & latest_keys),
+                "earlier_only_driver_count": len(keys - latest_keys),
+            }
+        )
+    failures: list[str] = []
+    if not latest_keys:
+        failures.append("Selected pre-qualifying source session produced an empty driver set.")
+    if prior_keys and latest_keys and not prior_keys.intersection(latest_keys):
+        failures.append(
+            "Selected pre-qualifying source shares no driver identities with earlier "
+            "completed practice evidence."
+        )
+    return {
+        "status": "blocked" if failures else "semantically_valid",
+        "selected_session": latest_session,
+        "selected_driver_count": len(latest_keys),
+        "prior_practice_driver_count": len(prior_keys),
+        "earlier_practice_only_driver_count": len(prior_keys - latest_keys),
+        "drivers_new_in_selected_session_count": len(latest_keys - prior_keys),
+        "prior_session_observations": observations,
+        "blocking_reasons": failures,
+        "set_equality_required": False,
+        "current_team_mapping_source": latest_session,
+    }
 
 
 def _team_mismatches(entry: pd.DataFrame, features: pd.DataFrame) -> list[str]:
@@ -1198,6 +1407,8 @@ def _failure(
     blocking: bool,
     reason: str,
     recommended_action: str,
+    *,
+    retryable: bool = False,
 ) -> dict[str, Any]:
     return {
         "check_name": check_name,
@@ -1205,6 +1416,7 @@ def _failure(
         "blocking": bool(blocking),
         "reason": reason,
         "recommended_action": recommended_action,
+        "retryable": bool(retryable),
     }
 
 
@@ -1280,8 +1492,18 @@ def _exclusion_columns() -> list[str]:
         "latest_session",
         "sessions",
         "exclusion_reason",
+        "exclusion_classification",
+        "exclusion_is_safe",
+        "safe_exclusion_reason",
     ]
 
 
 def _failure_columns() -> list[str]:
-    return ["check_name", "status", "blocking", "reason", "recommended_action"]
+    return [
+        "check_name",
+        "status",
+        "blocking",
+        "retryable",
+        "reason",
+        "recommended_action",
+    ]

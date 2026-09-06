@@ -478,22 +478,9 @@ def _select_current_event(
     if season is not None or event is not None:
         return public_contexts[-1] if public_contexts else None
     if public_contexts:
-        settled = [
-            context
-            for context in public_contexts
-            if context.lifecycle.state in {"settled", "settled_partial_coverage"}
-        ]
-        forecasted = [
-            context
-            for context in public_contexts
-            if context.lifecycle.state in {"forecast_available", "awaiting_qualifying_targets"}
-        ]
-        ready = [
-            context
-            for context in public_contexts
-            if context.lifecycle.state in {"practice_in_progress", "ready_to_forecast", "blocked"}
-        ]
-        return (settled or forecasted or ready or public_contexts)[-1]
+        # Chronology defines "current"; lifecycle must not make an older settled
+        # forecast masquerade as the active weekend.
+        return public_contexts[-1]
     return None
 
 

@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from f1_prediction.config import DataConfig, load_feature_config, load_model_config
+from f1_prediction.data.qualifying_entry_list import QualifyingRosterError
 from f1_prediction.modeling.monitoring_operations import MonitoringWorkflowSummary
 from f1_prediction.modeling.weekend_orchestrator import (
     AUTOPILOT_ENABLED_ENV,
@@ -284,6 +285,27 @@ def test_forecast_exists_skips_generation_and_waits_for_qualifying(tmp_path: Pat
     assert before_calls == []
 
 
+def test_qualifying_started_without_forecast_marks_window_missed_without_backfill(
+    tmp_path: Path,
+) -> None:
+    calls: list[Any] = []
+
+    result = _tick(
+        tmp_path,
+        now=datetime(2026, 6, 2, 14, 5, tzinfo=UTC),
+        dry_run=False,
+        environ={AUTOPILOT_ENABLED_ENV: "true"},
+        before_workflow=lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert result.action_result == "forecast_window_missed"
+    assert result.orchestrator_state_after == "BLOCKED"
+    assert result.forecast_exists is False
+    assert result.retryable is False
+    assert calls == []
+    assert not (tmp_path / "reports/metrics/prospective_monitoring_forecasts.parquet").exists()
+
+
 def test_qualifying_pending_then_ready_for_settlement(tmp_path: Path) -> None:
     config = _data_config(tmp_path)
     event = _event()
@@ -475,6 +497,28 @@ def test_canonical_workflow_exceptions_keep_action_and_retry_classification(
     assert result.action_considered == "run_before_qualifying"
     assert result.action_taken == "run_before_qualifying"
     assert result.retryable is retryable
+
+
+def test_typed_roster_ambiguity_remains_retryable_before_qualifying(tmp_path: Path) -> None:
+    def before(*args: Any, **kwargs: Any) -> MonitoringWorkflowSummary:
+        raise QualifyingRosterError(
+            "Current roster cannot yet be determined safely.",
+            error_code="qualifying_roster_ambiguous",
+            retryable=True,
+        )
+
+    result = _tick(
+        tmp_path,
+        now=datetime(2026, 6, 2, 11, 20, tzinfo=UTC),
+        dry_run=False,
+        environ={AUTOPILOT_ENABLED_ENV: "true"},
+        before_workflow=before,
+    )
+
+    assert result.orchestrator_state_after == "TRANSIENT_ERROR"
+    assert result.error_classification == "retryable_transient"
+    assert result.retryable is True
+    assert result.next_recommended_check_at_utc is not None
 
 
 def test_canonical_after_workflow_runs_once_and_preserves_partial_terminal_state(

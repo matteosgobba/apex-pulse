@@ -441,6 +441,27 @@ def test_missing_forecast_blocks_after_qualifying(tmp_path: Path) -> None:
     assert stages.loc[stages["stage"].eq("targets_added"), "status"].iloc[0] == "blocked"
 
 
+def test_before_workflow_refuses_retrospective_forecast_when_q_artifact_exists(
+    tmp_path: Path,
+) -> None:
+    config = _configured_workspace(tmp_path)
+    _write_q_raw(config, 2026, "Monza")
+
+    summary = run_monitoring_before_qualifying(
+        config,
+        load_model_config(),
+        _features(),
+        season=2026,
+        event="Monza",
+    )
+    payload = json.loads(summary.summary_path.read_text())
+
+    assert summary.status == "blocked"
+    assert payload["error_code"] == "forecast_window_missed"
+    assert payload["retryable_error"] is False
+    assert not (config.metrics_output_dir / "prospective_monitoring_forecasts.parquet").exists()
+
+
 def test_synthetic_and_legacy_events_are_rejected(tmp_path: Path) -> None:
     config = _configured_workspace(tmp_path, event="Synthetic Clean GP")
     with pytest.raises(ValueError, match="Synthetic rehearsal events"):

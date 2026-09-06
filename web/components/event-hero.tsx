@@ -5,10 +5,12 @@ import type { PublicEventViewModel } from "@/lib/public-view-model";
 
 export function EventHero({
   event,
-  primary = true
+  primary = true,
+  contextLabel = "Latest Apex Pulse prediction / result"
 }: {
   event: PublicEventViewModel;
   primary?: boolean;
+  contextLabel?: string;
 }) {
   const place = [event.circuit, event.location].filter(Boolean).join(" · ");
   const EventHeading = primary ? "h1" : "h2";
@@ -18,7 +20,7 @@ export function EventHero({
         <div>
           <ApexPulseLogo priority className="mb-10 max-h-24 max-w-[260px] sm:max-w-[320px]" />
           <p className="mb-4 text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
-            Latest Apex Pulse prediction / result
+            {contextLabel}
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-apex-onStrong">
@@ -34,7 +36,9 @@ export function EventHero({
         <div className="rounded-2xl border border-apex-border bg-apex-panel p-5 text-apex-text shadow-card">
           <p className="text-sm font-semibold text-apex-accent">{event.checkpointLabel}</p>
           <p className="mt-2 text-sm leading-6 text-apex-secondary">
-            Generated before qualifying from the practice data available at this checkpoint.
+            {event.hasForecast
+              ? "Generated before qualifying from the practice data available at this checkpoint."
+              : "No pre-qualifying forecast is available for this event."}
           </p>
           <p className="mt-4 text-sm leading-6 text-apex-secondary">{event.lifecycleDetail}</p>
           <div className="mt-5">

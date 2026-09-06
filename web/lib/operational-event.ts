@@ -1,8 +1,15 @@
 import type {
+  AutopilotStatusData,
   AutopilotStatusEnvelope,
   EventSchedule,
   OperationalEvent
 } from "@/lib/dashboard-types";
+
+export interface OperationalForecastNotice {
+  label: string;
+  detail: string;
+  tone: "neutral" | "warning" | "success";
+}
 
 export function availableOperationalEvent(
   status: AutopilotStatusEnvelope | null | undefined
@@ -54,4 +61,55 @@ export function operationalFormatLabel(eventFormat: string): string {
     return "Conventional weekend";
   }
   return "Non-standard weekend";
+}
+
+export function operationalForecastNotice(
+  event: OperationalEvent,
+  status: AutopilotStatusData | null | undefined
+): OperationalForecastNotice {
+  if (!event.supported) {
+    return {
+      label: "Forecast not supported",
+      detail:
+        "Apex Pulse does not create predictions for Sprint weekends yet. This weekend remains visible and monitored, but no qualifying forecast will be generated.",
+      tone: "warning"
+    };
+  }
+  if (status?.forecast_exists === true) {
+    return {
+      label: "Forecast generated",
+      detail: "The immutable pre-qualifying forecast is available for this monitored weekend.",
+      tone: "success"
+    };
+  }
+  if (status?.action_result === "forecast_window_missed") {
+    return {
+      label: "Forecast not generated",
+      detail:
+        "The pre-qualifying window closed before a safe forecast could be created. Apex Pulse will not add a retrospective prediction.",
+      tone: "warning"
+    };
+  }
+  if (status?.orchestrator_state_after === "TRANSIENT_ERROR" && status.retryable) {
+    return {
+      label: "Forecast pending",
+      detail:
+        "Public data is not yet sufficient to create a safe forecast. Monitoring will retry while the pre-qualifying window remains open.",
+      tone: "warning"
+    };
+  }
+  if (status?.orchestrator_state_after === "BLOCKED") {
+    return {
+      label: "Forecast not generated",
+      detail:
+        "A safe pre-qualifying forecast is not available for this weekend. No retrospective prediction will be created.",
+      tone: "warning"
+    };
+  }
+  return {
+    label: "Forecast monitoring active",
+    detail:
+      "Apex Pulse is monitoring the conventional practice-to-qualifying schedule for the next guarded prediction window.",
+    tone: "neutral"
+  };
 }

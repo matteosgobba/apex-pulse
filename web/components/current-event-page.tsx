@@ -8,7 +8,7 @@ import { PredictionOfficialComparison } from "@/components/prediction-official-c
 import { TechnicalDetails } from "@/components/technical-details";
 import { WeekendTimeline } from "@/components/weekend-timeline";
 import type { CurrentEventPageData } from "@/lib/dashboard-types";
-import { adaptCurrentEvent } from "@/lib/public-view-model";
+import { adaptCurrentEvent, adaptLatestCompletedForecast } from "@/lib/public-view-model";
 import { availableOperationalEvent } from "@/lib/operational-event";
 
 export function CurrentEventPageView({
@@ -18,7 +18,8 @@ export function CurrentEventPageView({
   data: CurrentEventPageData;
   now?: Date;
 }) {
-  if (data.error) {
+  const operationalEvent = availableOperationalEvent(data.operationalStatus);
+  if (data.error && !operationalEvent) {
     return (
       <PublicEmptyState
         title="Prediction data is unavailable"
@@ -27,7 +28,15 @@ export function CurrentEventPageView({
     );
   }
   const event = adaptCurrentEvent(data, { now });
-  if (!event.available) {
+  const historicalForecast = adaptLatestCompletedForecast(data.historicalMonitoring, {
+    excludeEventSlug: operationalEvent?.event_slug,
+    now
+  });
+  const displayedForecastEvent =
+    event.available && event.hasForecast
+      ? event
+      : (historicalForecast ?? (event.available ? event : null));
+  if (!displayedForecastEvent && !operationalEvent) {
     return (
       <PublicEmptyState
         title="No current prediction is available"
@@ -35,35 +44,59 @@ export function CurrentEventPageView({
       />
     );
   }
-  const operationalEvent = availableOperationalEvent(data.operationalStatus);
+  const operationalIsDifferentEvent =
+    displayedForecastEvent !== null &&
+    operationalEvent?.event_slug !== undefined &&
+    operationalEvent.event_slug !== displayedForecastEvent.eventSlug;
 
   return (
     <div className="space-y-16">
       {operationalEvent ? (
-        <OperationalWeekendCard event={operationalEvent} initialNow={now?.toISOString()} />
-      ) : null}
-      <EventHero event={event} primary={!operationalEvent} />
-      <div>
-        <WeekendTimeline
-          schedule={event.schedule}
-          sessions={event.sessions}
-          lifecycle={event.lifecycle}
-          now={now}
+        <OperationalWeekendCard
+          event={operationalEvent}
+          status={data.operationalStatus?.data}
+          initialNow={now?.toISOString()}
         />
-      </div>
-      <ForecastRanking rows={event.ranking} />
-      {event.hasSettlement ? (
-        <>
-          <PredictionOfficialComparison
-            rows={event.comparison}
-            coverage={event.metrics.coverage}
-            unforecastedEntrants={event.unforecastedEntrants}
-          />
-          <EventMetrics metrics={event.metrics} />
-        </>
       ) : null}
+      {displayedForecastEvent ? (
+        <>
+          <EventHero
+            event={displayedForecastEvent}
+            primary={!operationalEvent}
+            contextLabel={
+              operationalIsDifferentEvent
+                ? "Last completed prediction"
+                : "Latest Apex Pulse prediction / result"
+            }
+          />
+          <div>
+            <WeekendTimeline
+              schedule={displayedForecastEvent.schedule}
+              sessions={displayedForecastEvent.sessions}
+              lifecycle={displayedForecastEvent.lifecycle}
+              now={now}
+            />
+          </div>
+          <ForecastRanking rows={displayedForecastEvent.ranking} />
+          {displayedForecastEvent.hasSettlement ? (
+            <>
+              <PredictionOfficialComparison
+                rows={displayedForecastEvent.comparison}
+                coverage={displayedForecastEvent.metrics.coverage}
+                unforecastedEntrants={displayedForecastEvent.unforecastedEntrants}
+              />
+              <EventMetrics metrics={displayedForecastEvent.metrics} />
+            </>
+          ) : null}
+          <TechnicalDetails items={displayedForecastEvent.technical} />
+        </>
+      ) : (
+        <PublicEmptyState
+          title="No completed prediction is available"
+          detail="This weekend is being reported from the operational monitor, but no immutable pre-qualifying forecast is available to display."
+        />
+      )}
       <MethodologyPreview />
-      <TechnicalDetails items={event.technical} />
       <ContactSection />
     </div>
   );
