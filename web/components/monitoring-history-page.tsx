@@ -58,6 +58,27 @@ export function MonitoringHistoryPageView({ data }: { data: MonitoringHistoryPag
         </div>
       </section>
 
+      <section
+        aria-label="Prediction history coverage note"
+        role="note"
+        className="rounded-3xl border border-apex-accent/30 bg-apex-accent/10 p-6 shadow-card"
+      >
+        <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
+          Coverage note
+        </p>
+        <h2 className="mt-2 text-2xl font-semibold text-apex-text">
+          Why some race weekends may be missing
+        </h2>
+        <p className="mt-3 max-w-4xl text-sm leading-6 text-apex-secondary">
+          This archive is intentionally not a complete Formula 1 calendar. A past Grand Prix may
+          have no prediction—or may not appear here at all—because Sprint weekends are not currently
+          supported, because monitoring was introduced during the season, or because ongoing model,
+          data-pipeline and reliability updates—or a software issue later identified and fixed—
+          prevented a trustworthy forecast at the time. Missing predictions are never recreated
+          after qualifying.
+        </p>
+      </section>
+
       <section aria-labelledby="past-predictions-title">
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
           Valid prospective evidence

@@ -102,6 +102,22 @@ describe("MonitoringHistoryPageView", () => {
     expect(screen.getByText("Historical backtest context")).toBeInTheDocument();
   });
 
+  test("explains why past race weekends or predictions may be missing", () => {
+    renderMonitoringPage();
+
+    const note = screen.getByRole("note", { name: "Prediction history coverage note" });
+    expect(
+      within(note).getByRole("heading", { name: "Why some race weekends may be missing" })
+    ).toBeInTheDocument();
+    expect(within(note).getByText(/Sprint weekends are not currently supported/i))
+      .toBeInTheDocument();
+    expect(within(note).getByText(/ongoing model, data-pipeline and reliability updates/i))
+      .toBeInTheDocument();
+    expect(within(note).getByText(/software issue later identified and fixed/i))
+      .toBeInTheDocument();
+    expect(within(note).getByText(/never recreated after qualifying/i)).toBeInTheDocument();
+  });
+
   test("Australia and Great Britain appear only in the legacy section", () => {
     renderMonitoringPage();
 
