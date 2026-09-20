@@ -37,6 +37,8 @@ Predictions are supported after **FP1, FP2 and FP3**. The primary target is each
 
 The project extends beyond offline model training: it includes guarded data ingestion, chronological backtesting, policy governance, prospective replay, immutable forecast and settlement records, an autonomous race-weekend orchestrator, a read-only API and a deployed public frontend.
 
+For an implementation-grounded explanation in Italian, see the [technical and interview guide](docs/guida-tecnica-interview.md): data processing, models, historical training, leakage controls, scheduler timing, idempotency, engineering tradeoffs, current limitations, and 40 interview questions. A standalone [LaTeX edition](docs/guida-tecnica-interview.tex) includes the complete guide, a clickable table of contents, and vector diagrams; compile it with XeLaTeX (also supported by Overleaf).
+
 |                       |                                                                |
 | --------------------- | -------------------------------------------------------------- |
 | Historical scope      | **2023–2025**                                                  |
@@ -197,9 +199,26 @@ Frozen season-held-out evaluation produced mixed evidence:
 
 A stricter event-by-event retrain replay was more conservative and did not provide sufficient evidence to replace the default production policy.
 
-**Production decision:** retain the stable policy while continuing prospective evaluation.
+**Historical production decision:** retain the stable policy while continuing prospective evaluation.
 
 This distinction between *best historical candidate* and *deployed policy* is deliberate.
+
+### Conditional FP3 policy V1 (implementation completed September 20, 2026)
+
+The separately versioned `FP3_CONDITIONAL_POLICY_V1` uses Uniform with fewer than
+five eligible prior current-season events and Season-aware from five onward. Both
+candidates remain in shadow monitoring. Five is the existing training boundary;
+it was not optimized for this deployment rule. The frozen 126-feature candidates
+reproduce aligned 2024 MAEs of 0.945950/0.716471 and 2025 MAEs of 0.788273/0.527566
+(Uniform/Season-aware). These fixed-candidate scores differ from the earlier
+deployment-selector evaluation above.
+
+The implementation corrects missing current-season training history, preserves
+the historical feature contract, and separates new post-freeze evidence from
+historical replay. This task did not deploy a new cloud image. See the
+[audit, activation semantics, fallback and rollback instructions](docs/fp3_conditional_policy_v1.md).
+Inspect the configured policy without modifying artifacts with
+`python -m f1_prediction.cli fp3-policy-report`.
 
 ---
 

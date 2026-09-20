@@ -1,0 +1,2134 @@
+% !TeX program = xelatex
+% Documento autonomo: nessun file grafico o bibliografico esterno richiesto.
+% Dalla radice del repository:
+% latexmk -xelatex -interaction=nonstopmode -halt-on-error -outdir=output/pdf docs/guida-tecnica-interview.tex
+% Per Overleaf: caricare questo file e selezionare XeLaTeX.
+% Contenuto convertito da docs/guida-tecnica-interview.md; verifica 14-15 settembre 2026.
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=23mm,top=25mm,bottom=24mm,headheight=15pt]{geometry}
+\usepackage{fontspec}
+\setmainfont{texgyrepagella}[Extension=.otf,UprightFont=*-regular,BoldFont=*-bold,ItalicFont=*-italic,BoldItalicFont=*-bolditalic,Ligatures=TeX]
+\setsansfont{texgyreheros}[Extension=.otf,UprightFont=*-regular,BoldFont=*-bold,ItalicFont=*-italic,BoldItalicFont=*-bolditalic,Ligatures=TeX]
+\setmonofont{texgyrecursor}[Extension=.otf,UprightFont=*-regular,BoldFont=*-bold,ItalicFont=*-italic,BoldItalicFont=*-bolditalic,Scale=0.90]
+\usepackage[italian]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{microtype}
+\usepackage{xcolor}
+\definecolor{ink}{HTML}{183448}
+\definecolor{accent}{HTML}{087F8C}
+\definecolor{gold}{HTML}{B77B29}
+\definecolor{paper}{HTML}{F1F5F7}
+\usepackage{graphicx}
+\usepackage{longtable,booktabs,array,calc}
+\newcounter{none}
+\usepackage{enumitem}
+\usepackage{fvextra}
+\usepackage{seqsplit}
+\usepackage{xurl}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc}
+\usepackage{titlesec}
+\usepackage{etoolbox}
+\usepackage{needspace}
+\usepackage[section]{placeins}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{bookmark}
+\hypersetup{unicode=true,hypertexnames=false,colorlinks=true,linkcolor=ink,urlcolor=accent,citecolor=accent,
+ pdftitle={Apex Pulse - Guida tecnica e preparazione all'interview},
+ pdfsubject={Pipeline dati, machine learning, leakage, scheduler e software engineering},
+ pdfauthor={Documentazione del progetto Apex Pulse},bookmarksnumbered=true}
+\urlstyle{same}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.45em}
+\linespread{1.045}
+\setlength{\emergencystretch}{2em}
+\setcounter{secnumdepth}{1}
+\setcounter{tocdepth}{1}
+\setlist{nosep,leftmargin=1.65em,topsep=0.35em}
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.22}
+\setlength{\LTpre}{0.7em}
+\setlength{\LTpost}{0.8em}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\newcommand{\code}[1]{{\ttfamily\small\seqsplit{#1}}}
+\DefineVerbatimEnvironment{CodeBlock}{Verbatim}{breaklines=true,breakanywhere=true,fontsize=\small,frame=leftline,rulecolor=\color{accent},framerule=1pt,framesep=3mm,xleftmargin=3mm,baselinestretch=1.04,breaksymbolleft={}}
+\titleformat{\section}{\sffamily\Large\bfseries\color{ink}}{\thesection}{0.65em}{}
+\titleformat{\subsection}{\sffamily\large\bfseries\color{ink}}{}{0pt}{}
+\titlespacing*{\section}{0pt}{2em}{0.65em}
+\titlespacing*{\subsection}{0pt}{1.1em}{0.4em}
+\pretocmd{\section}{\Needspace{5\baselineskip}}{}{}
+\pretocmd{\subsection}{\Needspace{4\baselineskip}}{}{}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\sffamily\footnotesize\color{ink}APEX PULSE}
+\fancyhead[R]{\sffamily\footnotesize\color{ink!70}Guida tecnica e interview}
+\fancyfoot[L]{\sffamily\scriptsize\color{ink!60}Revisione del codice: b873e76}
+\fancyfoot[R]{\sffamily\small\thepage}
+\renewcommand{\headrulewidth}{0.35pt}
+\renewcommand{\footrulewidth}{0pt}
+\widowpenalty=10000
+\clubpenalty=10000
+\begin{document}
+\begin{titlepage}
+\thispagestyle{empty}
+\sffamily
+\vspace*{1.2cm}
+{\color{accent}\rule{3cm}{2pt}}\\[1cm]
+{\fontsize{40}{44}\selectfont\bfseries\color{ink}APEX PULSE\par}
+\vspace{0.9cm}
+{\fontsize{25}{31}\selectfont\color{ink}Guida tecnica\par}
+{\fontsize{22}{29}\selectfont\color{ink}e preparazione all'interview\par}
+\vspace{1.3cm}
+{\large\color{ink!75}Formula 1 qualifying prediction\par}
+\vspace{0.4cm}
+{\normalsize Pipeline dei dati, modelli e training, validazione temporale,\\
+ scheduler, persistenza e software engineering.\par}
+\vfill
+{\color{accent}\rule{\textwidth}{0.8pt}}
+\vspace{0.4cm}
+{\bfseries 23 capitoli\hspace{1.2cm}40 domande da interview\par}
+\vspace{0.8cm}
+{\small Verifica del repository: 14-15 settembre 2026\\
+Codice di riferimento: \texttt{b873e76}\\
+Edizione LaTeX della guida completa\par}
+\vspace{1cm}
+\end{titlepage}
+\pagenumbering{roman}
+\begingroup
+\setlength{\parskip}{0pt}
+\tableofcontents
+\endgroup
+\clearpage
+\pagenumbering{arabic}
+Verifica del repository: \textbf{14-15 settembre 2026}, codice di riferimento \textbf{\code{b873e76}}.
+
+Questa guida descrive il codice e gli artefatti locali effettivamente presenti. Distingue implementazione, risultati sperimentali, limiti verificati e sviluppi futuri. Non certifica lo stato corrente dei servizi remoti: il deployment riportato nel README non è stato nuovamente verificato durante questa analisi.
+
+Le motivazioni indicate come \emph{ragione tecnica} spiegano il compromesso dell'implementazione; non attribuiscono all'autore decisioni o esperimenti non documentati.
+
+\section{Presentazione del progetto}\label{presentazione-del-progetto}
+
+Apex Pulse stima la prestazione in qualifica dei piloti di Formula 1 partendo dalle prove libere. Il cuore è una pipeline di machine learning tabulare: acquisisce timing pubblici, costruisce feature interpretabili, confronta modelli con baseline e valuta le previsioni rispettando l'ordine temporale degli eventi.
+
+Il valore ingegneristico comprende anche ciò che avviene intorno al modello: identità delle sessioni, qualità dei dati, separazione tra previsioni e risultati, ripetizione sicura dei workflow, conservazione degli esperimenti e pubblicazione dei risultati tramite un'API di sola lettura.
+
+\subsection{Presentazione in circa un minuto}\label{presentazione-in-circa-un-minuto}
+
+\begin{quote}
+Ho sviluppato una pipeline per prevedere la prestazione in qualifica della Formula 1 dai dati delle prove libere. Uso FastF1, aggrego i giri per pilota e sessione e confronto baseline di passo con Ridge, Random Forest e histogram gradient boosting. La valutazione principale è walk-forward: per ogni GP il training contiene soltanto eventi precedenti. Il riferimento operativo attuale dopo FP3 è una Random Forest con feature di passo e confronti relativi; una variante che dà priorità alla stagione corrente viene osservata separatamente. Ho implementato anche un workflow automatico che attende i dati pubblici, registra la previsione, la confronta con i target dopo la qualifica e aggiorna la dashboard. I limiti principali sono i fattori non osservabili delle prove libere, i target di qualifica semplificati e alcuni aspetti di persistenza e aggiornamento da consolidare.
+\end{quote}
+
+Il problema è difficile perché \textbf{un tempo in prova libera non misura direttamente il potenziale in qualifica}. Carburante, programmi di lavoro, traffico e modalità della vettura influenzano il giro. Il modello cerca regolarità statistiche in osservazioni incomplete.
+
+\section{Cosa è implementato}\label{cosa-uxe8-implementato}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Area
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Stato effettivo
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Fonte & FastF1; nessuna dipendenza operativa da API a pagamento \\
+Dataset storico locale & 2023-2025, 44 weekend selezionati, 2.634 righe, 182 colonne \\
+Checkpoint di ricerca & \code{after\_fp1}, \code{after\_fp2}, \code{after\_fp3} \\
+Protocollo automatico corrente & \code{season\_2026\_v1}, \textbf{solo \code{after\_fp3}} \\
+Modello operativo & Random Forest, \code{base\_plus\_relative}, pesi \code{uniform} \\
+Candidato osservato & Stessa famiglia e feature, \code{current\_season\_only\_with\_prior}, ruolo shadow \\
+Target di training & \code{quali\_gap\_to\_pole\_sec} \\
+Ranking & Ordinamento dei gap predetti \\
+Q3 & Indicatore binario derivato dalla top 10 predetta; nessuna probabilità calibrata \\
+Incertezza & Implementata nei backtest/policy; non calcolata dal percorso corrente di forecast del monitoring \\
+Meteo e telemetria & Caricamento disabilitato nella configurazione; nessuna feature dedicata nella pipeline corrente \\
+Interfaccia & Next.js/React/TypeScript; FastAPI serve artefatti JSON \\
+Scheduler & Nel processo API, intervallo predefinito \textbf{300 secondi = 5 minuti} \\
+5 secondi & Timeout di una richiesta HTTP del frontend, non cadenza di training \\
+Replay & Valutazione storica evento per evento; non streaming giro per giro \\
+Sprint & Non supportate dal workflow operativo \\
+\end{longtable}
+\endgroup
+}
+
+I nomi XGBoost, LightGBM, CatBoost, SHAP e reti neurali nelle istruzioni progettuali descrivono possibilità o obiettivi. Non vanno presentati come componenti già usati dal sistema corrente.
+
+Il documento \code{reports/model\_card.md} contiene anche note di milestone precedenti, per esempio una frase che esclude le dashboard. Il codice e il README mostrano che la dashboard è stata successivamente implementata. I documenti generati non sono tutti sincronizzati alla medesima revisione.
+
+\section{Problema matematico e target}\label{problema-matematico-e-target}
+
+\subsection{Unità di osservazione}\label{unituxe0-di-osservazione}
+
+Una riga del modeling dataset rappresenta:
+
+\begin{CodeBlock}
+stagione x evento x checkpoint x pilota
+\end{CodeBlock}
+
+Per esempio, un pilota di Monza 2024 può avere tre righe: una dopo FP1, una dopo FP2 e una dopo FP3. I target sono gli stessi; cambia l'informazione disponibile. Le tre righe non sono tre osservazioni indipendenti di tre qualifiche.
+
+\subsection{Regressione}\label{regressione}
+
+Concettualmente:
+
+\begin{CodeBlock}
+x(d,e,c) = feature del pilota d, evento e, checkpoint c
+y(d,e)   = tempo di riferimento del pilota - miglior tempo di riferimento dell’evento
+y_hat    = f_c(x)
+\end{CodeBlock}
+
+Il risultato è espresso in secondi. Un MAE di 0,7 s significa che, sul campione valutato, la distanza assoluta media tra gap predetto e target è di sette decimi. Non significa che ogni previsione abbia un errore massimo di sette decimi.
+
+\subsection{La definizione realmente implementata}\label{la-definizione-realmente-implementata}
+
+\code{build\_qualifying\_targets()}:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  pulisce i giri di Q con le regole di validità;
+\item
+  prende il \textbf{miglior giro valido di ciascun pilota nell'intera sessione Q};
+\item
+  sottrae il minimo di questi tempi per costruire il gap;
+\item
+  ordina questi tempi per costruire \code{quali\_position};
+\item
+  imposta \code{reached\_q2} se esiste un tempo e la posizione è \ensuremath{\leq}15;
+\item
+  imposta \code{reached\_q3} se esiste un tempo e la posizione è \ensuremath{\leq}10.
+\end{enumerate}
+
+Questa è una \textbf{proxy della prestazione cronometrica in qualifica}, non una ricostruzione completa della classificazione ufficiale Q1/Q2/Q3.
+
+Esempio ipotetico: un pilota eliminato in Q2 gira in 80 s sull'asciutto; in Q3 piove e il più veloce gira in 95 s. Il minimo globale può attribuire la migliore prestazione al pilota eliminato. Anche senza pioggia, ordinare i migliori tempi delle diverse fasi non preserva necessariamente l'ordine ufficiale.
+
+I piloti senza un giro valido vengono ordinati in fondo e hanno gap mancante. Non ricevono un target di gap inventato. Le soglie 15/10 sono inoltre una semplificazione che non si adatta automaticamente a tutte le dimensioni della griglia e ai regolamenti di eliminazione.
+
+\textbf{Risposta corretta in interview:} «Il nome della variabile è gap to pole, ma l'implementazione corrente usa il minimo dei migliori tempi validi in Q. Rendere il target coerente con le fasi ufficiali è una priorità metodologica».
+
+\subsection{Come nasce il ranking predetto}\label{come-nasce-il-ranking-predetto}
+
+I gap vengono ordinati dal più piccolo al più grande all'interno di evento e checkpoint. A parità di valore si usa un ordinamento deterministico per codice pilota; le predizioni mancanti finiscono in fondo.
+
+Non viene allenato un modello learning-to-rank. Non c'è una loss che confronta esplicitamente coppie di piloti.
+
+Il regressore non impone che il primo predetto abbia gap esattamente zero: può produrre, per esempio, 0,14 s per il primo e 0,34 s per il secondo. Non si deve leggere quel 0,14 come distacco da un altro pilota necessariamente presente nella tabella. Ridge può anche produrre valori negativi: il percorso di training generale non li corregge automaticamente.
+
+\section{Architettura e percorso dei dati}\label{architettura-e-percorso-dei-dati}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm,>=Latex,
+ box/.style={draw=ink!45,fill=paper,rounded corners=2pt,align=center,text width=4.8cm,minimum height=0.72cm,font=\sffamily\small,inner sep=5pt},
+ live/.style={box,fill=accent!7,draw=accent!60},
+ edge/.style={->,line width=0.65pt,draw=ink!70}]
+\node[box] (a) at (0,0) {FastF1: calendario e sessioni};
+\node[box] (b) at (0,-1.08) {Cache e giri raw};
+\node[box] (c) at (0,-2.16) {Pulizia e flag di validità};
+\node[box] (d) at (0,-3.24) {Aggregati pilota e sessione};
+\node[box] (e) at (0,-4.32) {Feature relative e di qualità};
+\node[box,text width=3.4cm,fill=gold!10] (q) at (-3.6,-5.53) {Q: target separati};
+\node[box] (f) at (-3.6,-6.74) {Dataset per checkpoint};
+\node[box] (g) at (-3.6,-8.0) {Split temporali e training};
+\node[box] (h) at (-3.6,-9.26) {Predizioni fuori campione};
+\node[box] (i) at (-3.6,-10.52) {Metriche, policy e audit};
+\node[live] (l) at (3.6,-6.74) {Feature operative dopo FP3\\senza target};
+\node[live] (m) at (3.6,-8.0) {Preflight e forecast};
+\node[live] (n) at (3.6,-9.26) {Snapshot della previsione};
+\node[live] (o) at (3.6,-10.52) {Settlement dopo Q};
+\node[live] (p) at (3.6,-11.78) {Artefatti dashboard};
+\node[live] (r) at (3.6,-13.04) {FastAPI};
+\node[live] (s) at (3.6,-14.30) {Next.js};
+\foreach \from/\to in {a/b,b/c,c/d,d/e,q/f,f/g,g/h,h/i,l/m,m/n,n/o,o/p,p/r,r/s}
+  \draw[edge] (\from) -- (\to);
+\draw[edge] (e.west) -- (-6.65,-4.32) |- (f.west);
+\draw[edge] (d.east) -- ++(0.55,0) -| (l.north);
+\draw[edge] (q.east) -- (0,-5.53) -- (0,-10.52) -- (o.west);
+\draw[edge,dashed,preaction={draw=white,line width=3pt}] (g.east) -- node[above,fill=white,align=center,font=\sffamily\scriptsize,inner sep=2pt] {training\\autorizzato} (m.west);
+\draw[edge] (n.east) -- ++(0.5,0) |- (p.east);
+\node[font=\sffamily\bfseries\footnotesize,text=ink!65] at (-3.6,-12.3) {RICERCA E VALIDAZIONE};
+\node[font=\sffamily\bfseries\footnotesize,text=accent] at (3.6,-15.15) {MONITORING E PUBBLICAZIONE};
+\end{tikzpicture}
+\caption{Pipeline dei dati: percorso storico e percorso operativo con target separati.}
+\label{fig:pipeline}
+\end{figure}
+
+Il diagramma distingue due percorsi. Nel \textbf{dataset offline} feature e target possono stare nello stesso file, purché il modello riceva solo le colonne consentite. Nel \textbf{monitoring operativo} i target dell'evento corrente sono separati fisicamente dalle feature pre-Q.
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Livello
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Contenuto
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Motivo
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\code{data/raw/fastf1\_cache} & Cache gestita da FastF1 & Ridurre download e parsing ripetuti \\
+\code{data/raw/laps} & Giri esportati in Parquet per stagione/evento/sessione & Conservare input ispezionabili \\
+\code{data/raw/session\_metadata} & Identità, esito e provenienza della sessione & Non fidarsi soltanto del nome del file \\
+\code{data/interim/clean\_laps} & Giri normalizzati e flag & Separare pulizia da aggregazione \\
+\code{data/processed/session\_features} & Una riga pilota/sessione & Rendere riutilizzabili le trasformazioni \\
+\code{data/processed/modeling} & Dataset per evento e combinato & Training e valutazione riproducibili \\
+\code{data/processed/monitoring} & Feature FP3, target e manifest dell'evento & Separare prima e dopo Q \\
+\code{models} & Bundle serializzati del training tabulare & Salvare estimator e liste di feature \\
+\code{reports/metrics} & Predizioni, metriche, registri, audit e stato & Ricostruire cosa è successo \\
+\code{reports/dashboard} & Contratti JSON per la UI & Disaccoppiare ML e presentazione \\
+\end{longtable}
+\endgroup
+}
+
+Parquet conserva tipi e dati colonnari in modo più compatto di un CSV tipico. È adatto a dataframe e analisi locali. CSV resta utile per piccoli ledger leggibili; JSON per configurazioni, manifest e API; JSONL per aggiungere un record operativo per riga.
+
+Questa organizzazione ricorda una separazione raw/clean/curated, ma non è un data lake distribuito. Il sistema usa principalmente file locali su disco o volume persistente.
+
+\section{Ingestion, cache e identità}\label{ingestion-cache-e-identituxe0}
+
+\subsection{Dal calendario ai giri}\label{dal-calendario-ai-giri}
+
+La CLI risolve stagione, evento e sessione; FastF1 carica la sessione con i parametri configurati. Lo schema esporta le colonne di timing riconosciute, per esempio \code{LapTime}, settori, mescola, vita gomma, ingresso/uscita box e accuratezza.
+
+La configurazione corrente richiede i giri e disabilita telemetria, meteo e messaggi. La presenza nel raw di campi come \code{SpeedST} non implica che il modello li usi: bisogna seguirli fino agli aggregati e alla selezione finale delle feature.
+
+Gli output hanno percorsi deterministici. L'ingestion multi-sessione registra successi, errori e riutilizzo dei file; la costruzione stagionale produce un report con eventi richiesti, riusciti e falliti. La modalità di prosecuzione dopo errori serve a completare gli altri eventi rendendo visibili i fallimenti.
+
+\subsection{Due livelli di cache}\label{due-livelli-di-cache}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{Cache FastF1:} evita di ripetere completamente il lavoro sul provider.
+\item
+  \textbf{Artefatti della pipeline:} evitano di rifare fasi già concluse, salvo richiesta esplicita di ricostruzione dove supportata.
+\end{itemize}
+
+Un file esistente non dimostra da solo che sia aggiornato rispetto al codice o a una nuova configurazione. Per riprodurre un esperimento servono anche versioni, parametri e fingerprint. Il caching basato sull'esistenza non equivale a invalidazione automatica delle dipendenze.
+
+\subsection{Identità stabili}\label{identituxe0-stabili}
+
+\code{driver\_key} normalizza il codice pilota; \code{team\_key} unifica alias espliciti come Alfa Romeo/Kick Sauber o AlphaTauri/RB. Un fallback produce una chiave dal nome se l'alias non è noto.
+
+Questo consente join coerenti tra stagioni. Resta una convenzione applicativa: codici, cambi organizzativi e nuovi nomi richiedono manutenzione. Unificare due denominazioni è anche una scelta sulla continuità storica della squadra, non una verità derivata automaticamente dai tempi.
+
+\subsection{Perché controllare l'identità della sessione}\label{perchuxe9-controllare-lidentituxe0-della-sessione}
+
+Un file nel percorso di Silverstone potrebbe contenere dati di un altro GP: la forma tabellare sarebbe valida, ma il significato sbagliato. Il controllo raw confronta identità richiesta, percorso, metadata e contenuto disponibile. Prima del settlement verifica che i target provengano dalla Q dell'evento corretto.
+
+Il progetto contiene record storici in quarantena, inclusi casi di ordine evento non canonico e un mismatch raw noto. Restano conservati per audit, ma non devono diventare nuove prove prospettiche. «Il file si legge» e «il dato è semanticamente corretto» sono due controlli diversi.
+
+\subsection{Piloti delle libere e piloti da prevedere}\label{piloti-delle-libere-e-piloti-da-prevedere}
+
+Il sistema distingue:
+
+\begin{itemize}
+\tightlist
+\item
+  \code{practice\_evidence\_drivers}: chi ha prodotto dati nelle libere;
+\item
+  \code{forecast\_eligible\_drivers}: roster autorizzato a ricevere la previsione.
+\end{itemize}
+
+Un collaudatore in FP1 non deve ricevere una posizione in qualifica se non partecipa al resto del weekend. I suoi dati possono informare gli aggregati della squadra. Non vengono attribuiti al titolare come se fossero suoi giri.
+
+La risoluzione preferisce una fonte pre-Q recente, completa e valida, tipicamente FP3, con fallback appropriati. Duplicati, team contraddittori e roster incompleto restano errori da risolvere, talvolta ritentabili quando il provider pubblica nuovi dati.
+
+\section{Pulizia e push lap}\label{pulizia-e-push-lap}
+
+\subsection{Normalizzazione}\label{normalizzazione}
+
+La pulizia conserva le colonne originali e aggiunge:
+
+\begin{itemize}
+\tightlist
+\item
+  identità normalizzate;
+\item
+  stagione, evento e sessione;
+\item
+  tempi in secondi;
+\item
+  numeri di giro e stint;
+\item
+  mescola e vita della gomma;
+\item
+  flag \code{is\_valid\_lap} e \code{is\_push\_lap}.
+\end{itemize}
+
+Conversioni impossibili diventano valori mancanti. Non trasformare un tempo assente in zero è essenziale: zero sarebbe interpretato come una prestazione straordinaria.
+
+\subsection{Giro valido}\label{giro-valido}
+
+Il codice richiede tempo sul giro e tre settori presenti, accuratezza, giro non cancellato, assenza di ingresso e uscita box, pilota e numero giro disponibili.
+
+Questo filtro non è un classificatore di traffico o bandiere. \code{TrackStatus} può essere conservato nel raw ma non è esplicitamente usato nella regola corrente. Se si invoca la funzione con input incompleti, \code{IsAccurate} mancante ha fallback \code{True}, mentre cancellazione e pit flag mancanti hanno fallback permissivi; lo schema raw normale richiede comunque alcune colonne. È un aspetto da conoscere, non un filtro infallibile.
+
+\subsection{Giro push-like}\label{giro-push-like}
+
+Fra i giri validi, una lap viene marcata push-like se:
+
+\begin{CodeBlock}
+tempo_giro <= 1,03 x miglior_tempo_valido_del_pilota
+e
+tempo_giro <= 1,07 x miglior_tempo_valido_della_sessione
+e
+mescola in {SOFT, MEDIUM, HARD, INTERMEDIATE, WET}
+\end{CodeBlock}
+
+Esempio: migliore del pilota 90 s, migliore di sessione 89 s. I limiti sono 92,70 e 95,23 s; la lap deve rispettare entrambi. Un 92 s passa, un 93 s no.
+
+La ragione tecnica è escludere giri palesemente poco rappresentativi senza introdurre subito un modello di riconoscimento dei programmi. Le soglie sono configurabili e spiegabili.
+
+\textbf{Limiti:} un long run veloce può essere incluso; traffico moderato può restare; un cambiamento asciutto/bagnato può rendere il miglior tempo globale un confronto inappropriato. I flag sono una proxy dell'intento del pilota, non la sua osservazione.
+
+Nel lavoro per checkpoint il migliore della sessione è lecito perché la sessione è terminata. Per un futuro replay giro per giro bisognerebbe ricalcolarlo solo sui giri già osservati, senza usare il migliore finale.
+
+\section{Feature engineering e checkpoint}\label{feature-engineering-e-checkpoint}
+
+\subsection{Aggregati pilota/sessione}\label{aggregati-pilotasessione}
+
+La pipeline costruisce conteggi di giri totali, validi e push, conteggi per mescola, tempi migliori, mediane, deviazioni standard, migliori settori, theoretical best e informazioni sulla vita gomme.
+
+Il \textbf{theoretical best} è:
+
+\begin{CodeBlock}
+min(settore 1 valido) + min(settore 2 valido) + min(settore 3 valido)
+\end{CodeBlock}
+
+I tre settori possono provenire da giri diversi. È una stima dell'assemblaggio ideale dei settori osservati; non dimostra che quel giro fosse fisicamente realizzabile nelle stesse condizioni.
+
+\code{best\_vs\_theoretical\_gap\_sec} quantifica la distanza fra il migliore giro valido e la somma dei migliori settori. Può suggerire esecuzione imperfetta, ma non identifica causalmente traffico o errore di guida.
+
+Alcuni dettagli importanti:
+
+\begin{itemize}
+\tightlist
+\item
+  \code{best\_lap\_time\_sec} usa il minimo raw temporizzato, anche se quel giro non passa tutti i filtri;
+\item
+  \code{best\_valid\_lap\_time\_sec} e \code{best\_push\_lap\_time\_sec} sono variabili diverse;
+\item
+  mescola e vita della gomma del best lap sono ricavate dal giro raw più veloce;
+\item
+  i conteggi SOFT/MEDIUM/HARD comprendono i giri della mescola nel gruppo, non solo i push;
+\item
+  non è implementata una specifica feature di trend di miglioramento durante la sessione.
+\end{itemize}
+
+\subsection{Feature relative}\label{feature-relative}
+
+Per best valid, best push e theoretical best si costruiscono gap, rapporti e ranking rispetto alla sessione, nonché confronti con compagno e team.
+
+\begin{CodeBlock}
+gap_sessione = tempo_pilota - minimo_sessione
+gap_relativo = gap_sessione / minimo_sessione
+gap_compagno = tempo_pilota - miglior_tempo_degli_altri_del_team
+\end{CodeBlock}
+
+\code{gap\_pct} nel nome identifica un rapporto: 0,01 corrisponde all'1\%, non al valore numerico 1.
+
+Il segno del gap al compagno è informativo: negativo significa più veloce. Nei dati con più partecipanti dello stesso team, il riferimento è il migliore degli altri. Le feature correnti usano soprattutto \textbf{team best}, non una decomposizione causale driver/car e non un team average generalizzato.
+
+I confronti relativi attenuano l'effetto della lunghezza del circuito e delle condizioni condivise. Non cancellano differenze di carburante, orario del run o gomme.
+
+\subsection{Feature di qualità}\label{feature-di-qualituxe0}
+
+Esprimono disponibilità delle sessioni, numero di giri, assenza del segnale più recente e gap estremi. Lo score di qualità somma sei condizioni binarie:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  best push recente presente;
+\item
+  best valid recente presente;
+\item
+  theoretical best recente presente;
+\item
+  almeno due push lap nella sessione più recente;
+\item
+  almeno cinque giri validi nella sessione più recente;
+\item
+  confronto relativo al team disponibile.
+\end{enumerate}
+
+Il punteggio è quindi 0-6. Non è una probabilità di correttezza della previsione. La soglia di gap estremo è 3 s.
+
+\subsection{Checkpoint e colonne}\label{checkpoint-e-colonne}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Checkpoint
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Sessioni consentite
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\code{after\_fp1} & FP1 \\
+\code{after\_fp2} & FP1, FP2 \\
+\code{after\_fp3} & FP1, FP2, FP3 \\
+\end{longtable}
+\endgroup
+}
+
+Il dataset largo usa prefissi \code{fp1\_}, \code{fp2\_}, \code{fp3\_}. Il builder unisce solo le sessioni consentite; la selezione del modello filtra nuovamente i prefissi. Le colonne future possono esistere nello schema combinato ma non entrare nell'input di quel checkpoint.
+
+\subsection{Quali feature entrano davvero nel modello}\label{quali-feature-entrano-davvero-nel-modello}
+
+Sono ammesse le feature numeriche e booleane dei gruppi consentiti, con almeno un valore osservato nel training. Gli identificatori e i target sono esclusi. Non è presente un encoder categorico generale: \code{best\_lap\_compound} può essere nel dataset ma la stringa non viene direttamente usata da questi regressori. Conteggi delle mescole e tyre life numerica forniscono comunque informazione sulle gomme.
+
+I gruppi di ablation sono costruiti tramite pattern nei nomi delle colonne. Le combinazioni principali sono \code{base\_lap\_features}, \code{base\_plus\_relative}, \code{base\_plus\_historical}, \code{base\_plus\_quality}, \code{all\_features}.
+
+Il gruppo operativo \textbf{\code{base\_plus\_relative} non include le rolling feature storiche}. Gli anni passati contribuiscono comunque come esempi di training. Questo punto evita di confondere «allenato su più stagioni» con «usa la media storica del pilota come feature».
+
+La selezione corrente sul dataset locale produce 161 feature numeriche utilizzabili dopo FP3 nell'insieme completo e 126 in \code{base\_plus\_relative}. Sono conteggi sullo snapshot e sul selettore attuale, non una prova che ogni artefatto storico sia stato allenato con lo stesso numero di colonne. Fa fede il manifest del singolo training.
+
+\section{Anni precedenti e pesi temporali}\label{anni-precedenti-e-pesi-temporali}
+
+Gli anni precedenti possono entrare in \textbf{tre modi distinti}.
+
+\subsection{A. Esempi supervisionati}\label{a.-esempi-supervisionati}
+
+Un evento passato fornisce una coppia \code{(feature delle libere, target della qualifica)}. La Random Forest impara da tante coppie precedenti. Non carica necessariamente un modello 2023 da aggiornare con un modello 2024: normalmente viene creato un nuovo estimator e chiamato \code{fit()} sull'insieme di training consentito.
+
+\subsection{B. Feature di forma storica}\label{b.-feature-di-forma-storica}
+
+Il modulo storico calcola per pilota e team medie/mediane mobili degli ultimi 3 o 5 eventi osservati, medie cumulative, frequenza Q3 e gap storico al compagno.
+
+Il procedimento temporale è:
+
+\begin{CodeBlock}
+per ogni evento ordinato:
+    calcola le feature usando la storia già raccolta
+    solo dopo aggiungi il risultato di questo evento alla storia
+\end{CodeBlock}
+
+È l'equivalente concettuale di uno \code{shift(1)} prima della rolling aggregation. Il codice lo realizza con una lista di storia, non necessariamente con una chiamata a \code{shift}.
+
+Se i gap precedenti sono 0,4, 0,8 e 0,6 s, la rolling3 prima del GP successivo vale 0,6 s. Il risultato ancora sconosciuto del GP corrente non può cambiare quel valore.
+
+La storia è deduplicata per pilota/evento: i tre checkpoint non devono contare tre volte. Per il team si aggregano prima i risultati dei piloti nello stesso evento. La storia attraversa le stagioni e non viene azzerata automaticamente a gennaio. «Ultimi tre eventi» significa ultimi tre eventi disponibili nel dataset per quell'entità, non necessariamente gli ultimi tre round del calendario completo.
+
+Se manca storia, le statistiche restano mancanti e i conteggi indicano la scarsità. \code{min\_periods=1} permette una prima stima già con un evento valido. Gli eventi esclusi dal ruolo di fonte, per esempio un holdout, non vengono aggiunti alla storia.
+
+\subsection{C. Peso diverso degli esempi}\label{c.-peso-diverso-degli-esempi}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Policy
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Regola
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\code{uniform} & Ogni riga di training ha peso 1 \\
+\code{season\_priority} & Stagione del test: 1; precedente: 0,35; più vecchie: 0,10 \\
+\code{exponential\_recency} & \code{peso = 0,5\textasciicircum{}(distanza\_eventi / 10)} \\
+\code{current\_season\_only\_with\_prior} & Prima di 5 eventi precedenti della stagione usa i pesi stagionali; dopo, conserva solo la stagione corrente \\
+\end{longtable}
+\endgroup
+}
+
+Per un target 2026, 2025 riceve 0,35 e 2024/2023 ricevono 0,10 nella policy stagionale. Se fossero già disponibili cinque eventi 2026 legalmente utilizzabili, la policy \code{current\_season\_only\_with\_prior} eliminerebbe dal training supervisionato le righe delle stagioni precedenti.
+
+Il termine \emph{prior} descrive un supporto storico nel cold start. Non è un prior bayesiano esplicito con posterior analitico.
+
+Ridge, Random Forest e histogram boosting accettano i pesi nei rispettivi percorsi. Le baseline costanti mean/median del percorso tabulare non vengono trasformate in statistiche pesate: questa differenza è dichiarata dal modulo.
+
+Il peso per riga non rende uguale il contributo di ogni evento se il numero di piloti validi cambia. L'\textbf{effective sample size} riportato è \code{(somma pesi)\textasciicircum{}2 / somma(pesi\textasciicircum{}2)}: misura la concentrazione dei pesi, non il numero di osservazioni temporalmente indipendenti.
+
+La ragione tecnica del confronto è il compromesso tra volume storico e cambiamento del regime competitivo. Più anni aiutano la stabilità, ma vetture e gerarchie cambiano. Scartare troppo presto il passato aumenta invece la varianza.
+
+\section{Modelli e baseline}\label{modelli-e-baseline}
+
+\subsection{Baseline di passo}\label{baseline-di-passo}
+
+Sono implementate sei varianti: best push, best valid, theoretical best e le corrispondenti versioni robuste.
+
+Per ciascun pilota si usa la metrica dell'ultima sessione consentita; se manca, si arretra: FP3 \ensuremath{\rightarrow} FP2 \ensuremath{\rightarrow} FP1. Le versioni robuste scartano anche un segnale con gap di sessione \textgreater3 s e cercano una sessione precedente. Dal valore selezionato viene sottratto il migliore del gruppo per ottenere il gap predetto.
+
+Questa baseline \textbf{non prende semplicemente il minimo di tutte le libere}. Privilegia la sessione più recente. E non è un modello allenato: applica una regola.
+
+Il fallback può confrontare tempi di sessioni diverse, un limite quando la pista cambia. Se nessuna misura è utilizzabile, il gap resta assente e il ranking mette il pilota in fondo. Valutare soltanto gli errori numerici disponibili può favorire metodi con minore copertura: vanno sempre confrontati anche i denominatori.
+
+Le baseline «qualifica del GP precedente» e «rolling form» sono obiettivi delle istruzioni iniziali, ma non compaiono come metodi autonomi nel generatore corrente. Esistono invece feature storiche e baseline costanti mean/median target.
+
+\subsection{Ridge Regression}\label{ridge-regression}
+
+Ridge stima una relazione lineare regolarizzata:
+
+\[\underset{\boldsymbol{\beta}}{\operatorname{minimize}}\;\sum_i w_i\bigl(y_i-\mathbf{x}_i^{\mathsf{T}}\boldsymbol{\beta}\bigr)^2+\alpha\lVert\boldsymbol{\beta}\rVert_2^2\]
+
+Pipeline: imputazione con mediana \ensuremath{\rightarrow} standardizzazione \ensuremath{\rightarrow} Ridge con \code{alpha=1}.
+
+La standardizzazione rende confrontabili le scale delle feature ai fini della penalizzazione. La regolarizzazione riduce coefficienti eccessivi, utile con molte feature correlate. Il limite è l'incapacità di rappresentare direttamente interazioni e non linearità complesse.
+
+\subsection{Random Forest}\label{random-forest}
+
+La regressione è la media delle predizioni di più alberi. Nel costruttore corrente:
+
+\begin{itemize}
+\tightlist
+\item
+  200 alberi;
+\item
+  profondità massima 8;
+\item
+  almeno 2 campioni per foglia;
+\item
+  seed 42;
+\item
+  \code{n\_jobs=1};
+\item
+  imputazione con mediana, senza standardizzazione.
+\end{itemize}
+
+Gli alberi dividono lo spazio delle feature con soglie. Possono rappresentare condizioni come «un buon gap relativo è informativo soprattutto quando esistono sufficienti giri rappresentativi», senza specificare a mano ogni interazione.
+
+Bootstrap e media fra alberi riducono la varianza rispetto a un singolo albero. Il codice non passa un valore personalizzato per tutte le opzioni, per esempio \code{max\_features}: non bisogna raccontare configurazioni non presenti. Profondità e foglie limitano la complessità; un singolo worker limita la competizione per risorse nel runtime.
+
+Le predizioni della foresta tendono a medie osservate nelle foglie. Questo aiuta la stabilità ma rende debole l'estrapolazione verso regimi mai visti. Gli errori possono restare correlati fra piloti dello stesso evento.
+
+\subsection{Histogram Gradient Boosting}\label{histogram-gradient-boosting}
+
+\code{HistGradientBoostingRegressor} costruisce alberi in sequenza per migliorare progressivamente l'obiettivo di regressione; le feature numeriche vengono trattate con una rappresentazione a bin. La configurazione è:
+
+\begin{CodeBlock}
+max_iter = 200
+learning_rate = 0,05
+max_leaf_nodes = 31
+l2_regularization = 0,1
+random_state = 42
+\end{CodeBlock}
+
+È un confronto non lineare aggiuntivo disponibile in scikit-learn. Non è XGBoost e non è LightGBM. Il progetto evita così una dipendenza esterna ulteriore per questo esperimento.
+
+\subsection{Perché partire da modelli tabulari}\label{perchuxe9-partire-da-modelli-tabulari}
+
+Ci sono pochi eventi indipendenti, molte variabili interpretabili e poco bisogno di una rappresentazione appresa da immagini o testo. Baseline e alberi permettono cicli rapidi di verifica, minori requisiti hardware e diagnosi più semplici. Il valore va cercato prima in target, dati e validazione; la complessità del modello non sostituisce questi elementi.
+
+L'ottimizzazione dei regressori usa normalmente errore quadratico, mentre la selezione principale usa MAE. Sono obiettivi differenti: l'allenamento può dare più peso agli outlier di quanto suggerisca la metrica con cui poi si confrontano i metodi.
+
+\section{Training e aggiornamenti}\label{training-e-aggiornamenti}
+
+\subsection{Training offline}\label{training-offline}
+
+Il comando \code{train-tabular-models} legge il dataset combinato, verifica la quantità minima di eventi, costruisce un holdout e ricalcola la storia escludendo gli eventi di test come fonti. Di default tiene fuori l'ultimo evento. È possibile richiedere eventi o una stagione.
+
+Per ciascun checkpoint:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  seleziona le righe di training con target disponibile;
+\item
+  seleziona le feature numeriche lecite e non interamente mancanti nel training;
+\item
+  allena imputazione e, per Ridge, scaler \textbf{solo sul training};
+\item
+  esegue \code{fit} del regressore;
+\item
+  predice sul test;
+\item
+  deriva ranking e indicatore Q3;
+\item
+  salva predizioni, metriche, lista delle feature ed estimator.
+\end{enumerate}
+
+I bundle del comando tabulare sono \code{models/ridge\_gap\_model.joblib} e \code{models/random\_forest\_gap\_model.joblib}. Contengono modelli per checkpoint con preprocessing e feature associate. Non sono automaticamente promossi a serving dal solo fatto di esistere.
+
+\subsection{Backtest}\label{backtest}
+
+Il walk-forward ripete il training su una storia crescente. Con cinque eventi iniziali:
+
+\begin{CodeBlock}
+train E1...E5  -> predici E6
+train E1...E6  -> predici E7
+train E1...E7  -> predici E8
+\end{CodeBlock}
+
+Il modello viene ricreato per il fold. Non si tratta di \code{partial\_fit}, non viene modificato un albero a ogni giro e non c'è fine-tuning di una rete neurale.
+
+\subsection{Training del forecast operativo}\label{training-del-forecast-operativo}
+
+\code{create\_prospective\_monitoring\_forecast()} legge il dataset indicato nel protocollo e aggiunge le feature prive di target dell'evento corrente. Ricostruisce la storia lecita, poi \code{train\_monitoring\_event\_sources()} allena \textbf{due Random Forest}: uniform e candidata season-aware. La prima alimenta la previsione osservata; entrambe alimentano i confronti shadow.
+
+Quindi la policy è congelata, ma \textbf{i parametri stimati possono essere ricalcolati quando si crea un nuovo forecast}. «Static policy» non significa «stesso oggetto estimator per sempre». Il percorso operativo non si limita a caricare il file \code{.joblib} del comando tabulare.
+
+Quando esiste già un forecast valido, il normale tick lo riutilizza e non lo riallena a ogni esecuzione.
+
+\subsection{Cosa cambia dopo un GP}\label{cosa-cambia-dopo-un-gp}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Oggetto
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Aggiornamento
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Feature del prossimo evento & Ricostruite dai dati delle sue libere \\
+Target dell'evento concluso & Aggiunti separatamente dopo Q e validati \\
+Errori e ledger di evidenza & Aggiornati dal settlement \\
+Forecast già registrato & Conservato; non corretto in base al risultato \\
+Modello del prossimo forecast & Nuovo fit sulla storia effettivamente disponibile e autorizzata \\
+Policy e soglie del protocollo & Non promosse/modificate automaticamente dai risultati \\
+Dashboard & Rigenerata dagli artefatti del workflow, poi riletta dalla UI \\
+\end{longtable}
+\endgroup
+}
+
+\subsection{Limite verificato: apprendimento dalla stagione corrente}\label{limite-verificato-apprendimento-dalla-stagione-corrente}
+
+Il codice ammette nel training gli eventi precedenti della stagione monitorata soltanto se risultano settled e riconciliati. \textbf{Tuttavia, nel percorso corrente non c'è un passaggio automatico che unisce le nuove feature e i nuovi target del monitoring al dataset storico combinato.}
+
+\code{monitoring\_dataset\_for\_forecast()} carica il dataset del protocollo e vi aggiunge l'evento corrente senza target. Non ricostruisce lì tutte le righe supervisionate dei GP monitorati precedenti. Il settlement aggiorna i propri ledger, non il file storico combinato.
+
+Nello snapshot ispezionato, il combinato contiene soltanto 2023-2025. I manifest locali dei forecast riportano una storia di 44 eventi. Il contatore di 2.634 righe nel manifest comprende i checkpoint della storia passata alla procedura; il fit effettivo del modello FP3 filtra poi solo FP3 e i target non mancanti: sul combinato attuale sono \textbf{873 righe}, non 2.634 campioni FP3.
+
+La risposta accurata è: «Il sistema riaddestra per il nuovo evento e accumula evidenza dal settlement. Per includere automaticamente i nuovi GP come esempi supervisionati serve completare e validare l'aggiornamento del dataset di training». Non è corretto affermare che oggi impari automaticamente da ogni nuovo risultato nel dataset combinato.
+
+\section{Leakage-safe: significato e prove}\label{leakage-safe-significato-e-prove}
+
+\subsection{Definizione}\label{definizione}
+
+\textbf{Data leakage} significa usare, direttamente o indirettamente, informazioni che non sarebbero disponibili al momento della previsione, oppure lasciare che il test influenzi l'allenamento o la scelta del metodo. Il risultato tipico è una stima delle prestazioni troppo ottimistica.
+
+«Leakage-safe» descrive un insieme di contratti e verifiche sul flusso informativo. Non è una proprietà magica della Random Forest e non è una certificazione generale di qualunque uso della repository.
+
+Esempi di errori:
+
+\begin{itemize}
+\tightlist
+\item
+  dare al modello la Q dello stesso GP;
+\item
+  usare FP3 per una previsione dopo FP2;
+\item
+  calcolare una media stagionale includendo GP futuri;
+\item
+  inserire piloti dello stesso evento sia in train sia in test;
+\item
+  imputare le mediane su tutto il dataset prima dello split;
+\item
+  scegliere il modello migliore osservando il risultato del GP che si sta valutando;
+\item
+  costruire un intervallo usando l'errore appena commesso sul medesimo GP.
+\end{itemize}
+
+La documentazione \href{https://scikit-learn.org/stable/common_pitfalls.html\#data-leakage}{scikit-learn sul leakage e sul preprocessing} conferma la necessità di apprendere le trasformazioni solo sul training e usare \code{Pipeline} per applicarle coerentemente.
+
+\subsection{Difese presenti}\label{difese-presenti}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Rischio
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Meccanismo nel progetto
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Target fra i predittori & Liste di colonne target e selettori di feature ammessi \\
+Sessioni future & Prefissi consentiti per checkpoint nel builder e nella selezione numerica \\
+Risultato attuale nelle rolling & Storia calcolata prima di aggiungere l'esito dell'evento \\
+Tre checkpoint dello stesso GP divisi fra train/test & Split per evento \\
+Training su GP futuri & Walk-forward su ordine stagione/round \\
+Imputazione/scaling sul test & Preprocessing dentro la pipeline allenata sul train \\
+Scelta del candidato col risultato corrente & Evidenza di fold precedenti e confronti su chiavi allineate \\
+Target correnti nel forecast operativo & Artefatto di feature senza target, preflight e controlli sugli artefatti Q \\
+GP monitorato non ancora concluso usato come evidenza & Settlement richiesto e ordine dal registry \\
+Confusione fra prove vere, legacy e sintetiche & Riconciliazione e quarantena \\
+\end{longtable}
+\endgroup
+}
+
+Usare la qualifica di Monza dell'anno prima per prevedere Monza di quest'anno può essere lecito. Usare la qualifica del GP corrente non lo è. La regola riguarda \textbf{quando l'informazione è disponibile}, non soltanto il nome della colonna.
+
+\subsection{Le qualificazioni necessarie}\label{le-qualificazioni-necessarie}
+
+\textbf{1. Event holdout non implica training cronologico.} Il generatore generico mette nel train tutti gli eventi non selezionati, anche quelli successivi. Il season holdout generico fa lo stesso con le stagioni non escluse. Sono split senza sovrapposizione dei gruppi, ma non garantiscono da soli una simulazione del futuro. Per questa affermazione bisogna usare walk-forward, gli split prospettici dedicati o un dataset già ristretto alle sole stagioni precedenti.
+
+\textbf{2. \code{uniform} non filtra da solo il futuro.} Il modulo dei pesi assume che il caller abbia fornito un train corretto. Le altre policy fanno un filtro temporale aggiuntivo. I pesi non sostituiscono la validazione dello split.
+
+\textbf{3. L'ordine deve essere corretto.} Se manca \code{event\_order}, alcune utility offline usano l'ordine di comparsa nel dataset. Un file riordinato male può quindi compromettere la cronologia. Il monitoring è più rigido: usa il registry e blocca ordini non validi o duplicati.
+
+\textbf{4. Lo storico offline non è una ricostruzione perfetta delle versioni pubblicate nel tempo.} I raw FastF1 possono essere scaricati o corretti dopo l'evento. Conservare snapshot e timestamp di disponibilità renderebbe più forte una dimostrazione point-in-time; il solo ordine dei GP non ricostruisce tutte le revisioni del provider.
+
+\textbf{5. La popolazione offline viene costruita dai target Q.} Serve per il dataset supervisionato, ma non dimostra che quel roster sarebbe stato noto a FP1. Il monitoring risolve invece una entry list pre-Q. La parità tra popolazione di ricerca e popolazione servita è un controllo separato.
+
+\textbf{6. Scoperta retrospettiva e prova prospettica sono distinte.} Scegliere feature e iperparametri dopo molti backtest può adattare il progetto agli stessi dati anche senza una colonna di target nel modello. Per questo il repository conserva policy congelate e osservazioni successive separate.
+
+\subsection{Limite sul momento esatto di pubblicazione}\label{limite-sul-momento-esatto-di-pubblicazione}
+
+L'orchestratore blocca un nuovo forecast se \textbf{all'istante del tick} Q risulta già iniziata. Il controllo di basso livello \code{assert\_pre\_qualifying\_window\_artifacts()} verifica la presenza locale di giri/metadata Q, non il tempo attuale rispetto al calendario. Non c'è in quel punto un secondo controllo del calendario immediatamente prima del salvataggio finale dopo download e training.
+
+Negli artefatti locali dell'Hungarian Grand Prix 2026 compare una previsione creata alle \textbf{14:01:53 UTC del 25 luglio}, mentre lo snapshot di calendario indica inizio Q alle \textbf{14:00 UTC}. Questo non dimostra che il modello abbia letto i target Q. Dimostra però che \textbf{isolamento dei target e pubblicazione strettamente prima dell'inizio di Q non sono la stessa garanzia}, e quella previsione non documenta da sola una pubblicazione pre-Q in senso rigoroso.
+
+Per rafforzare il contratto servono una deadline verificata anche al commit, un margine di esecuzione, timestamp di disponibilità delle fonti e una classificazione esplicita dei forecast tardivi. Le verifiche presenti difendono molti percorsi di leakage; non giustificano dire «nessun leakage possibile in ogni scenario».
+
+\section{Valutazione e risultati}\label{valutazione-e-risultati}
+
+\subsection{Quanto è grande il dataset}\label{quanto-uxe8-grande-il-dataset}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}lrr@{}}
+\toprule\noalign{}
+Stagione & Eventi selezionati & Righe, includendo i tre checkpoint \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+2023 & 14 & 840 \\
+2024 & 12 & 714 \\
+2025 & 18 & 1.080 \\
+Totale & 44 & 2.634 \\
+\end{longtable}
+\endgroup
+}
+
+Ci sono 878 righe per checkpoint, 15 righe complessive con gap target mancante, nessun duplicato sulla chiave stagione/evento/checkpoint/pilota nel file verificato. Le 15 assenze corrispondono a cinque righe pilota/evento senza gap, ripetute nei tre checkpoint.
+
+Il preset \code{conventional} è una lista esplicita di eventi per le stagioni supportate. \textbf{Non significa che siano stati inclusi tutti i GP convenzionali di ciascun anno.} Il report di costruzione registra 44 eventi richiesti e 44 riusciti; questo non misura la copertura rispetto all'intero calendario.
+
+Il numero realmente limitante per la generalizzazione è soprattutto quello dei weekend, non soltanto quello delle righe. I piloti dello stesso evento condividono condizioni e gli anni possono avere regimi differenti.
+
+\subsection{Protocolli da non confondere}\label{protocolli-da-non-confondere}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Protocollo
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Che cosa misura
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Limite principale
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Event holdout & Generalizzazione a eventi esclusi dal train & Può usare altri eventi successivi \\
+Season holdout generico & Generalizzazione a una stagione esclusa & Va vincolato esplicitamente al passato \\
+Walk-forward & Evento futuro rispetto alla storia di ogni fold & Scelte progettuali possono essere retrospettive \\
+Valutazione di policy su artefatti & Profilo congelato applicato a predizioni salvate & Dipende dalla corretta provenienza degli artefatti \\
+True prospective replay & Riaddestramento evento per evento su storia lecita & Rimane una ricostruzione storica \\
+Monitoring prospettico & Forecast conservato e valutato in seguito & Richiede prova temporale e integrità delle fonti \\
+\end{longtable}
+\endgroup
+}
+
+Nel walk-forward principale, 44 eventi meno 5 iniziali danno 39 fold. La crescita del train è deliberata: simula un sistema che dispone progressivamente di più storia.
+
+\subsection{Metriche}\label{metriche}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Metrica
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Interpretazione
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+MAE gap & Media di \code{abs(predetto - vero)} in secondi \\
+RMSE gap & Radice della media dell'errore quadratico; penalizza di più gli errori grandi \\
+Median absolute error & Errore mediano; meno influenzato da pochi eventi estremi \\
+Mean absolute position error & Numero medio di posizioni sbagliate \\
+Spearman & Concordanza dell'ordine, mediata fra eventi \\
+\code{top\_3/5/10\_accuracy} & In questo codice: quota dei veri top-k ritrovata nei top-k predetti \\
+\code{q3\_accuracy} & Correttezza dell'indicatore Q3 derivato dal ranking \\
+\end{longtable}
+\endgroup
+}
+
+Il nome \code{top\_k\_accuracy} non indica l'ordine esatto dei primi k. Se i veri primi tre sono A/B/C e si prevedono B/A/C, questa metrica vale 100\%, pur sbagliando il vincitore e due posizioni.
+
+ROC-AUC, log loss, Brier score e calibrazione delle probabilità Q3 sono obiettivi sensati per un classificatore futuro, ma non sono le metriche di un classificatore probabilistico già presente. Kendall tau compare negli obiettivi iniziali, non nel calcolatore corrente delle metriche base.
+
+MAE/RMSE sono aggregate sulle righe valutabili; Spearman e top-k vengono calcolate per evento e poi mediate. Questa differenza di ponderazione può spiegare perché medie lette in report diversi non coincidano esattamente.
+
+\subsection{Risultato retrospettivo principale}\label{risultato-retrospettivo-principale}
+
+Confronto allineato dopo FP3, stessa Random Forest e gruppo \code{base\_plus\_relative}, \textbf{774 righe su 39 eventi}:
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Training
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+MAE gap
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Uniform & 0,9199 s \\
+\code{current\_season\_only\_with\_prior} & 0,7291 s \\
+Differenza candidata \ensuremath{-} uniform & \ensuremath{-}0,1908 s, circa \ensuremath{-}20,7\% \\
+\end{longtable}
+\endgroup
+}
+
+Fonte: \code{season\_aware\_validation\_summary.json}. Questo è il confronto fra \textbf{candidati fissi}, non la prestazione garantita della policy pubblicata.
+
+Il report di stabilità indica miglioramento nel 48,7\% degli eventi; circa il 73,1\% del beneficio totale proviene dai tre eventi più favorevoli. Nel 2023 non c'è miglioramento, nel cold start l'evidenza è debole. Questi dettagli rendono il risultato più informativo della sola media.
+
+\subsection{Policy congelate valutate su artefatti}\label{policy-congelate-valutate-su-artefatti}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.2727}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3636}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3636}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Separazione dichiarata dai report
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+FP3 static
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+FP3 season-aware frozen
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Storia 2023 / valutazione 2024 & 0,946 s & 0,951 s \\
+Storia 2023-2024 / valutazione 2025 & 0,788 s & 0,528 s \\
+\end{longtable}
+\endgroup
+}
+
+Queste righe provengono dalla \textbf{valutazione di policy sui risultati salvati}. La parola \emph{frozen} riguarda il profilo decisionale. Non bisogna raccontarle come prova che un unico estimator allenato una sola volta prima della stagione abbia necessariamente prodotto tutti quei valori.
+
+\subsection{Replay con vero riaddestramento}\label{replay-con-vero-riaddestramento}
+
+Nei report di true replay, static, guarded e season-aware producono la stessa MAE FP3: circa 0,946 s sul 2024 e 0,788 s sul 2025. Non sono emerse selezioni live della candidata nei due replay originali.
+
+Un audit ha distinto quattro cose: candidata allenata, predizione conservata, evidenza precedente disponibile e candidata selezionata. In una versione del percorso, le predizioni della candidata non selezionata non venivano conservate come storia utile, impedendo di accumulare le prove richieste dai gate. È stata aggiunta persistenza shadow diagnostica, senza riscrivere il risultato originale delle policy.
+
+Con la storia shadow, il report di governance rileva eleggibilità controfattuale su 2 eventi del test 2024 e 13 del test 2025. \textbf{Controfattuale} significa «la regola avrebbe potuto selezionarla usando questa storia», non «la produzione l'ha realmente selezionata».
+
+Perciò il risultato operativo resta conservativo: \code{retain\_static\_policy} / \code{candidate\_requires\_more\_live\_prospective\_evidence}, secondo il livello del report.
+
+\subsection{Come difendere i numeri}\label{come-difendere-i-numeri}
+
+Per ogni risultato bisogna poter indicare: target, checkpoint, eventi, righe valutate, trattamento dei mancanti, split, candidato/policy, fonte e natura retrospettiva o prospettica. Un buon confronto usa le stesse chiavi pilota/evento e lo stesso denominatore.
+
+I numeri qui riportati sono stati \textbf{letti dagli artefatti esistenti}, non rigenerati allenando tutte le varianti durante la scrittura della guida. Dopo modifiche alle feature, confrontare codice corrente e vecchi report richiede un rebuild tracciato.
+
+\section{Champion, shadow e governance}\label{champion-shadow-e-governance}
+
+Un \textbf{modello} è una funzione allenata. Una \textbf{policy} decide quale metodo usare in una certa situazione. Un \textbf{champion} è il metodo di riferimento selezionato dalla policy. Una \textbf{shadow prediction} è calcolata e conservata per valutarla, ma non determina l'output operativo.
+
+\subsection{Le modalità di selezione}\label{le-modalituxe0-di-selezione}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Modalità
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Idea
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\code{static} & Metodo fissato per checkpoint \\
+\code{nested} & Scelta usando evidenza di fold precedenti \\
+\code{stabilized\_nested} & Richiede quantità minima di storia e margine di miglioramento \\
+\code{stabilized\_nested\_guarded} & Aggiunge vincoli, tra cui il divieto di passare a baseline di passo in FP3 \\
+\code{season\_aware\_nested\_guarded} & Ammette una candidata temporale specifica con ulteriori gate \\
+\end{longtable}
+\endgroup
+}
+
+Nel progetto \emph{nested} identifica questo meccanismo di selezione prior-only. Non va confuso automaticamente con una ricerca esaustiva di iperparametri tramite nested cross-validation classica.
+
+La policy statica configurata è:
+
+\begin{CodeBlock}
+FP1: robust_best_push_lap
+FP2: robust_theoretical_best_lap
+FP3: Random Forest / base_plus_relative
+\end{CodeBlock}
+
+I checkpoint iniziali hanno segnali più incerti. La scelta di baseline trasparenti è coerente con l'evidenza che più complessità non produce necessariamente più accuratezza in FP1/FP2.
+
+\subsection{Gate della candidata stagionale}\label{gate-della-candidata-stagionale}
+
+Richiedono:
+
+\begin{itemize}
+\tightlist
+\item
+  checkpoint FP3;
+\item
+  identità esatta della candidata;
+\item
+  almeno 5 eventi precedenti della stagione corrente;
+\item
+  almeno 5 fold precedenti utili;
+\item
+  almeno 100 predizioni precedenti allineate;
+\item
+  miglioramento MAE di almeno 0,05 s rispetto al riferimento sul confronto previsto.
+\end{itemize}
+
+La soglia di cinque eventi nel training e quella nei gate hanno ruoli differenti: una decide \textbf{quali righe allenano il modello}, l'altra \textbf{quando le prove permettono una selezione}. Il margine di 0,05 s riduce cambi frequenti per vantaggi piccoli; non è un p-value o un test statistico di significatività.
+
+\subsection{Protocollo corrente}\label{protocollo-corrente}
+
+\code{season\_2026\_v1} registra stagione monitorata, stagioni storiche, checkpoint, identità di default/candidata, configurazioni e fingerprint. Il forecast operativo persiste tre ruoli:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \code{observed\_live\_policy}: Random Forest uniform;
+\item
+  \code{uniform\_default\_shadow}: riferimento diagnostico;
+\item
+  \code{season\_aware\_weighted\_candidate\_shadow}: candidata diagnostica.
+\end{enumerate}
+
+Il codice che costruisce il ruolo live prende esplicitamente \code{source["static"]}. Anche se la candidata passa un controllo di eleggibilità, questo non la promuove automaticamente nel percorso operativo corrente.
+
+Congelare un protocollo significa poter confrontare in seguito la decisione con regole dichiarate prima dei risultati. L'hash ne verifica la coerenza interna, ma non sostituisce il controllo che configurazione effettivamente passata al training, versione del codice e manifest corrispondano al contratto congelato. Il training riceve ancora un \code{ModelConfig}: cambiare file di configurazione non va trattato come una modifica irrilevante.
+
+\section{Incertezza e conformal prediction}\label{incertezza-e-conformal-prediction}
+
+Una previsione puntuale dice «0,8 s». Un intervallo dice, per esempio, «da \ensuremath{-}0,1 a 1,7 s secondo questo metodo di calibrazione». Il secondo descrive variabilità attesa degli errori, non modifica il ranking puntuale.
+
+Nei backtest sono presenti tre metodi:
+
+\begin{itemize}
+\tightlist
+\item
+  \code{residual\_std}: semiampiezza circa \code{1,64 x deviazione\_standard\_residui};
+\item
+  \code{conformal}: quantile dei residui assoluti precedenti;
+\item
+  \code{conformal\_predicted\_gap\_bucket}: quantile condizionato a gruppi scelti dal gap \textbf{predetto}.
+\end{itemize}
+
+\subsection{Meccanismo dei quantili}\label{meccanismo-dei-quantili}
+
+Per ogni previsione corrente si raccolgono errori fuori campione precedenti:
+
+\[\begin{aligned} r_i&=\lvert y_i-\widehat{y}_i\rvert,\\q&=\operatorname{Quantile}_{0{,}90}(r_{\mathrm{precedenti}}),\\I&=[\widehat{y}-q,\;\widehat{y}+q].\end{aligned}\]
+
+Il codice usa \code{quantile(..., interpolation="higher")}, con almeno 20 residui nel gruppo selezionato. Se manca storia sufficiente, l'intervallo rimane assente.
+
+I bucket distinguono gap predetti fino a 0,5 s, 1,5 s, 3 s e oltre. Il fallback va dal gruppo più specifico - checkpoint, metodo e bucket - fino al pool globale. Se il gruppo ristretto è troppo piccolo, si usa un gruppo più ampio.
+
+Il bucket usa il valore predetto perché il gap vero del GP corrente è ancora sconosciuto. Scegliere la classe di calibrazione dal risultato reale sarebbe leakage. Nei report, il risultato reale viene usato successivamente per misurare copertura, non per scegliere la larghezza dell'intervallo.
+
+\subsection{Garanzie e limiti}\label{garanzie-e-limiti}
+
+La conformal prediction formale può fornire garanzie di copertura sotto ipotesi appropriate e con il corretto quantile a campione finito; si veda \href{https://arxiv.org/abs/2107.07511}{Angelopoulos e Bates, introduzione alla conformal prediction}. La serie temporale F1 cambia regime, e il quantile empirico implementato non coincide automaticamente con un protocollo split-conformal completo con correzione finita.
+
+Perciò è corretto parlare di \textbf{intervalli empirici da residui precedenti, ispirati alla calibrazione conformal}, e verificarne la copertura effettiva. «90\% nominale» non significa «90\% garantito per ogni pilota, circuito e condizione». Intervalli molto larghi possono coprire molti risultati restando poco utili.
+
+Un estremo inferiore negativo è possibile perché l'intervallo è simmetrico e non impone automaticamente il vincolo fisico del gap. Clippare a zero cambierebbe il metodo e richiederebbe una nuova valutazione.
+
+\textbf{Stato operativo:} il forecast corrente del monitoring non richiama il calcolo degli intervalli. Nel JSON locale dell'evento esaminato \code{uncertainty\_method} è \code{null} e gli intervalli risultano non disponibili. La UI sa rappresentarli, ma il supporto di schema/UI non dimostra che vengano prodotti dal modello live.
+
+\section{Workflow di un weekend}\label{workflow-di-un-weekend}
+
+\subsection{Prima della qualifica}\label{prima-della-qualifica}
+
+Il workflow \code{monitoring-before-qualifying}:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  risolve l'identità del GP e il round dal calendario;
+\item
+  acquisisce FP1, FP2, FP3;
+\item
+  risolve il roster e la parità delle identità;
+\item
+  costruisce feature operative FP3 senza target;
+\item
+  registra l'evento e la provenienza;
+\item
+  esegue il preflight;
+\item
+  crea o riutilizza il forecast;
+\item
+  esporta gli artefatti dashboard.
+\end{enumerate}
+
+\textbf{Preflight} è il controllo prima dell'operazione: protocollo, registry, ordine, file di feature, fingerprint, colonne consentite e stato degli artefatti. Fallire un controllo obbligatorio impedisce la creazione della previsione.
+
+Le feature operative si trovano in un file come:
+
+\begin{CodeBlock}
+data/processed/monitoring/2026/<evento>/monitoring_fp3_features.parquet
+\end{CodeBlock}
+
+\subsection{Dopo la qualifica}\label{dopo-la-qualifica}
+
+\code{monitoring-after-qualifying}:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  acquisisce Q;
+\item
+  verifica l'identità raw;
+\item
+  costruisce o riutilizza target separati;
+\item
+  effettua il settlement del forecast preesistente;
+\item
+  verifica la parità raw\ensuremath{\rightarrow}target;
+\item
+  controlla integrità e popolazioni;
+\item
+  esporta la dashboard aggiornata.
+\end{enumerate}
+
+\textbf{Settlement} significa associare alla previsione conservata l'esito osservato e calcolare gli errori. Non è un riaddestramento e non corregge la previsione retroattivamente.
+
+Il join usa chiavi evento/checkpoint/pilota normalizzato, non l'ordine delle righe. Se due file ordinano i piloti diversamente, il risultato resta corretto. Un semplice affiancamento per indice sarebbe pericoloso.
+
+\subsection{Copertura parziale}\label{copertura-parziale}
+
+Si distinguono piloti previsti, piloti con target e piloti valutabili. Un pilota previsto senza target rimane nel registro, con motivo di esclusione; non si imputa il suo risultato per migliorare la completezza apparente. Le righe non valutabili sono escluse dalle metriche e dall'evidenza futura.
+
+\code{SETTLED\_PARTIAL\_COVERAGE} è uno stato esplicito. Un MAE su 19 piloti non va raccontato come risultato su tutta la griglia se i mancanti sono proprio i casi più difficili. La copertura può avere un bias di selezione.
+
+\subsection{Calendario, disponibilità e dati validi}\label{calendario-disponibilituxe0-e-dati-validi}
+
+Sono tre fatti diversi:
+
+\begin{CodeBlock}
+la sessione dovrebbe essere terminata
+-> il provider ha pubblicato dati
+-> i dati superano i controlli necessari
+\end{CodeBlock}
+
+Il probe FastF1 controlla la presenza dei giri e, per Q, un minimo di righe di risultati. È un controllo preliminare, non la certificazione completa del dataset. I controlli successivi su roster, identità e target restano necessari.
+
+Se Q è già iniziata senza un forecast, il normale orchestratore produce \code{forecast\_window\_missed}. L'intento è perdere la previsione piuttosto che creare a posteriori un risultato presentato come precedente. I limiti di deadline descritti nella sezione 11 spiegano dove rafforzare questo comportamento.
+
+\section{Scheduler, tempi e concorrenza}\label{scheduler-tempi-e-concorrenza}
+
+\subsection{I quattro orologi da ricordare}\label{i-quattro-orologi-da-ricordare}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3000}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.4000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Parametro
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Valore predefinito
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Significato
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Tick scheduler & 300 s & Attesa fra il completamento di un tick e il successivo \\
+Ritardo iniziale & 10 s & Attesa dopo l'avvio del processo \\
+Refresh frontend & 60 s & Richiesta di aggiornamento dei dati visualizzati \\
+Timeout HTTP frontend & 5 s & Tempo massimo di attesa di una singola richiesta API \\
+\end{longtable}
+\endgroup
+}
+
+Il minimo configurabile per l'intervallo scheduler è 60 s. \textbf{Non esiste una finestra di idempotenza di cinque secondi.} La frequenza, il timeout e l'idempotenza risolvono problemi diversi.
+
+\subsection{Com'è implementato}\label{comuxe8-implementato}
+
+FastAPI avvia \code{AutopilotScheduler} nel proprio lifespan e lo arresta alla chiusura. Lo scheduler crea un task asincrono con un loop sequenziale:
+
+\begin{CodeBlock}
+attendi ritardo iniziale
+finché non è richiesto stop:
+    esegui un tick completo
+    registra il risultato
+    attendi 300 secondi o stop
+\end{CodeBlock}
+
+Il tick esegue la stessa funzione applicativa usata dalla CLI, senza chiamare un endpoint HTTP di mutazione. È un'operazione \emph{one-shot}: osserva lo stato, effettua al massimo una transizione principale del workflow e termina.
+
+Questo è \textbf{fixed delay}, non un cron esatto al minuto 00/05/10. Se un tick dura 40 s, il successivo parte circa 340 s dopo l'inizio del precedente. La durata del lavoro entra nella cadenza effettiva.
+
+\subsection{Perché un thread}\label{perchuxe9-un-thread}
+
+FastF1, pandas e il training sono chiamate sincrone. \code{asyncio.to\_thread()} sposta il tick su un thread per evitare di eseguirlo direttamente sull'event loop dell'API. Le richieste web possono continuare a essere gestite.
+
+Non è un isolamento completo: API e lavoro ML condividono processo, memoria e CPU. Un carico eccessivo o un problema di processo può colpirli entrambi. Per il volume corrente è una soluzione semplice; un worker separato sarebbe più robusto a scala maggiore.
+
+\subsection{Due livelli di esclusione reciproca}\label{due-livelli-di-esclusione-reciproca}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \code{asyncio.Lock} evita due tick sovrapposti nello stesso scheduler.
+\item
+  \code{fcntl.flock(LOCK\_EX | LOCK\_NB)} protegge il writer che entra attraverso l'orchestratore sul filesystem condiviso.
+\end{enumerate}
+
+Il secondo lock è \textbf{advisory}: protegge processi che rispettano lo stesso protocollo. Una funzione invocata direttamente che non acquisisce quel lock non viene magicamente bloccata. Il design operativo richiede un solo writer; non bisogna lanciare contemporaneamente comandi manuali di mutazione aggirando l'orchestratore.
+
+Il file \code{autopilot.lock} conserva PID, hostname, run ID e timestamp, ma decide il lock del sistema operativo, non l'età del testo nel file. Se il processo muore il lock viene rilasciato dal sistema; possono restare metadata vecchi. Il processo successivo può acquisire il lock e annotare \code{acquired\_after\_stale\_metadata} senza eliminare forzatamente file.
+
+\subsection{Abilitare il loop e abilitare le scritture sono due cose}\label{abilitare-il-loop-e-abilitare-le-scritture-sono-due-cose}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Variabile
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Scopo
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\code{APEX\_PULSE\_AUTOPILOT\_SCHEDULER\_ENABLED} & Avviare il loop periodico \\
+\code{APEX\_PULSE\_AUTOPILOT\_ENABLED} & Consentire al tick operativo di mutare lo stato \\
+\end{longtable}
+\endgroup
+}
+
+Con scheduler acceso e mutazioni spente, il risultato è \code{AUTOPILOT\_DISABLED}. Questo permette di verificare il funzionamento del loop prima di autorizzare il lavoro sui dati. Non è una scansione completa della disponibilità: il percorso disabilitato esce prima delle normali azioni.
+
+\subsection{Grace period e retry}\label{grace-period-e-retry}
+
+La configurazione dell'orchestratore definisce:
+
+\begin{itemize}
+\tightlist
+\item
+  FP1/FP2: 5 minuti di margine dopo la fine stimata;
+\item
+  FP3: 15 minuti;
+\item
+  Q: 15 minuti;
+\item
+  retry suggerito: 10 minuti;
+\item
+  permanenza del GP selezionato dopo Q: 24 ore;
+\item
+  controllo suggerito a settlement concluso: 360 minuti.
+\end{itemize}
+
+Le durate di fallback sono 60 minuti per le libere e 90 per Q quando manca una fine esplicita. Sono ipotesi operative conservative, non affermazioni sul tempo effettivo di ogni sessione.
+
+\textbf{Dettaglio del codice:} \code{next\_check} dell'orchestratore è metadata di raccomandazione. Il loop scheduler corrente attende sempre il proprio intervallo configurato; non usa quel campo per spostare realmente il prossimo tick a dieci minuti o sei ore. Non c'è backoff esponenziale né jitter implementato nel loop.
+
+\subsection{Errori, stop e riavvio}\label{errori-stop-e-riavvio}
+
+Un errore del tick viene registrato come \code{SCHEDULER\_TICK\_ERROR}, con contatore di errori consecutivi; il loop prova ancora al ciclo seguente. Un errore inatteso del loop stesso produce \code{SCHEDULER\_LOOP\_ERROR} e può fermarlo: i due casi non sono equivalenti.
+
+Lo stop interrompe l'attesa e attende la conclusione di un tick già avviato. Non interrompe forzatamente un thread che sta allenando o scaricando dati. Un provider bloccato a lungo può quindi ritardare lo shutdown; non esiste in questo scheduler un timeout generale che uccide il training.
+
+Il riavvio ricrea il loop ma il tick legge gli artefatti persistenti per capire se il forecast o il settlement esistono già. Non dipende esclusivamente da una variabile Python rimasta in memoria.
+
+\subsection{Stati principali}\label{stati-principali}
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[x=1cm,y=1cm,>=Latex,
+ state/.style={draw=ink!45,fill=paper,rounded corners=3pt,align=center,text width=3.3cm,minimum height=0.75cm,font=\sffamily\small,inner sep=5pt},
+ terminal/.style={state,fill=accent!9,draw=accent!60},
+ blocked/.style={state,text width=2.5cm,fill=gold!12,draw=gold!75},
+ edge/.style={->,line width=0.7pt,draw=ink!70},
+ note/.style={font=\sffamily\scriptsize,align=left,fill=white,inner sep=2pt}]
+\node[circle,fill=ink,inner sep=3pt] (start) at (0,0.8) {};
+\node[state] (wait) at (0,0) {Attesa FP};
+\node[state] (pending) at (0,-1.4) {Dati FP pending};
+\node[state] (ready) at (0,-2.8) {Pronto forecast};
+\node[state] (forecast) at (0,-4.2) {Forecast disponibile};
+\node[state] (waitq) at (0,-5.6) {Attesa Q};
+\node[state] (pendingq) at (0,-7.0) {Dati Q pending};
+\node[state] (settle) at (0,-8.4) {Pronto settlement};
+\node[terminal] (done) at (-2.7,-10) {Settled};
+\node[terminal] (partial) at (2.7,-10) {Settled parziale};
+\node[blocked] (no) at (4.6,0) {Non supportato};
+\node[blocked] (late) at (-4.6,-1.4) {Bloccato};
+\draw[edge] (start)--(wait);
+\draw[edge] (wait)--node[note,right]{orario trascorso}(pending);
+\draw[edge] (pending)--node[note,right]{FP3 disponibile;\\controlli superati}(ready);
+\draw[edge] (ready)--node[note,right]{previsione persistita}(forecast);
+\draw[edge] (forecast)--(waitq);
+\draw[edge] (waitq)--node[note,right]{orario Q trascorso}(pendingq);
+\draw[edge] (pendingq)--node[note,right]{Q disponibile; target validi}(settle);
+\draw[edge] (settle)--(done);
+\draw[edge] (settle)--(partial);
+\draw[edge] (wait)--node[note,above]{formato non\\convenzionale}(no);
+\draw[edge] (pending)--node[note,above]{finestra pre-Q\\persa}(late);
+\foreach \n in {done,partial}{
+  \node[circle,draw=ink,inner sep=4pt,below=0.5cm of \n] (end-\n) {};
+  \fill[ink] (end-\n) circle (2pt);
+  \draw[edge] (\n)--(end-\n);
+}
+\end{tikzpicture}
+\caption{Macchina a stati del weekend, con attese, disponibilità e stati terminali.}
+\label{fig:weekend}
+\end{figure}
+
+Nel codice ci sono stati distinti per FP1/FP2/FP3, grace period, errori transitori e contesa del lock. Il diagramma raggruppa gli stati per facilitarne la spiegazione.
+
+\section{Idempotenza, persistenza e integrità}\label{idempotenza-persistenza-e-integrituxe0}
+
+\subsection{Idempotenza}\label{idempotenza}
+
+Un'operazione è idempotente rispetto a un effetto se ripeterla lascia lo stesso effetto finale:
+
+\[F\bigl(F(\mathrm{stato})\bigr)=F(\mathrm{stato}).\]
+
+Esempio: al primo tick il GP riceve un forecast. Al secondo tick, a parità di artefatti, il sistema vede che esiste e lo riutilizza. Non deve creare un secondo ranking diverso solo perché il timer è scattato di nuovo.
+
+Non tutto rimane identico byte per byte: run ID, timestamp, log e contatori operativi cambiano. L'idempotenza riguarda soprattutto \textbf{l'effetto di business}, cioè forecast e settlement canonici, non l'assenza di nuove righe di log.
+
+Le chiavi evento/protocollo/checkpoint/pilota identificano il contenuto logico. Il \code{run\_id} distingue tentativi di esecuzione, non è da solo una chiave di deduplicazione della previsione.
+
+\subsection{Lock, idempotenza e atomicità}\label{lock-idempotenza-e-atomicituxe0}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Concetto
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Domanda a cui risponde
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Lock & Due processi possono scrivere contemporaneamente? \\
+Idempotenza & Se riprovo, duplico l'effetto? \\
+Atomicità & Posso osservare soltanto una parte dell'aggiornamento? \\
+Durabilità & Dopo un crash o redeploy, ritrovo il risultato? \\
+Integrità & Il contenuto conserva significato e coerenza attesi? \\
+\end{longtable}
+\endgroup
+}
+
+Un lock non risolve da solo un crash a metà scrittura. Una funzione idempotente non rende atomici cinque file differenti. Un hash non impedisce al disco di riempirsi.
+
+\subsection{Cosa è atomico e cosa non lo è}\label{cosa-uxe8-atomico-e-cosa-non-lo-uxe8}
+
+Gli snapshot JSON dello scheduler e dell'orchestratore vengono scritti su un file temporaneo e pubblicati tramite \code{os.replace}. Sullo stesso filesystem questo evita di esporre al lettore un JSON parzialmente scritto nel percorso finale. È una garanzia sul singolo file, non una transazione globale né, da sola, una prova di durabilità contro ogni guasto hardware.
+
+I ledger Parquet/CSV di monitoring usano invece una concatenazione logica: leggono il file precedente, aggiungono righe e riscrivono il risultato. Le varie tabelle - forecast, shadow, selection log, training manifest, audit - sono salvate in sequenza. Anche il bundle dashboard viene pubblicato file per file.
+
+Pertanto:
+
+\begin{itemize}
+\tightlist
+\item
+  \emph{append-only} descrive il contratto sulle righe storiche, non un append fisico transazionale di tutti i file;
+\item
+  un crash fra due scritture può lasciare artefatti parzialmente aggiornati;
+\item
+  la UI può leggere versioni diverse durante la pubblicazione di più file;
+\item
+  i controlli devono individuare incongruenze e il recupero può richiedere un operatore;
+\item
+  non è corretto dichiarare semantica distribuita \textbf{exactly-once} o proprietà ACID complete.
+\end{itemize}
+
+Un caso ulteriore: se il forecast viene salvato ma l'export dashboard fallisce, il tick successivo può vedere il forecast esistente e andare al percorso di attesa di Q. Non c'è una transazione unica che garantisca il riallineamento automatico di ogni artefatto derivato a quel punto.
+
+Una possibile evoluzione sarebbe usare transazioni SQLite/PostgreSQL per ledger e stati, oppure directory immutabili per run con un puntatore di versione pubblicato atomicamente. Sarebbe un cambiamento progettuale, non una proprietà già ottenuta con i file attuali.
+
+\subsection{Fingerprint e lineage}\label{fingerprint-e-lineage}
+
+Un fingerprint è un riassunto deterministico del contenuto. Se il contenuto cambia, ci si aspetta che cambi l'hash. Serve a confrontare input, configurazioni, forecast e risultati; non è cifratura e non è una firma digitale dell'autore.
+
+La \textbf{lineage} è la catena di provenienza:
+
+\begin{CodeBlock}
+fonte raw -> feature -> train consentito -> estimator/candidato
+-> forecast -> target validato -> settlement -> dato pubblicato
+\end{CodeBlock}
+
+Per un confronto fra candidati, famiglia, gruppo di feature e policy temporale devono coincidere con ciò che si dichiara. Un filename generico sovrascritto da un altro esperimento potrebbe altrimenti attribuire a \code{uniform} le predizioni di un training pesato. I moduli di lineage e rebuild verificano questi contratti e mantengono artefatti distinti.
+
+I fingerprint semantici per evento consentono di aggiungere un GP senza pretendere che l'hash dell'intero ledger resti identico. I controlli distinguono \code{UNCHANGED}, \code{VALID\_APPEND}, evento precedente mutato o mancante, cronologia invalida e cambi di invarianti statici.
+
+La baseline di integrità comprende anche il modeling dataset: aggiornarlo cambia un'invariante dello snapshot di produzione e richiede una transizione di versione esplicita. Non basta aggiungere nuovi dati in un file protetto e ignorare l'audit.
+
+\subsection{Immutabilità: garanzia applicativa}\label{immutabilituxe0-garanzia-applicativa}
+
+Le funzioni canoniche bloccano rigenerazioni di forecast validi e riusano settlement esistenti. Esistono percorsi particolari di riparazione della parità entry list, controllati e distinti dal normale retry. L'immutabilità non è un vincolo hardware WORM e non impedisce a chi ha accesso al filesystem di modificare i file: gli audit rilevano molte di queste modifiche.
+
+Gli observer di live validation registrano evidenza dopo il tick. Un loro errore non viene trasformato in un secondo tentativo della mutazione già conclusa. Inoltre un risultato di audit classificato come bloccante non è automaticamente un interruttore che spegne il processo: il runbook richiede la diagnosi e, dove necessario, la disabilitazione delle scritture.
+
+\section{API, frontend e deployment}\label{api-frontend-e-deployment}
+
+\subsection{Separazione fra calcolo e consultazione}\label{separazione-fra-calcolo-e-consultazione}
+
+La dashboard non chiama FastF1 e non allena modelli. FastAPI legge gli artefatti da una directory configurata, li valida e restituisce JSON. Il frontend li visualizza.
+
+Questo evita che una visita alla pagina scateni un training, semplifica cache e controllo degli accessi e conserva una provenienza comune per UI e report. La semantica ML resta nei workflow Python.
+
+Gli endpoint pubblici sono di lettura. Tuttavia \textbf{il processo che ospita l'API non è interamente privo di scritture}: lo scheduler può scrivere in background se abilitato. «API read-only» descrive il contratto delle richieste HTTP, non tutte le attività del processo.
+
+\subsection{Endpoint principali}\label{endpoint-principali}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Percorso
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Risposta
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\code{/api/v1/health} & Stato del servizio e degli artefatti dashboard \\
+\code{/api/v1/autopilot-status} & Stato scheduler/orchestratore e ultimo tick \\
+\code{/api/v1/live-validation-status} & Evidenza operativa della validazione live \\
+\code{/api/v1/dashboard/manifest} & Manifest degli artefatti \\
+\code{/api/v1/dashboard/current-event} & Evento rappresentato e lifecycle \\
+\code{/api/v1/dashboard/current-event/forecast} & Previsione \\
+\code{/api/v1/dashboard/current-event/practice-status} & Disponibilità delle libere \\
+\code{/api/v1/dashboard/current-event/settlement} & Confronto previsione/target \\
+\code{/api/v1/dashboard/historical-monitoring} & Storia di monitoring, con separazioni di validità \\
+\code{/api/v1/dashboard/model-summary} & Contesto del modello e risultati \\
+\code{/api/v1/dashboard/bundle} & Insieme degli artefatti letti dal servizio \\
+\end{longtable}
+\endgroup
+}
+
+L'API distingue 503 per artefatti non ancora esportati, 404 per un artefatto richiesto mancante e 500 per un artefatto non valido. Gli errori hanno codice stabile e messaggio controllato, senza esporre il percorso assoluto locale.
+
+\code{/health} può rispondere che il servizio è vivo segnalando artefatti assenti o invalidi. \textbf{Liveness non è readiness del modello.} Per capire se il sistema può fare un forecast occorrono anche runtime, protocollo, dataset e preflight.
+
+CORS accetta origini esplicite e richieste GET, senza credenziali. È una regola per i browser, non autenticazione del client o barriera per tutti i client HTTP. Il sistema non espone un endpoint pubblico di training o settlement.
+
+\subsection{Aggiornamento della UI}\label{aggiornamento-della-ui}
+
+Next.js usa richieste \code{cache: "no-store"}; l'API aggiunge \code{Cache-Control: no-cache} e metadata di generazione. Il componente di refresh chiama \code{router.refresh()} ogni 60 secondi, quando la tab è visibile, e al ritorno del focus/visibilità.
+
+Non è un websocket e non è streaming. Il refresh rilegge ciò che il backend ha già pubblicato. Il timeout di 5 secondi evita che una singola chiamata frontend rimanga in attesa indefinita; non annulla un training già attivo sul backend.
+
+La soglia generale di stale data è 180 minuti. Si guarda la data di generazione dell'artefatto, non soltanto l'ora in cui il browser l'ha scaricato. Un nuovo tick può aggiornare lo stato operativo senza produrre nuove previsioni.
+
+L'evento operativo selezionato dallo scheduler e l'ultimo evento con artefatti di previsione possono essere diversi. La UI mantiene questa distinzione per non presentare un vecchio ranking come forecast del prossimo GP.
+
+\subsection{Deployment e volume}\label{deployment-e-volume}
+
+L'architettura documentata usa backend Railway con Docker e frontend Vercel. Il Dockerfile usa Python 3.12, installa il pacchetto e avvia un utente non root. L'entrypoint inizializza il runtime e poi esegue il comando API.
+
+Con \code{APEX\_PULSE\_RUNTIME\_ROOT=/runtime}, le directory mutabili \code{data}, \code{reports} e \code{models} vengono collegate al volume persistente. Il codice rimane nell'immagine; dati e risultati devono sopravvivere a restart/redeploy.
+
+Un container con il solo codice non contiene automaticamente dataset e protocollo pronti. I comandi di export/import dello stato producono un bundle con inventario e fingerprint, controllano conflitti e mantengono una receipt di bootstrap. La cache FastF1 è distinta dagli artefatti essenziali al funzionamento.
+
+Il deployment va mantenuto a \textbf{un solo writer}. Aumentare repliche o worker API avvierebbe più scheduler e non costituisce una strategia di scalabilità supportata. A scala maggiore andrebbero separati worker, coordinamento e storage.
+
+I controlli di spazio riportano dimensione cache/runtime e warning intorno alla soglia configurata, 400 MB di default. Non eliminano automaticamente dati per liberare spazio. Un warning non risolve la saturazione del volume.
+
+\section{Qualità software e riproducibilità}\label{qualituxe0-software-e-riproducibilituxe0}
+
+\subsection{Separazione delle responsabilità}\label{separazione-delle-responsabilituxe0}
+
+La struttura divide acquisizione, feature, modelli/valutazione, monitoring, export e API. La CLI invoca funzioni applicative anziché duplicarne l'intera logica. \code{pathlib}, configurazioni YAML, type hint e dataclass rendono più espliciti percorsi e contratti.
+
+Molte funzioni di trasformazione ricevono e restituiscono dataframe senza rete. I provider di calendario e readiness, l'orologio e i workflow possono essere sostituiti nei test. È \textbf{dependency injection}: passare una dipendenza al componente invece di renderla inseparabile dalla sua implementazione reale.
+
+Per esempio, un calendario simulato e un clock controllato permettono di testare «FP3 appena finita ma dati assenti» senza aspettare un vero GP. È più forte di un test che verifica soltanto che una funzione venga chiamata.
+
+\subsection{Cosa provano i test esistenti}\label{cosa-provano-i-test-esistenti}
+
+La suite copre pulizia, feature, esclusione delle sessioni future, rolling senza target correnti, split, training, pesi temporali, source lineage, roster, isolamento dei target, mutazioni degli snapshot, riuso dei workflow, lock e lifecycle API.
+
+Il rehearsal a 14 transizioni usa stato temporaneo e provider indipendenti dalla rete. Verifica attese, disponibilità, forecast, ripetizione, settlement, copertura parziale e formati non supportati. Non dimostra che il provider pubblicherà dati puntuali in ogni GP reale.
+
+Per questa documentazione sono stati eseguiti \textbf{144 test}, tutti passati, selezionati da 12 file sulle aree descritte. Sono presenti \textbf{342 warning}, prevalentemente di compatibilità futura pandas. Non è stata rieseguita l'intera suite Python/frontend e non sono stati rigenerati tutti i backtest.
+
+Un test passa sotto gli input previsti: non dimostra assenza di bug o di drift. Un booleano \code{current\_event\_excluded\_from\_training=True} scritto in un manifest è più convincente se sostenuto dalle chiavi di training e da un test che tenta di violare il vincolo.
+
+\subsection{Riproducibilità}\label{riproducibilituxe0}
+
+Servono più elementi insieme:
+
+\begin{itemize}
+\tightlist
+\item
+  codice identificato da commit;
+\item
+  versioni delle dipendenze;
+\item
+  raw o snapshot degli input;
+\item
+  configurazioni;
+\item
+  ordine degli eventi e split;
+\item
+  seed casuale;
+\item
+  elenco delle feature;
+\item
+  policy temporale e distribuzione dei pesi;
+\item
+  predizioni fuori campione e metriche;
+\item
+  manifest e fingerprint coerenti.
+\end{itemize}
+
+Seed 42 stabilizza la casualità, ma da solo non garantisce gli stessi risultati con dati aggiornati, una diversa versione sklearn o una diversa selezione di feature.
+
+Il \code{pyproject.toml} usa intervalli di versione per le dipendenze Python; questo checkout non contiene un lock completo delle dipendenze Python. Il frontend ha un lockfile npm. Il Dockerfile usa un tag Python e dipendenze risolte in build, non una prova assoluta di riproducibilità byte-per-byte nel tempo.
+
+Il pacchetto dichiara Python \ensuremath{\geq}3.10, ma moduli operativi importano \code{datetime.UTC}, disponibile da Python 3.11. Il riferimento pratico coerente con il Dockerfile è \textbf{Python 3.12}; la dichiarazione minima del pacchetto andrebbe allineata o verificata esplicitamente.
+
+La \code{.gitignore} esclude dati, modelli, cache, report generati e configurazioni locali. Una clone del codice non equivale a una copia di tutti gli esperimenti locali: bisogna ricostruire gli artefatti o importare uno snapshot autorizzato.
+
+\subsection{Logging e osservabilità}\label{logging-e-osservabilituxe0}
+
+Gli output separano stato finale, azione considerata, azione eseguita, errori ritentabili, origine (\code{scheduler}, \code{manual}, \code{rehearsal}) e identificatori di esecuzione.
+
+La diagnosi può così distinguere:
+
+\begin{CodeBlock}
+loop fermo
+vs loop attivo ma scritture disabilitate
+vs provider senza dati
+vs input bloccati da integrità
+vs forecast concluso ma UI non ancora aggiornata
+\end{CodeBlock}
+
+La distinzione tra errore transitorio e permanente è utile, ma alcune classificazioni dipendono dal testo delle eccezioni. Un errore sconosciuto del probe può essere trattato come dati non ancora disponibili: i log e l'attenzione operativa restano necessari per evitare retry indefiniti.
+
+\subsection{Debito tecnico}\label{debito-tecnico}
+
+Il progetto è modulare per responsabilità, ma diversi file di governance/monitoring e la CLI sono molto grandi. Si tratta di debito di manutenzione, non di un esempio già perfetto di moduli piccoli. Un'evoluzione ragionevole è separare servizi applicativi, contratti degli artefatti e storage, conservando i test sui comportamenti prima del refactoring.
+
+Le feature group basate sui nomi sono semplici ma fragili ai rename. Schemi e manifest aiutano; un registro esplicito di feature con provenienza e disponibilità temporale renderebbe più forte il contratto.
+
+\section{Limiti e priorità di sviluppo}\label{limiti-e-priorituxe0-di-sviluppo}
+
+\subsection{Limiti del dominio e dei dati}\label{limiti-del-dominio-e-dei-dati}
+
+Non si osservano direttamente carburante, modalità motore/energia, assetto, temperature interne delle gomme o istruzioni del team. Nessuna feature corrente misura ERS reale, pressione freni o stato della batteria. Una futura analisi energetica pubblica andrebbe presentata come proxy.
+
+Pioggia, pista in evoluzione, bandiere, guasti e prove con gomme diverse possono alterare il legame libere\ensuremath{\rightarrow}qualifica. La regola push non risolve completamente queste differenze. Inoltre 44 weekend selezionati sono pochi per stimare con sicurezza generalizzazione e code dell'errore.
+
+Le osservazioni del team permettono confronti associativi. Non separano causalmente talento del pilota e qualità della vettura: piloti e team non sono assegnati casualmente, i programmi differiscono e mancano confondenti importanti.
+
+\subsection{Limiti implementativi che contano in interview}\label{limiti-implementativi-che-contano-in-interview}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Limite
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Conseguenza
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Target da minimo globale Q & Gap e ranking non equivalgono sempre alla classifica ufficiale \\
+Q3 derivata dal ranking & Nessuna probabilità calibrata o modello dedicato \\
+Live solo FP3 & Gli aggiornamenti FP1/FP2 sono capacità della pipeline di ricerca \\
+Nuovi GP non automaticamente uniti al train & Retraining non implica apprendimento automatico da tutti i settlement \\
+Intervalli non generati nel monitoring corrente & I risultati di incertezza dei backtest non sono automaticamente mostrati live \\
+Scritture multi-file non transazionali & Possibile stato parziale dopo crash \\
+Deadline non ricontrollata al salvataggio & Un job avviato in tempo può pubblicare tardi \\
+Provider e feature evolvono & Snapshot e report possono non corrispondere al codice nuovo \\
+Un solo writer & Scalabilità e disponibilità limitate \\
+Audit/fingerprint locali & Rilevazione e tracciabilità, non storage inviolabile \\
+\end{longtable}
+\endgroup
+}
+
+\subsection{Ordine di miglioramento proposto}\label{ordine-di-miglioramento-proposto}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{Target ufficiali e popolazione:} separare correttamente Q1/Q2/Q3, risultati e penalità; definire come trattare eliminati, DSQ e assenza di tempi; allineare training e serving.
+\item
+  \textbf{Contratto temporale operativo:} verificare deadline al salvataggio, tempi di disponibilità delle fonti e forecast tardivi; usare identità evento canoniche condivise.
+\item
+  \textbf{Ciclo supervised completo:} materializzare gli eventi nuovi validati nel dataset versionato, aggiornare intenzionalmente invarianti e protocollo, confrontare manifest prima/dopo.
+\item
+  \textbf{Persistenza e recupero:} transazioni o pubblicazione atomica per versione; stato di commit; recupero di export falliti senza rigenerare forecast.
+\item
+  \textbf{Riproducibilità:} lock delle dipendenze Python, versione dati/feature, compatibility matrix e documentazione aggiornata.
+\item
+  \textbf{Validazione ML:} altri eventi, valutazioni per regime, confronti appaiati e bootstrap per evento; policy congelate prima di nuova evidenza.
+\item
+  \textbf{Nuovi output:} classificatore Q3 calibrato su split temporali, ranking dedicato e intervalli effettivamente integrati nel forecast.
+\item
+  \textbf{Nuove fonti di segnale:} meteo, telemetria pubblica e push detector più sofisticato, mantenendo controlli point-in-time.
+\end{enumerate}
+
+Questo ordine privilegia correttezza delle etichette, integrità e valutazione prima di aggiungere un modello più complesso.
+
+\section{Comandi e dimostrazione}\label{comandi-e-dimostrazione}
+
+I comandi seguenti partono dalla radice del repository, in un ambiente di sviluppo. Costruzione dataset, training e report generano o aggiornano file locali: non vanno usati come semplici interrogazioni sul volume di produzione.
+
+\subsection{Installazione}\label{installazione}
+
+\begin{CodeBlock}
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+python -m f1_prediction.cli --help
+\end{CodeBlock}
+
+Risultato atteso: pacchetto disponibile e lista delle operazioni. Le dipendenze e la disponibilità rete determinano il tempo di prima installazione.
+
+\subsection{Un esempio minimo di ingestion}\label{un-esempio-minimo-di-ingestion}
+
+\begin{CodeBlock}
+python -m f1_prediction.cli load-session \
+  --season 2024 --event Monza --session FP2
+\end{CodeBlock}
+
+Risultato atteso: cache inizializzata, caricamento della sessione, file \code{data/raw/laps/2024/monza/fp2\_laps.parquet}, riepilogo di giri e piloti. Se il provider non risponde, un errore esplicito è un esito possibile; il progetto non incorpora i raw nel codice.
+
+\subsection{Dataset storico}\label{dataset-storico}
+
+\begin{CodeBlock}
+python -m f1_prediction.cli build-season-dataset \
+  --season 2023 --season 2024 --season 2025 \
+  --preset conventional
+
+python -m f1_prediction.cli dataset-report
+python -m f1_prediction.cli evaluate-baselines
+\end{CodeBlock}
+
+Risultato atteso: output raw/intermedi per evento, combinato in \code{data/processed/modeling/combined/modeling\_dataset.parquet}, report di qualità e metriche delle baseline. I numeri di questo documento descrivono lo snapshot esistente; un download futuro può produrre dati revisionati.
+
+\subsection{Training semplice e backtest cronologico}\label{training-semplice-e-backtest-cronologico}
+
+\begin{CodeBlock}
+python -m f1_prediction.cli train-tabular-models --test-season 2025
+
+python -m f1_prediction.cli backtest-tabular-models \
+  --strategy walk_forward \
+  --temporal-weighting uniform \
+  --min-events 10 --min-train-events 5
+\end{CodeBlock}
+
+Il primo esempio è temporalmente coerente sul dataset qui descritto, che termina nel 2025. Se il file contenesse anche stagioni successive, il generico season holdout richiederebbe una restrizione ulteriore del train.
+
+\code{--min-events 10} è un controllo sulla dimensione minima dell'intero dataset; \code{--min-train-events 5} stabilisce il numero minimo di eventi precedenti del primo fold. I due parametri non sono sinonimi.
+
+\subsection{Ablation e pesi temporali}\label{ablation-e-pesi-temporali}
+
+\begin{CodeBlock}
+python -m f1_prediction.cli ablation-backtest \
+  --strategy walk_forward \
+  --temporal-weighting uniform \
+  --min-events 10 --min-train-events 5
+
+python -m f1_prediction.cli ablation-backtest \
+  --strategy walk_forward \
+  --temporal-weighting current_season_only_with_prior \
+  --min-events 10 --min-train-events 5
+
+python -m f1_prediction.cli backtest-report
+\end{CodeBlock}
+
+Risultato atteso: predizioni/metriche per gruppi di feature e policy temporali. Per riprodurre confronti di champion già esistenti, verificare anche lineage e artefatti richiesti dalle relative operazioni: non basta assumere che il nome di un file generico identifichi sempre lo stesso esperimento.
+
+\subsection{Replay con riaddestramento}\label{replay-con-riaddestramento}
+
+\begin{CodeBlock}
+python -m f1_prediction.cli prospective-policy-replay \
+  --train-season 2023 --train-season 2024 \
+  --test-season 2025
+\end{CodeBlock}
+
+Risultato atteso: replay cronologico della stagione di test, manifest del training e log delle policy. Le opzioni ripetute identificano più stagioni; questo comando non è il replay di telemetria giro per giro.
+
+\subsection{Dimostrazione operativa senza creare forecast reali}\label{dimostrazione-operativa-senza-creare-forecast-reali}
+
+\begin{CodeBlock}
+python -m f1_prediction.cli live-validation-rehearsal
+python -m f1_prediction.cli autopilot-tick --dry-run --json
+\end{CodeBlock}
+
+Il rehearsal usa stato temporaneo e provider simulati. Il dry-run osserva la transizione proposta senza scrivere i ledger operativi e senza eseguire forecast/settlement; può comunque interrogare FastF1 e utilizzare o popolare la cache. «Dry-run» non significa necessariamente «nessun accesso di rete o nessun byte scritto dalla libreria di cache».
+
+Per un vero evento, i wrapper manuali sono \code{monitoring-before-qualifying} e \code{monitoring-after-qualifying}, con \code{--season}, \code{--event} e \code{--protocol-name}. Richiedono il protocollo e la fase corretti e scrivono artefatti. La via ordinaria automatica resta l'orchestratore con un solo writer; non servono invocazioni manuali parallele per accelerarlo.
+
+\subsection{Avviare la UI locale}\label{avviare-la-ui-locale}
+
+\begin{CodeBlock}
+python -m f1_prediction.cli dashboard-export
+python -m f1_prediction.cli dashboard-api
+\end{CodeBlock}
+
+In un secondo terminale:
+
+\begin{CodeBlock}
+cd web
+npm ci
+cp .env.example .env.local
+npm run dev
+\end{CodeBlock}
+
+La UI locale è normalmente su \code{http://localhost:3000}; l'API su \code{http://127.0.0.1:8000}. Artefatti assenti possono produrre uno stato vuoto o parziale: avviare il server non crea automaticamente un dataset di training.
+
+\subsection{Verifiche di sviluppo}\label{verifiche-di-sviluppo}
+
+\begin{CodeBlock}
+python -m pytest
+python -m ruff check .
+python -m ruff format --check .
+\end{CodeBlock}
+
+Per il frontend, dalla directory \code{web}:
+
+\begin{CodeBlock}
+npm test
+npm run lint
+npm run typecheck
+npm run build
+\end{CodeBlock}
+
+\subsection{Come impostare una demo da colloquio}\label{come-impostare-una-demo-da-colloquio}
+
+In cinque minuti, mostra un input raw, una riga FP3 con feature interpretabili, lo split di un evento, una predizione fuori campione e il confronto con la baseline. Poi mostra il rehearsal e spiega perché il secondo tick non genera un secondo forecast. Chiudi indicando un limite reale e il test o contratto che useresti per correggerlo.
+
+Non occorre scaricare tutti i dati o riaddestrare decine di varianti durante l'interview. Una demo preparata con artefatti identificati e comandi riproducibili permette di discutere il progetto senza dipendere dai tempi del provider.
+
+\section{Domande da interview}\label{domande-da-interview}
+
+Queste risposte sono tracce da spiegare con parole proprie. Le sezioni precedenti contengono dettagli, esempi e limiti per le domande di approfondimento.
+
+\subsection{1. Qual è il problema che risolvi?}\label{qual-uxe8-il-problema-che-risolvi}
+
+Stimo la prestazione cronometrica in qualifica dai segnali disponibili nelle prove libere. Il problema è supervisionato e tabulare; il target principale è un gap in secondi, con ranking derivato. La parte operativa conserva la previsione e la valuta successivamente.
+
+\subsection{2. Perché non basta ordinare le FP3?}\label{perchuxe9-non-basta-ordinare-le-fp3}
+
+È una baseline utile e viene confrontata con l'ML. Le libere hanno programmi diversi e una singola lap può essere poco rappresentativa. Il modello può usare più segnali insieme, ma deve dimostrare il vantaggio fuori campione.
+
+\subsection{3. Perché predire il gap anziché direttamente la posizione?}\label{perchuxe9-predire-il-gap-anzichuxe9-direttamente-la-posizione}
+
+Il gap misura l'entità della distanza: un decimo e due secondi non sono equivalenti. La posizione conserva soltanto l'ordine. La regressione offre un target interpretabile, ma minimizzare l'errore in secondi non ottimizza direttamente il ranking; un ranker sarebbe un esperimento distinto.
+
+\subsection{4. Quanti esempi hai davvero?}\label{quanti-esempi-hai-davvero}
+
+Il dataset ha 2.634 righe e 44 eventi, con tre checkpoint per pilota/evento. Per il fit FP3 completo ci sono 873 target numerici disponibili nello snapshot. Il numero di weekend indipendenti è molto più piccolo del numero totale di righe.
+
+\subsection{5. Usi tutti i GP dal 2023 al 2025?}\label{usi-tutti-i-gp-dal-2023-al-2025}
+
+No.~Il preset seleziona 14 eventi nel 2023, 12 nel 2024 e 18 nel 2025. Sono weekend compatibili con la pipeline convenzionale, ma non devo presentare il dataset come il calendario completo.
+
+\subsection{6. Quale modello è in produzione?}\label{quale-modello-uxe8-in-produzione}
+
+Nel percorso operativo esaminato, la previsione osservata dopo FP3 usa una Random Forest con \code{base\_plus\_relative} e pesi uniformi. La variante temporale è calcolata in shadow. Il fatto che una tabella storica la classifichi migliore non significa che venga servita.
+
+\subsection{7. Come funziona una Random Forest?}\label{come-funziona-una-random-forest}
+
+Allena più alberi su campionamenti dei dati e ne media le predizioni. Ogni albero applica soglie alle feature. L'ensemble riduce la varianza di un singolo albero; il risultato resta limitato dai dati osservati e non è un modello fisico della vettura.
+
+\subsection{8. Bagging e boosting: qual è la differenza?}\label{bagging-e-boosting-qual-uxe8-la-differenza}
+
+Nel bagging si combinano modelli costruiti su campionamenti per ridurre la variabilità. Nel boosting si aggiungono modelli in sequenza per migliorare l'obiettivo rispetto all'ensemble precedente. Il progetto confronta Random Forest e histogram gradient boosting senza presumere che il secondo vinca.
+
+\subsection{9. Perché fai anche Ridge?}\label{perchuxe9-fai-anche-ridge}
+
+È un riferimento lineare regolarizzato, utile per capire quanta prestazione si ottiene con relazioni semplici. Richiede imputazione e scaling coerenti. Se un modello complesso non supera Ridge e baseline, la complessità aggiuntiva non è giustificata dai risultati.
+
+\subsection{10. Perché niente deep learning?}\label{perchuxe9-niente-deep-learning}
+
+Il dataset è piccolo in termini di eventi e prevalentemente tabulare. Aumentare la complessità senza migliorare target e validazione rischia di adattarsi al campione. Un modello più semplice consente esperimenti e diagnosi più controllabili.
+
+\subsection{11. Come gestisci i missing?}\label{come-gestisci-i-missing}
+
+Distinguo feature assenti e target assenti. Le feature numeriche possono essere imputate con la mediana appresa sul train; quelle completamente vuote nel train non vengono usate. I target mancanti non vengono inventati: le righe restano auditabili, ma sono escluse dal fit/scoring che li richiede.
+
+\subsection{12. Perché non fare un random split delle righe?}\label{perchuxe9-non-fare-un-random-split-delle-righe}
+
+Potrei mettere in train e test piloti o checkpoint dello stesso GP, con condizioni condivise, e usare eventi futuri per prevedere il passato. Per l'obiettivo prospettico separo interi eventi e procedo cronologicamente.
+
+\subsection{13. Che cosa significa leakage-safe nel tuo progetto?}\label{che-cosa-significa-leakage-safe-nel-tuo-progetto}
+
+Significa che costruzione delle feature, training, selezione e calibrazione devono usare solo informazione lecita al tempo della previsione. Lo difendo con checkpoint, split temporali, rolling prior-only, preprocessing sul train e target separati nel monitoring. Esplicito anche i limiti su holdout generici, revisioni dei dati e deadline di pubblicazione.
+
+\subsection{14. La qualifica dell'anno prima è leakage?}\label{la-qualifica-dellanno-prima-uxe8-leakage}
+
+No, se era già disponibile e l'identità temporale è corretta. La Q del GP corrente sarebbe leakage. Il punto è la disponibilità temporale. Inoltre il modello operativo attuale non usa le rolling storiche come feature, pur essendo allenato su stagioni precedenti.
+
+\subsection{15. Come impedisci che la rolling legga il GP corrente?}\label{come-impedisci-che-la-rolling-legga-il-gp-corrente}
+
+Calcolo la statistica dalla storia raccolta prima dell'evento e solo dopo aggiungo il suo risultato. Deduplico per evento/pilota e non aggiungo gli eventi esclusi come fonti. I test alterano i target correnti/futuri per verificare il comportamento atteso.
+
+\subsection{16. Una pipeline sklearn elimina ogni leakage?}\label{una-pipeline-sklearn-elimina-ogni-leakage}
+
+No.~Evita errori frequenti di preprocessing se viene allenata sul train corretto. Non corregge uno split temporale sbagliato, una feature già contaminata, un roster conosciuto a posteriori o una scelta di iperparametri fatta guardando tutto il test.
+
+\subsection{17. Come usi gli anni precedenti?}\label{come-usi-gli-anni-precedenti}
+
+Come righe supervisionate, eventualmente come rolling feature e come esempi con pesi temporali diversi. Sono tre meccanismi separati. Uniform usa uguale peso; la candidata stagionale riduce il peso del passato e, dopo sufficiente storia corrente, restringe il train alla stagione corrente.
+
+\subsection{18. Il sistema impara dopo ogni GP?}\label{il-sistema-impara-dopo-ogni-gp}
+
+Aggiorna target, errori ed evidenza di monitoring e riallena quando crea un nuovo forecast. Ma il percorso corrente non unisce automaticamente ogni settlement al combinato storico. Per affermare apprendimento supervisionato continuo bisogna completare quel passaggio e verificarlo nel manifest.
+
+\subsection{19. Perché non usi automaticamente la candidata con MAE 0,729?}\label{perchuxe9-non-usi-automaticamente-la-candidata-con-mae-0729}
+
+Quel valore viene da un confronto retrospettivo allineato. Il beneficio dipende dal regime e da pochi eventi favorevoli. La valutazione prospettica e il replay distinguono candidato allenato, evidenza conservata e selezione reale; non hanno giustificato una promozione automatica.
+
+\subsection{20. Che cosa sono gli shadow model?}\label{che-cosa-sono-gli-shadow-model}
+
+Sono candidati eseguiti e registrati senza determinare la previsione pubblicata. Dopo il risultato posso confrontarli sulle stesse righe. Preservare anche le predizioni non selezionate evita che manchi proprio l'evidenza necessaria a valutarli in futuro.
+
+\subsection{21. Hai fatto hyperparameter tuning?}\label{hai-fatto-hyperparameter-tuning}
+
+Il codice esaminato usa iperparametri espliciti e conservativi, con confronti tra modelli, feature group e policy temporali. Non presenterei questo come una ricerca esaustiva automatizzata. Una futura ricerca dovrebbe essere confinata ai fold di training, con verifica finale separata.
+
+\subsection{22. Come interpreti il risultato di una feature ablation?}\label{come-interpreti-il-risultato-di-una-feature-ablation}
+
+Confronto gruppi di feature sugli stessi fold. Se aggiungere un gruppo riduce l'errore fuori campione, ho evidenza di utilità predittiva in quel contesto. Non dimostra causalità e non garantisce che ogni singola feature del gruppo sia utile.
+
+\subsection{23. Hai una spiegazione per ogni previsione?}\label{hai-una-spiegazione-per-ogni-previsione}
+
+Ho feature interpretabili, confronti con il team e diagnosi per evento e metodo. Non è implementato un servizio SHAP per ogni forecast. Le feature importance della foresta sarebbero possibili, ma non devo presentarle come un'analisi causale né come output già prodotto dal workflow corrente.
+
+\subsection{24. Quanto è accurato il modello?}\label{quanto-uxe8-accurato-il-modello}
+
+Prima specifico target, checkpoint e protocollo. Per esempio, nel confronto fisso FP3 su 39 eventi la Random Forest uniform ha MAE circa 0,920 s e la candidata temporale 0,729 s. Questo non è una promessa sul prossimo GP e riguarda il target Q semplificato.
+
+\subsection{25. MAE e ranking possono raccontare cose diverse?}\label{mae-e-ranking-possono-raccontare-cose-diverse}
+
+Sì. Previsioni sistematicamente spostate possono preservare l'ordine ma avere gap sbagliati. Errori piccoli fra piloti molto vicini possono scambiare molte posizioni. Per questo misuro sia errori in secondi sia metriche di ordine e top-k.
+
+\subsection{26. Il tuo top-3 accuracy richiede l'ordine esatto?}\label{il-tuo-top-3-accuracy-richiede-lordine-esatto}
+
+No.~È il recupero dei veri piloti in top 3 nel set dei tre predetti, mediato per evento. Per l'ordine esatto o la pole servono altre metriche. Conoscere la definizione nel codice evita di sovrastimare il risultato.
+
+\subsection{27. Fornisci una probabilità di Q3?}\label{fornisci-una-probabilituxe0-di-q3}
+
+Attualmente no. \code{predicted\_reached\_q3} deriva dalla top 10 predetta. Una probabilità richiederebbe un classificatore o un modello probabilistico e una calibrazione temporale, valutata con log loss/Brier e diagrammi di affidabilità.
+
+\subsection{28. Perché i target Q sono un limite serio?}\label{perchuxe9-i-target-q-sono-un-limite-serio}
+
+Prendere il migliore giro globale ignora la struttura Q1/Q2/Q3 e può invertire la classifica quando cambiano le condizioni. Prima di ottimizzare ulteriormente il modello chiarirei il target ufficiale, le assenze e le penalità. Un ottimo modello allenato sull'etichetta sbagliata risolve un problema diverso.
+
+\subsection{29. Che cosa significa intervallo al 90\%?}\label{che-cosa-significa-intervallo-al-90}
+
+È un livello nominale del metodo di calibrazione: va confrontato con la copertura osservata fuori campione e con l'ampiezza degli intervalli. Non è automaticamente una probabilità personalizzata per ogni pilota. Gli intervalli sono implementati nella ricerca ma non prodotti dal monitoring corrente.
+
+\subsection{30. Perché lo scheduler gira ogni cinque secondi?}\label{perchuxe9-lo-scheduler-gira-ogni-cinque-secondi}
+
+Non gira ogni cinque secondi: aspetta cinque minuti dopo il tick precedente. I cinque secondi sono il timeout di una richiesta frontend. Il refresh della pagina è ogni minuto e il ritardo iniziale dello scheduler è dieci secondi.
+
+\subsection{31. Che cos'è l'idempotenza?}\label{che-cosuxe8-lidempotenza}
+
+Ripetere la stessa operazione non deve duplicarne l'effetto di business. Un forecast valido viene riutilizzato e un evento settled non viene risolto di nuovo nel normale workflow. Possono comunque aumentare log e contatori dei tentativi.
+
+\subsection{32. Perché hai sia un lock sia controlli di idempotenza?}\label{perchuxe9-hai-sia-un-lock-sia-controlli-di-idempotenza}
+
+Il lock impedisce a writer cooperanti di entrare contemporaneamente; l'idempotenza gestisce le ripetizioni, per esempio dopo un riavvio. Sono problemi distinti. Un solo controllo di esistenza senza lock potrebbe essere letto simultaneamente da due processi.
+
+\subsection{33. Cosa succede se il processo muore?}\label{cosa-succede-se-il-processo-muore}
+
+Il volume conserva i dati già scritti; il sistema operativo rilascia il lock e al riavvio il tick rilegge gli artefatti. Però le scritture multi-file non sono transazionali: un crash nel mezzo può richiedere riconciliazione. Non dichiaro exactly-once distribuito.
+
+\subsection{34. Come fai a non bloccare l'API durante il training?}\label{come-fai-a-non-bloccare-lapi-durante-il-training}
+
+Il loop invia il tick sincrono a un thread tramite \code{asyncio.to\_thread}. Questo evita di eseguirlo direttamente sull'event loop, ma non isola CPU e memoria. Per più traffico separerei API e worker, con coordinamento e storage adeguati.
+
+\subsection{35. Perché il job aspetta dopo la fine prevista delle libere?}\label{perchuxe9-il-job-aspetta-dopo-la-fine-prevista-delle-libere}
+
+La fine da calendario non coincide con la disponibilità pubblica dei dati. Uso un grace period e poi un probe. Solo dopo i controlli applicativi posso creare la previsione. Un'assenza temporanea di dati è diversa da un mismatch d'identità.
+
+\subsection{36. Cosa fai se perdi la finestra prima di Q?}\label{cosa-fai-se-perdi-la-finestra-prima-di-q}
+
+Il normale orchestratore blocca il nuovo forecast. Non voglio presentare una ricostruzione a posteriori come previsione live. Il controllo corrente va rafforzato al commit, perché un lavoro partito prima può finire dopo l'inizio della qualifica.
+
+\subsection{37. Perché la tua API è read-only?}\label{perchuxe9-la-tua-api-uxe8-read-only}
+
+Le visite devono consultare risultati validati, non avviare ingestion o training. La mutazione avviene nei workflow backend. Lo scheduler condivide il processo API, quindi read-only descrive gli endpoint pubblici e non tutte le attività interne.
+
+\subsection{38. Come distingui una demo funzionante da produzione validata?}\label{come-distingui-una-demo-funzionante-da-produzione-validata}
+
+Un rehearsal prova le transizioni con dipendenze controllate; un deployment prova che i servizi sono pubblicabili e collegati. La validazione live richiede che un evento reale attraversi raccolta, previsione in tempo, settlement e audit. Nessuna di queste tre prove sostituisce completamente le altre.
+
+\subsection{39. Come scaleresti il sistema?}\label{come-scaleresti-il-sistema}
+
+Separerei letture API e worker, introdurrei coordinamento esplicito dei job e transazioni/unique key per i ledger, pubblicherei snapshot versionati e monitorerei tempi, spazio e fallimenti. Non aumenterei semplicemente il numero di repliche, perché ciascuna può avviare uno scheduler.
+
+\subsection{40. Qual è la prossima modifica più importante?}\label{qual-uxe8-la-prossima-modifica-piuxf9-importante}
+
+Per la validità ML: target coerenti con le fasi ufficiali di qualifica. Per l'affidabilità operativa: deadline al commit, aggiornamento versionato del training con i GP nuovi e persistenza recuperabile. Aggiungere un algoritmo più sofisticato viene dopo aver consolidato questi contratti.
+
+\subsection{Glossario essenziale}\label{glossario-essenziale}
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Termine
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Significato nel progetto
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Feature & Informazione fornita al modello per prevedere \\
+Target/label & Risultato che il modello deve apprendere a stimare \\
+Fit/training & Stima dei parametri dai dati etichettati \\
+Inference & Uso dell'estimator per produrre nuove predizioni \\
+Fold & Una separazione train/test di un esperimento \\
+Holdout & Parte dei dati riservata alla valutazione \\
+Walk-forward & Successione di test su eventi successivi alla storia di training \\
+Checkpoint & Momento informativo della previsione: dopo FP1, FP2 o FP3 \\
+Ablation & Confronto fra insiemi di feature per misurarne l'utilità \\
+Cold start & Poca o nessuna storia utile, per esempio a inizio stagione \\
+Drift & Cambiamento nel tempo della distribuzione dei dati o del legame feature/target \\
+Champion & Metodo di riferimento scelto dalla policy \\
+Shadow & Predizione diagnostica che non determina quella pubblicata \\
+Preflight & Controlli che precedono l'operazione \\
+Settlement & Associazione successiva di forecast e risultato osservato \\
+Lineage & Provenienza e trasformazioni da input a risultato \\
+Fingerprint & Hash usato per identificare/verificare il contenuto \\
+Idempotenza & Ripetizione senza duplicare l'effetto di business \\
+Race condition & Esito dipendente dall'interleaving di operazioni concorrenti \\
+Atomicità & Aggiornamento osservabile come tutto o niente nel perimetro garantito \\
+Quarantena & Conservazione del record con esclusione dall'uso probatorio previsto \\
+Counterfactual & Risultato di una scelta alternativa ricostruita, non osservata come decisione live \\
+\end{longtable}
+\endgroup
+}
+
+\section{Mappa delle fonti e verifica}\label{mappa-delle-fonti-e-verifica}
+
+\subsection{Dal concetto al codice}\label{dal-concetto-al-codice}
+
+In questa edizione LaTeX, i link al codice puntano alla revisione b873e76 del repository. I riferimenti agli artefatti generati indicano invece file locali, normalmente esclusi da Git.
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Argomento
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Fonti principali
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Dipendenze e packaging & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/pyproject.toml}{\code{pyproject.toml}} \\
+Configurazioni & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/configs/data.yaml}{\code{data.yaml}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/configs/features.yaml}{\code{features.yaml}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/configs/model.yaml}{\code{model.yaml}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/configs/autopilot.yaml}{\code{autopilot.yaml}} \\
+Caricamento & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/data/fastf1_loader.py}{\code{fastf1\_loader.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/data/ingest.py}{\code{ingest.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/data/schema.py}{\code{schema.py}} \\
+Eventi selezionati e combinazione & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/data/season_builder.py}{\code{season\_builder.py}} \\
+Identità e roster & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/data/identity.py}{\code{identity.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/data/qualifying_entry_list.py}{\code{qualifying\_entry\_list.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/data/raw_session_identity.py}{\code{raw\_session\_identity.py}} \\
+Pulizia e push & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/features/lap_cleaning.py}{\code{lap\_cleaning.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/features/push_laps.py}{\code{push\_laps.py}} \\
+Aggregati & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/features/session_aggregates.py}{\code{session\_aggregates.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/features/relative_features.py}{\code{relative\_features.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/features/data_quality.py}{\code{data\_quality.py}} \\
+Target & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/features/qualifying_targets.py}{\code{qualifying\_targets.py}} \\
+Dataset e storia & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/features/modeling_dataset.py}{\code{modeling\_dataset.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/features/historical_features.py}{\code{historical\_features.py}} \\
+Modelli & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/tabular.py}{\code{tabular.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/gradient_boosting.py}{\code{gradient\_boosting.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/baselines.py}{\code{baselines.py}} \\
+Training e split & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/train_tabular.py}{\code{train\_tabular.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/splits.py}{\code{splits.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/backtest_tabular.py}{\code{backtest\_tabular.py}} \\
+Gruppi e pesi & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/feature_groups.py}{\code{feature\_groups.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/temporal_weighting.py}{\code{temporal\_weighting.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/ablation.py}{\code{ablation.py}} \\
+Metriche & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/metrics.py}{\code{metrics.py}} \\
+Champion e intervalli & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/champion_policy.py}{\code{champion\_policy.py}} \\
+Prospettico & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/prospective_policy_evaluation.py}{\code{prospective\_policy\_evaluation.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/prospective_replay.py}{\code{prospective\_replay.py}} \\
+Governance & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/season_aware_governance.py}{\code{season\_aware\_governance.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/season_aware_stability.py}{\code{season\_aware\_stability.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/artifact_lineage.py}{\code{artifact\_lineage.py}} \\
+Onboarding operativo & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/data/monitoring_onboarding.py}{\code{monitoring\_onboarding.py}} \\
+Forecast e settlement & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/prospective_monitoring.py}{\code{prospective\_monitoring.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/monitoring_operations.py}{\code{monitoring\_operations.py}} \\
+Scheduler e macchina a stati & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/autopilot_scheduler.py}{\code{autopilot\_scheduler.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/weekend_orchestrator.py}{\code{weekend\_orchestrator.py}} \\
+Integrità e rehearsal & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/live_event_integrity.py}{\code{live\_event\_integrity.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/modeling/weekend_orchestrator_rehearsal.py}{\code{weekend\_orchestrator\_rehearsal.py}} \\
+Runtime & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/runtime.py}{\code{runtime.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/production_state.py}{\code{production\_state.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/Dockerfile}{\code{Dockerfile}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/railway.toml}{\code{railway.toml}} \\
+Export e API & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/dashboard/export.py}{\code{export.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/dashboard_api/app.py}{\code{app.py}}, \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/dashboard_api/service.py}{\code{service.py}} \\
+Timeout HTTP & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/web/lib/api.ts}{\code{web/lib/api.ts}}, costante \code{REQUEST\_TIMEOUT\_MS} \\
+Refresh UI & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/web/components/dashboard-auto-refresh.tsx}{\code{dashboard-auto-refresh.tsx}}, costante \code{DASHBOARD\_REFRESH\_INTERVAL\_MS} \\
+Operazioni e recupero & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/docs/live_validation_runbook.md}{\code{live\_validation\_runbook.md}} \\
+Comandi & \href{https://github.com/matteosgobba/apex-pulse/blob/b873e76/src/f1_prediction/cli.py}{\code{cli.py}} \\
+\end{longtable}
+\endgroup
+}
+
+\subsection{Artefatti locali usati per le affermazioni numeriche}\label{artefatti-locali-usati-per-le-affermazioni-numeriche}
+
+Questi file sono generati e normalmente esclusi da Git; sono consultabili nella copia locale del progetto quando presenti.
+
+{\def\LTcaptype{none} % do not increment counter
+\begingroup\small
+\setlength{\emergencystretch}{2em}
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.3200}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.6800}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Affermazione
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright\sffamily\bfseries\color{ink}
+Artefatto
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+Dimensione, stagioni, duplicati, target mancanti & \code{modeling\_dataset.parquet}, ispezionato direttamente \\
+44 eventi richiesti/riusciti & \code{dataset\_build\_report.json} \\
+MAE candidata fissa 0,7291 vs 0,9199 & \code{season\_aware\_validation\_summary.json} \\
+Concentrazione del beneficio e rischio di coda & \code{season\_aware\_stability\_summary.json} \\
+Policy su artefatti 2024 & \code{prospective\_train\_2023\_test\_2024\_summary.json} \\
+Policy su artefatti 2025 & \code{prospective\_train\_2023\_2024\_test\_2025\_summary.json} \\
+True replay 2024 & \code{prospective\_replay\_train\_2023\_test\_2024\_summary.json} \\
+True replay 2025 & \code{prospective\_replay\_train\_2023\_2024\_test\_2025\_summary.json} \\
+Raccomandazione e shadow counterfactual & \code{season\_aware\_governance\_summary.json} \\
+Protocollo after-FP3 e stagioni & \code{prospective\_monitoring\_protocol.json} \\
+Storia di 44 eventi nei forecast salvati & \code{prospective\_monitoring\_training\_manifest.csv} \\
+Timestamp locale Hungarian GP e calendario pubblicato & \code{current\_event.json}, \code{event\_forecast.json} nello snapshot verificato \\
+\end{longtable}
+\endgroup
+}
+
+Gli ultimi due JSON cambiano quando la dashboard seleziona un altro evento. Il caso temporale documentato si riferisce esplicitamente allo snapshot letto durante questa analisi, non a una proprietà stabile del futuro \code{current\_event.json}.
+
+\subsection{Verifica eseguita per questa guida}\label{verifica-eseguita-per-questa-guida}
+
+È stato letto il codice dei percorsi principali, confrontato con configurazioni e report, ispezionato il Parquet combinato ed eseguito il seguente sottoinsieme di test già esistenti:
+
+\begin{CodeBlock}
+python -m pytest \
+  tests/test_lap_features.py \
+  tests/test_relative_features.py \
+  tests/test_historical_features.py \
+  tests/test_modeling_dataset.py \
+  tests/test_splits.py \
+  tests/test_tabular.py \
+  tests/test_temporal_weighting.py \
+  tests/test_autopilot_scheduler.py \
+  tests/test_weekend_orchestrator.py \
+  tests/test_monitoring_operations.py \
+  tests/test_prospective_monitoring.py \
+  tests/test_documentation_tracking.py
+\end{CodeBlock}
+
+Esito osservato: \textbf{144 passed, 342 warnings}, circa 24 secondi. Questa verifica sostiene le spiegazioni sui comportamenti coperti; non è un nuovo esperimento di accuratezza del modello né una certificazione del deployment remoto.
+
+Sono stati inoltre controllati i link locali e l'indice della guida, la presenza dei 23 capitoli e delle 40 domande, e la disponibilità tramite \code{--help} dei comandi CLI riportati. Questi controlli non hanno eseguito nuovi training o workflow di produzione.
+
+Per aggiornare la guida: rivedere prima configurazioni, protocollo, definizione dei target e percorso operativo; poi rigenerare o identificare i report coerenti con quella versione. Il risultato più utile in interview è poter collegare ogni affermazione a un contratto, a un esempio concreto e al suo limite.
+
+\end{document}

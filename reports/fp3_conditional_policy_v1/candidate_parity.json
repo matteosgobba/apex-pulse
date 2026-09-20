@@ -1,0 +1,396 @@
+{
+  "adapter_events": 44,
+  "features": 126,
+  "metrics": [
+    {
+      "season": 2024,
+      "candidate": "static",
+      "rows": 238,
+      "events": 12,
+      "mae": 0.9459500048586943
+    },
+    {
+      "season": 2024,
+      "candidate": "weighted",
+      "rows": 238,
+      "events": 12,
+      "mae": 0.7164713729299673
+    },
+    {
+      "season": 2025,
+      "candidate": "static",
+      "rows": 357,
+      "events": 18,
+      "mae": 0.7882732422310238
+    },
+    {
+      "season": 2025,
+      "candidate": "weighted",
+      "rows": 357,
+      "events": 18,
+      "mae": 0.5275664993017083
+    }
+  ],
+  "refits": [
+    {
+      "event": "2024/sakhir",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/sakhir",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/melbourne",
+      "candidate": "static",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/melbourne",
+      "candidate": "weighted",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/suzuka",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/suzuka",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/imola",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/imola",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/monaco",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/monaco",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/montreal",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/montreal",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/barcelona",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/barcelona",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/silverstone",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/silverstone",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/budapest",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/budapest",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/zandvoort",
+      "candidate": "static",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/zandvoort",
+      "candidate": "weighted",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/monza",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/monza",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/yas-island",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2024/yas-island",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/melbourne",
+      "candidate": "static",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/melbourne",
+      "candidate": "weighted",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/suzuka",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/suzuka",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/sakhir",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/sakhir",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/jeddah",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/jeddah",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/imola",
+      "candidate": "static",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/imola",
+      "candidate": "weighted",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/monaco",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/monaco",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/barcelona",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/barcelona",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/montreal",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/montreal",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/spielberg",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/spielberg",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/silverstone",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/silverstone",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/budapest",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/budapest",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/zandvoort",
+      "candidate": "static",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/zandvoort",
+      "candidate": "weighted",
+      "rows": 19,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/monza",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/monza",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/baku",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/baku",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/marina-bay",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/marina-bay",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/mexico-city",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/mexico-city",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/las-vegas",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/las-vegas",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/yas-island",
+      "candidate": "static",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    },
+    {
+      "event": "2025/yas-island",
+      "candidate": "weighted",
+      "rows": 20,
+      "max_prediction_difference": 0.0
+    }
+  ]
+}

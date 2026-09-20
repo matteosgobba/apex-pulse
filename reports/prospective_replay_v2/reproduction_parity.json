@@ -1,0 +1,26 @@
+[
+  {
+    "all_keys_equal": true,
+    "comparison": "original replay 2024, all checkpoints",
+    "max_prediction_difference": 0.0,
+    "rows": 2142
+  },
+  {
+    "all_keys_equal": true,
+    "comparison": "original replay 2025, all checkpoints",
+    "max_prediction_difference": 0.0,
+    "rows": 3231
+  },
+  {
+    "all_keys_equal": true,
+    "comparison": "retrospective uniform versus fresh fits",
+    "max_prediction_difference": 0.0,
+    "rows": 774
+  },
+  {
+    "all_keys_equal": true,
+    "comparison": "retrospective current_season_only_with_prior versus fresh fits",
+    "max_prediction_difference": 0.0,
+    "rows": 774
+  }
+]

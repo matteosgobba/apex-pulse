@@ -1912,6 +1912,24 @@ def prospective_monitoring_settle_command(
     _print_prospective_monitoring_summary(summary, data_config.project_root)
 
 
+@app.command("fp3-policy-report")
+def fp3_policy_report_command(
+    config_path: Annotated[Path | None, typer.Option("--config")] = None,
+    event: Annotated[str | None, typer.Option("--event")] = None,
+) -> None:
+    """Print post-freeze FP3 status and aligned candidate errors without writing artifacts."""
+    import json
+
+    from f1_prediction.modeling.fp3_policy_report import build_report
+
+    try:
+        report = build_report(load_data_config(config_path=config_path), event=event)
+    except (ValueError, OSError) as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(report, indent=2))
+
+
 @app.command("prospective-monitoring-report")
 def prospective_monitoring_report_command(
     config_path: Annotated[
@@ -2667,10 +2685,7 @@ def _print_qualifying_entry_list_audit_summary(
     typer.echo(f"Forecast allowed: {payload.get('forecast_allowed')}")
     typer.echo(f"Summary: {_display_path(summary.summary_path, project_root)}")
     typer.echo(f"Drivers: {_display_path(summary.drivers_path, project_root)}")
-    typer.echo(
-        "Practice evidence: "
-        f"{_display_path(summary.practice_evidence_path, project_root)}"
-    )
+    typer.echo(f"Practice evidence: {_display_path(summary.practice_evidence_path, project_root)}")
     typer.echo(f"Exclusions: {_display_path(summary.exclusions_path, project_root)}")
     typer.echo(f"Failures: {_display_path(summary.failures_path, project_root)}")
 

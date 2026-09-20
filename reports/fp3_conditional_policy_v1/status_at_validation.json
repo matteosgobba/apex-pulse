@@ -1,0 +1,62 @@
+{
+  "policy_version": "FP3_CONDITIONAL_POLICY_V1",
+  "freeze_at_utc": "2026-09-20T09:08:16+00:00",
+  "current_season": 2026,
+  "historical_evidence": "excluded; see historical aligned comparison and Replay V2",
+  "overall": {
+    "events": 0,
+    "aligned_rows": 0,
+    "uniform_mae": null,
+    "season_aware_mae": null,
+    "production_mae": null,
+    "delta": null,
+    "season_aware_wins": 0,
+    "uniform_wins": 0,
+    "ties": 0
+  },
+  "by_regime": {
+    "cold_start": {
+      "events": 0,
+      "aligned_rows": 0,
+      "uniform_mae": null,
+      "season_aware_mae": null,
+      "production_mae": null,
+      "delta": null,
+      "season_aware_wins": 0,
+      "uniform_wins": 0,
+      "ties": 0
+    },
+    "established": {
+      "events": 0,
+      "aligned_rows": 0,
+      "uniform_mae": null,
+      "season_aware_mae": null,
+      "production_mae": null,
+      "delta": null,
+      "season_aware_wins": 0,
+      "uniform_wins": 0,
+      "ties": 0
+    }
+  },
+  "events": [],
+  "settled_production_rows": 0,
+  "completed_prospective_events": 0,
+  "production_mae_all_available": null,
+  "fallback_events": [],
+  "current_or_requested_event": "hungarian-grand-prix",
+  "selection_status": {
+    "production_policy_version": "FP3_CONDITIONAL_POLICY_V1",
+    "prior_current_season_eligible_events": 0,
+    "regime": "cold_start",
+    "intended_candidate": "uniform_default",
+    "selected_candidate": "uniform_default",
+    "fallback_reason": "",
+    "policy_freeze_at_utc": "2026-09-20T09:08:16+00:00",
+    "candidate_contract_fingerprint": "7bc9d0b046cc914593f413b52427136b6b44301beecaffdb7db30390344b5803",
+    "training_cutoff": "[\"2023/sakhir\", \"2023/jeddah\", \"2023/melbourne\", \"2023/miami\", \"2023/monaco\", \"2023/barcelona\", \"2023/montreal\", \"2023/silverstone\", \"2023/budapest\", \"2023/zandvoort\", \"2023/monza\", \"2023/marina-bay\", \"2023/suzuka\", \"2023/yas-island\", \"2024/sakhir\", \"2024/melbourne\", \"2024/suzuka\", \"2024/imola\", \"2024/monaco\", \"2024/montreal\", \"2024/barcelona\", \"2024/silverstone\", \"2024/budapest\", \"2024/zandvoort\", \"2024/monza\", \"2024/yas-island\", \"2025/melbourne\", \"2025/suzuka\", \"2025/sakhir\", \"2025/jeddah\", \"2025/imola\", \"2025/monaco\", \"2025/barcelona\", \"2025/montreal\", \"2025/spielberg\", \"2025/silverstone\", \"2025/budapest\", \"2025/zandvoort\", \"2025/monza\", \"2025/baku\", \"2025/marina-bay\", \"2025/mexico-city\", \"2025/las-vegas\", \"2025/yas-island\"]",
+    "training_dataset_fingerprint": "8b5704065aeae1242944b0d4a0a85770ed1b43caed283eab9ef95a5bd48308e1",
+    "target_features_fingerprint": "b89dc9cacc5a868ccef38e3a40076adda5dfc692ba5c8314abdba16c1f2fab45",
+    "prospective_evidence_class": "post_freeze_prospective",
+    "runtime_versions": "{\"numpy\": \"2.4.6\", \"pandas\": \"2.3.3\", \"python\": \"3.13.9\", \"sklearn\": \"1.9.0\"}"
+  }
+}

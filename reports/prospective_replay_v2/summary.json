@@ -1,0 +1,71 @@
+{
+  "evaluation_type": "prospective_replay_v2",
+  "evidence_class": "causal_historical_replay_not_untouched_prospective",
+  "production_default_changed": false,
+  "seasons": [
+    {
+      "after_first_selection": {
+        "events": 2,
+        "rows": 40,
+        "selected_mae": 0.35968444560236335,
+        "uniform_mae": 0.32835370986700546,
+        "weighted_mae": 0.35968444560236335
+      },
+      "before_first_selection": {
+        "events": 10,
+        "rows": 198,
+        "selected_mae": 1.0707169331398436,
+        "uniform_mae": 1.0707169331398436,
+        "weighted_mae": 0.7885495400668572
+      },
+      "cold_start_events": 5,
+      "events": 12,
+      "first_all_gates_pass_event": "2024/monza",
+      "first_history_eligible_event": "2024/montreal",
+      "rows": 238,
+      "season": 2024,
+      "selected_events": "2024/monza,2024/yas-island",
+      "selected_mae": 0.9512156747301831,
+      "selection_sequence": "UUUUUUUUUUWW",
+      "switches": 1,
+      "uniform_events": 10,
+      "uniform_fraction": 0.8333333333333334,
+      "uniform_mae": 0.9459500048586943,
+      "weighted_events": 2,
+      "weighted_fraction": 0.16666666666666666,
+      "weighted_mae": 0.7164713729299674
+    },
+    {
+      "after_first_selection": {
+        "events": 13,
+        "rows": 259,
+        "selected_mae": 0.5742290076439345,
+        "uniform_mae": 0.9323585715639684,
+        "weighted_mae": 0.5742290076439345
+      },
+      "before_first_selection": {
+        "events": 5,
+        "rows": 98,
+        "selected_mae": 0.40747630042252686,
+        "uniform_mae": 0.40747630042252686,
+        "weighted_mae": 0.40424415582582474
+      },
+      "cold_start_events": 5,
+      "events": 18,
+      "first_all_gates_pass_event": "2025/monaco",
+      "first_history_eligible_event": "2025/monaco",
+      "rows": 357,
+      "season": 2025,
+      "selected_events": "2025/monaco,2025/barcelona,2025/montreal,2025/spielberg,2025/silverstone,2025/budapest,2025/zandvoort,2025/monza,2025/baku,2025/marina-bay,2025/mexico-city,2025/las-vegas,2025/yas-island",
+      "selected_mae": 0.5284537546811953,
+      "selection_sequence": "UUUUUWWWWWWWWWWWWW",
+      "switches": 1,
+      "uniform_events": 5,
+      "uniform_fraction": 0.2777777777777778,
+      "uniform_mae": 0.7882732422310238,
+      "weighted_events": 13,
+      "weighted_fraction": 0.7222222222222222,
+      "weighted_mae": 0.5275664993017083
+    }
+  ]
+}

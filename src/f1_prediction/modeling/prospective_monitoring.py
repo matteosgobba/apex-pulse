@@ -37,6 +37,7 @@ from f1_prediction.data.qualifying_entry_list import (
 from f1_prediction.data.season_builder import build_combined_dataset_path
 from f1_prediction.features.historical_features import add_historical_features
 from f1_prediction.modeling.feature_groups import get_feature_columns_for_group
+from f1_prediction.modeling.fp3_production_policy import serialized_monitoring_write
 from f1_prediction.modeling.prospective_policy_evaluation import (
     build_frozen_policy_profiles,
     records_for_json,
@@ -202,6 +203,7 @@ def create_prospective_monitoring_preflight(
     )
 
 
+@serialized_monitoring_write
 def create_prospective_monitoring_forecast(
     config: DataConfig,
     model_config: ModelConfig,
@@ -213,6 +215,17 @@ def create_prospective_monitoring_forecast(
     diagnostic_rehearsal: bool = False,
 ) -> ProspectiveMonitoringSummary:
     """Create an immutable pre-qualification forecast snapshot for one monitored event."""
+    from f1_prediction.modeling import fp3_production_policy as fp3
+
+    policy = fp3.load_policy(config) if not diagnostic_rehearsal else None
+    if policy and fp3.verify_existing(
+        config, protocol_name, slugify(event), policy, model_config, feature_config
+    ):
+        return ProspectiveMonitoringSummary(
+            status="forecast_reused",
+            summary_path=config.metrics_output_dir / "prospective_monitoring_forecasts.parquet",
+            table_paths=(config.metrics_output_dir / "prospective_monitoring_forecasts.parquet",),
+        )
     metrics_dir = config.metrics_output_dir
     protocol = load_protocol(metrics_dir, protocol_name)
     preflight = create_prospective_monitoring_preflight(
@@ -256,6 +269,17 @@ def create_prospective_monitoring_forecast(
         strict=True,
     )
     dataset = monitoring_dataset_for_forecast(config, protocol, dataset, event_row)
+    policy_context = None
+    if policy:
+        source_path = resolve_protocol_dataset_path(config, protocol)
+        if fp3.file_hash(source_path) != policy["candidate_contract"]["historical_dataset_sha256"]:
+            raise ValueError("Frozen historical training dataset conflict")
+        deadline = fp3.qualifying_deadline(int(protocol["monitor_season"]), slugify(event))
+        fp3.ensure_forecast_window(policy, utc_now(), deadline)
+        dataset, policy_context = fp3.legal_dataset(
+            config, protocol, registry, event_row, dataset, policy, forecast_time=utc_now()
+        )
+        policy_context["qualifying_start_utc"] = deadline
     entry_audit = audit_qualifying_entry_list(
         config,
         season=int(protocol["monitor_season"]),
@@ -301,7 +325,11 @@ def create_prospective_monitoring_forecast(
         model_config=model_config,
         feature_config=feature_config,
         test_season=int(protocol["monitor_season"]),
+        frozen_feature_columns=policy["candidate_contract"]["feature_columns"] if policy else None,
     )
+    if policy_context is not None and source.get("weighted_failure"):
+        policy_context["fallback_reason"] = source["weighted_failure"]
+        policy_context["selected_candidate"] = fp3.UNIFORM
     history = prior_settlement_history(
         metrics_dir,
         protocol,
@@ -312,16 +340,17 @@ def create_prospective_monitoring_forecast(
         history,
         event_order_lineage_valid=bool(event_order_lineage["event_order_registry_valid"]),
     )
-    profiles = build_frozen_policy_profiles(
-        model_config,
-        profile_names=("static_baseline", "guarded_baseline", "season_aware_frozen"),
-        uncertainty=uncertainty,
-    )
-    candidate_eligible, selection_reason = season_aware_decision(
-        history,
-        event_key=event_key,
-        profile=profiles["season_aware_frozen"],
-    )
+    if policy is None:
+        profiles = build_frozen_policy_profiles(
+            model_config,
+            profile_names=("static_baseline", "guarded_baseline", "season_aware_frozen"),
+            uncertainty=uncertainty,
+        )
+        candidate_eligible, selection_reason = season_aware_decision(
+            history, event_key=event_key, profile=profiles["season_aware_frozen"]
+        )
+    else:
+        candidate_eligible, selection_reason = False, "explicit_five_event_policy"
     forecast_id = stable_signature(
         {
             "protocol": protocol["protocol_fingerprint"],
@@ -364,6 +393,10 @@ def create_prospective_monitoring_forecast(
     )
     _annotate_entry_list_forecast_rows(forecasts, entry_audit)
     _annotate_entry_list_forecast_rows(shadow, entry_audit)
+    if policy_context is not None:
+        fp3.ensure_forecast_window(policy, forecast_created, deadline)
+        forecasts = fp3.decorate_predictions(forecasts, policy_context, policy)
+        shadow = forecasts[forecasts["diagnostic_only"].astype(bool)].copy()
     forecast_entry_audit = audit_qualifying_entry_list(
         config,
         season=int(protocol["monitor_season"]),
@@ -389,6 +422,23 @@ def create_prospective_monitoring_forecast(
         selection_reason=selection_reason,
         snapshot_hash=snapshot_hash,
     )
+    if policy_context is not None:
+        selection.update(policy_context)
+        selection["live_policy_selected"] = policy_context["selected_candidate"]
+        selection["selection_is_counterfactual"] = False
+        selection["weighted_candidate_eligible_under_frozen_gates"] = pd.NA
+        selection["shadow_history_counterfactual_selection"] = pd.NA
+        selection["candidate_selection_reason"] = "explicit_five_event_policy"
+        fp3.ensure_forecast_window(policy, utc_now(), deadline)
+        fp3.freeze_snapshot(
+            config,
+            protocol_name,
+            str(event_row["event_slug"]),
+            forecasts,
+            policy_context,
+            policy,
+            source["test"],
+        )
 
     forecast_path = metrics_dir / "prospective_monitoring_forecasts.parquet"
     shadow_path = metrics_dir / "prospective_monitoring_shadow_candidates.parquet"
@@ -408,6 +458,7 @@ def create_prospective_monitoring_forecast(
     )
 
 
+@serialized_monitoring_write
 def create_prospective_monitoring_settlement(
     config: DataConfig,
     *,
@@ -415,7 +466,25 @@ def create_prospective_monitoring_settlement(
     event: str,
 ) -> ProspectiveMonitoringSummary:
     """Settle a pre-existing monitoring forecast after qualifying targets are available."""
+    from f1_prediction.modeling import fp3_production_policy as fp3
+
     metrics_dir = config.metrics_output_dir
+    policy = fp3.load_policy(config)
+    if policy and fp3.snapshot_path(config, protocol_name, slugify(event)).exists():
+        fp3.verify_existing(config, protocol_name, slugify(event), policy, None, None)
+        existing = read_parquet(metrics_dir / "prospective_monitoring_settlements.parquet")
+        if (
+            not existing.empty
+            and (
+                existing["protocol_name"].eq(protocol_name)
+                & existing["event_slug"].eq(slugify(event))
+            ).any()
+        ):
+            return ProspectiveMonitoringSummary(
+                status="settlement_reused",
+                summary_path=metrics_dir / "prospective_monitoring_settlements.parquet",
+                table_paths=(metrics_dir / "prospective_monitoring_settlements.parquet",),
+            )
     protocol = load_protocol(metrics_dir, protocol_name)
     dataset, dataset_status = read_monitoring_dataset(
         resolve_protocol_dataset_path(config, protocol)
@@ -1645,20 +1714,39 @@ def train_monitoring_event_sources(
     model_config: ModelConfig,
     feature_config: FeatureConfig | None,
     test_season: int,
+    frozen_feature_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     """Fit monitoring candidates with targetless current-event rows."""
     fold_scope = dataset[row_keys.isin([*legal_train_events, event_key])].copy()
-    fold_scope = add_historical_features(
-        fold_scope,
-        historical_settings(feature_config),
-        excluded_target_events={event_key},
-    )
+    if frozen_feature_columns is None:
+        fold_scope = add_historical_features(
+            fold_scope, historical_settings(feature_config), excluded_target_events={event_key}
+        )
     fold_keys = event_key_series(fold_scope)
     train = fold_scope[fold_keys.isin(legal_train_events)].copy()
     test = fold_scope[fold_keys.eq(event_key)].copy()
     if train.empty or test.empty:
         raise ValueError(f"Monitoring event {event_key} must have train and test rows")
-    feature_columns = get_feature_columns_for_group(fold_scope, "base_plus_relative")
+    feature_columns = (
+        frozen_feature_columns
+        if frozen_feature_columns is not None
+        else get_feature_columns_for_group(fold_scope, "base_plus_relative")
+    )
+    if frozen_feature_columns is not None:
+        position = {key: index for index, key in enumerate(event_order)}
+        if any(
+            position.get(key, len(event_order)) >= position[event_key]
+            for key in event_key_series(train)
+        ):
+            raise ValueError("Current or future event in FP3 training scope")
+        for column in (
+            "quali_gap_to_pole_sec",
+            "quali_position",
+            "quali_best_lap_time_sec",
+            "reached_q2",
+            "reached_q3",
+        ):
+            test[column] = pd.NA
     static_predictions, static_fit = fit_monitoring_source_candidate(
         train=train,
         test=test,
@@ -1668,15 +1756,22 @@ def train_monitoring_event_sources(
         feature_columns=feature_columns,
         temporal_policy=TemporalWeightingPolicy.uniform,
     )
-    weighted_predictions, weighted_fit = fit_monitoring_source_candidate(
-        train=train,
-        test=test,
-        event_order=event_order,
-        event_key=event_key,
-        model_config=model_config,
-        feature_columns=feature_columns,
-        temporal_policy=TemporalWeightingPolicy.current_season_only_with_prior,
-    )
+    weighted_failure = ""
+    try:
+        weighted_predictions, weighted_fit = fit_monitoring_source_candidate(
+            train=train,
+            test=test,
+            event_order=event_order,
+            event_key=event_key,
+            model_config=model_config,
+            feature_columns=feature_columns,
+            temporal_policy=TemporalWeightingPolicy.current_season_only_with_prior,
+        )
+    except (ValueError, RuntimeError, OSError) as exc:
+        if frozen_feature_columns is None:
+            raise
+        weighted_predictions, weighted_fit = pd.DataFrame(), {}
+        weighted_failure = f"season_aware_unavailable:{type(exc).__name__}:{exc}"
     manifest = [
         training_manifest_row(
             event_key=event_key,
@@ -1701,6 +1796,17 @@ def train_monitoring_event_sources(
             test_season=test_season,
         ),
     ]
+    if weighted_failure:
+        manifest = manifest[:1]
+    if frozen_feature_columns is not None:
+        for row, fit in zip(manifest, [static_fit, weighted_fit], strict=False):
+            actual_keys = fit["actual_training_event_keys"]
+            row["training_event_keys_used"] = json.dumps(actual_keys)
+            row["training_event_count"] = len(actual_keys)
+            row["training_seasons_used"] = json.dumps(
+                sorted({event_season(k) for k in actual_keys})
+            )
+            row["training_row_count"] = fit["sample_weight_summary"]["training_rows"]
     leakage = [leakage_row(row, event_order=event_order) for row in manifest]
     return {
         "event_key": event_key,
@@ -1709,6 +1815,7 @@ def train_monitoring_event_sources(
         "weighted": weighted_predictions,
         "manifest": manifest,
         "leakage": leakage,
+        "weighted_failure": weighted_failure,
     }
 
 
@@ -1772,6 +1879,12 @@ def fit_monitoring_source_candidate(
     frame["feature_group"] = "base_plus_relative"
     frame["temporal_weighting_policy"] = temporal_policy.value
     frame["source_artifact_kind"] = "prospective_monitoring"
+    if (
+        not pd.to_numeric(frame["predicted_quali_gap_to_pole_sec"], errors="coerce")
+        .map(lambda value: pd.notna(value) and float("-inf") < value < float("inf"))
+        .all()
+    ):
+        raise ValueError("Non-finite FP3 prediction")
     frame["prediction_source_identity"] = json.dumps(
         {
             "family": "ablation",
@@ -1785,6 +1898,7 @@ def fit_monitoring_source_candidate(
     return frame, {
         "feature_columns": features,
         "sample_weight_summary": temporal.summary,
+        "actual_training_event_keys": list(dict.fromkeys(event_key_series(train_rows))),
     }
 
 
@@ -2206,7 +2320,20 @@ def build_settlement_rows(
         & merged["settlement_evaluable"].astype(bool)
     )
     merged["settlement_blocking_reason"] = merged["settlement_exclusion_reason"]
-    return merged.reindex(columns=settlement_columns())
+    from f1_prediction.modeling.fp3_production_policy import METADATA_COLUMNS
+
+    extra = [c for c in [*METADATA_COLUMNS, "forecast_created_at_utc"] if c in merged]
+    if "production_policy_version" in merged:
+        valid = merged["production_policy_version"].notna()
+        unavailable = valid & pd.to_numeric(merged["prediction_gap_sec"], errors="coerce").isna()
+        for column in (
+            "included_in_metrics",
+            "settlement_evaluable",
+            "eligible_for_future_prior_evidence",
+        ):
+            merged.loc[unavailable, column] = False
+        merged.loc[unavailable, "settlement_exclusion_reason"] = "candidate_unavailable"
+    return merged.reindex(columns=[*settlement_columns(), *extra])
 
 
 def with_settlement_driver_key(frame: pd.DataFrame) -> pd.DataFrame:
@@ -4195,6 +4322,13 @@ def forecast_snapshot_hash(forecasts: pd.DataFrame, shadow: pd.DataFrame) -> str
         "feature_group",
         "temporal_weighting_policy",
     ]
+    if (
+        "production_policy_version" in forecasts
+        and forecasts["production_policy_version"].notna().any()
+    ):
+        from f1_prediction.modeling.fp3_production_policy import METADATA_COLUMNS
+
+        keep.extend([*METADATA_COLUMNS, "forecast_created_at_utc"])
     frames = []
     for frame in (forecasts, shadow):
         if isinstance(frame, pd.DataFrame) and not frame.empty:
@@ -4203,6 +4337,10 @@ def forecast_snapshot_hash(forecasts: pd.DataFrame, shadow: pd.DataFrame) -> str
         return stable_signature([])
     combined = pd.concat(frames, ignore_index=True, sort=False).drop_duplicates()
     combined = combined.sort_values(keep[:-1], kind="stable")
+    if "production_policy_version" in keep:
+        from f1_prediction.modeling.fp3_production_policy import frame_hash
+
+        return frame_hash(combined.reset_index(drop=True))
     return stable_signature(records_for_json(combined))
 
 

@@ -218,6 +218,30 @@ def run_monitoring_before_qualifying(
         )
     event = resolution.canonical_event
     event_slug = resolution.event_slug
+    from f1_prediction.modeling import fp3_production_policy as fp3
+
+    policy = fp3.load_policy(config)
+    if policy and fp3.verify_existing(
+        config, protocol_name, event_slug, policy, model_config, feature_config
+    ):
+        # Reuse precedes ingestion, roster refresh, and target checks. Nothing frozen
+        # is recomputed when a before-Q command is repeated after settlement.
+        path = config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+        return MonitoringWorkflowSummary(
+            status="forecast_reused",
+            workflow=BEFORE_WORKFLOW,
+            summary_path=path,
+            stages_path=path,
+            completed=True,
+            blocking_failure_count=0,
+            warning_count=0,
+            event=event,
+            event_slug=event_slug,
+            event_order=resolution.event_order,
+            scheduled_event_date=resolution.scheduled_event_date,
+            event_order_resolution_source=resolution.event_order_resolution_source,
+            dashboard_current_event=None,
+        )
     dashboard_snapshot = _capture_dashboard_state(config)
     recorder = _WorkflowRecorder(
         config,

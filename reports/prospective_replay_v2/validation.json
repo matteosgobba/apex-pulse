@@ -1,0 +1,11 @@
+{
+  "full_suite_passed": 663,
+  "new_focused_tests": 10,
+  "full_suite_exit_code": 0,
+  "existing_tests_weakened": false,
+  "lint": "passed",
+  "format": "passed",
+  "diff_check": "passed",
+  "original_artifacts_unchanged": true,
+  "primary_rerun_byte_identical": true
+}

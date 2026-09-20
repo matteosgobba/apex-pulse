@@ -1,0 +1,23 @@
+artifact,group,rows,events,mae,scope
+ablation_uniform_predictions.parquet,all,774,39,0.9199012573872805,evaluation
+ablation_current_season_only_with_prior_predictions.parquet,all,774,39,0.7290896015412823,evaluation
+prospective_train_2023_test_2024_predictions.parquet,"('static_baseline', np.int64(2024))",238,12,0.9459500048586943,evaluation
+prospective_train_2023_test_2024_predictions.parquet,"('guarded_baseline', np.int64(2024))",238,12,0.9525666752824405,evaluation
+prospective_train_2023_test_2024_predictions.parquet,"('season_aware_frozen', np.int64(2024))",238,12,0.951215674730183,evaluation
+prospective_train_2023_2024_test_2025_predictions.parquet,"('static_baseline', np.int64(2025))",357,18,0.7882732422310238,evaluation
+prospective_train_2023_2024_test_2025_predictions.parquet,"('guarded_baseline', np.int64(2025))",357,18,0.5495338390437499,evaluation
+prospective_train_2023_2024_test_2025_predictions.parquet,"('season_aware_frozen', np.int64(2025))",357,18,0.5284537546811952,evaluation
+prospective_replay_train_2023_test_2024_predictions.parquet,"('static_baseline', np.int64(2024))",238,12,0.9459500048586943,evaluation
+prospective_replay_train_2023_test_2024_predictions.parquet,"('guarded_baseline', np.int64(2024))",238,12,0.9459500048586943,evaluation
+prospective_replay_train_2023_test_2024_predictions.parquet,"('season_aware_frozen', np.int64(2024))",238,12,0.9459500048586943,evaluation
+prospective_replay_train_2023_2024_test_2025_predictions.parquet,"('static_baseline', np.int64(2025))",357,18,0.7882732422310238,evaluation
+prospective_replay_train_2023_2024_test_2025_predictions.parquet,"('guarded_baseline', np.int64(2025))",357,18,0.7882732422310238,evaluation
+prospective_replay_train_2023_2024_test_2025_predictions.parquet,"('season_aware_frozen', np.int64(2025))",357,18,0.7882732422310238,evaluation
+prospective_replay_shadow_candidates.parquet,"('uniform_default', np.int64(2024))",417,21,1.0325899897872413,includes_warmup
+prospective_replay_shadow_candidates.parquet,"('season_aware_weighted_candidate', np.int64(2024))",417,21,0.9016165739622125,includes_warmup
+prospective_replay_shadow_candidates.parquet,"('uniform_default', np.int64(2025))",774,39,0.9199012573872805,includes_warmup
+prospective_replay_shadow_candidates.parquet,"('season_aware_weighted_candidate', np.int64(2025))",774,39,0.7290896015412823,includes_warmup
+prospective_replay_shadow_candidates.parquet,2024/season_aware_weighted_candidate,238,12,0.7164713729299673,evaluation_only
+prospective_replay_shadow_candidates.parquet,2024/uniform_default,238,12,0.9459500048586943,evaluation_only
+prospective_replay_shadow_candidates.parquet,2025/season_aware_weighted_candidate,357,18,0.5275664993017083,evaluation_only
+prospective_replay_shadow_candidates.parquet,2025/uniform_default,357,18,0.7882732422310238,evaluation_only

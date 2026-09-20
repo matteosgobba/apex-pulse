@@ -1,0 +1,6 @@
+# Large reproducible ledgers remain local; retain compact evidence and the written audit.
+events/
+original_reproduction/
+forecasts.csv
+settlements.csv
+training_manifest.csv

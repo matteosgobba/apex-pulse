@@ -1,0 +1,13 @@
+{
+  "protected_existing_files": 563,
+  "changed_existing_files": [],
+  "scope": [
+    "reports/metrics",
+    "reports/prospective_replay_v2",
+    "data/processed/modeling",
+    "data/processed/monitoring",
+    "configs"
+  ],
+  "new_policy_configuration": "configs/fp3_production_policy_v1.json",
+  "new_files_excluded_from_existing_file_check": true
+}

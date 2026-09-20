@@ -1,0 +1,186 @@
+{
+  "dataset_fingerprint": "95de715db8a8e94de97884c7ef6d115b079a6f3ce7b2af7fd80789c0aaed6ee3",
+  "dataset_sha256": "dca8fb564d953f699a37405ccbef75eb2b77ea4282ed4dc81b14d802a01a2165",
+  "evidence_initialization": "empty ledger; freshly replay legal preseason OOF history",
+  "feature_config": {
+    "baselines": {
+      "robust_extreme_gap_to_session_best_sec": 3.0
+    },
+    "data_quality": {
+      "extreme_gap_to_session_best_sec": 3.0,
+      "min_push_laps_latest_session": 2,
+      "min_valid_laps_latest_session": 5
+    },
+    "diagnostics": {
+      "extreme_mae_gap_threshold_sec": 1.5,
+      "top_n": 10
+    },
+    "historical_features": {
+      "min_periods": 1,
+      "rolling_windows": [
+        3,
+        5
+      ]
+    },
+    "push_lap": {
+      "allowed_compounds": [
+        "SOFT",
+        "MEDIUM",
+        "HARD",
+        "INTERMEDIATE",
+        "WET"
+      ],
+      "driver_best_pct_threshold": 1.03,
+      "session_best_pct_threshold": 1.07
+    }
+  },
+  "min_train_events": 5,
+  "model_config": {
+    "champion_diagnostics": {
+      "harmful_switch_tolerance_sec": 0.05
+    },
+    "champion_policy": {
+      "season_aware_nested_guarded": {
+        "base_mode": "stabilized_nested_guarded",
+        "eligible_checkpoint": "after_fp3",
+        "improvement_margin_sec": 0.05,
+        "min_current_season_prior_events": 5,
+        "min_prior_candidate_folds": 5,
+        "min_prior_candidate_predictions": 100,
+        "required_candidate": {
+          "family": "ablation",
+          "feature_group": "base_plus_relative",
+          "model_name": "random_forest",
+          "temporal_weighting_policy": "current_season_only_with_prior"
+        }
+      },
+      "selection_metric": "mae_gap_sec",
+      "stabilized_nested": {
+        "improvement_margin_sec": 0.05,
+        "min_prior_folds": 5,
+        "min_prior_predictions": 100,
+        "selection_metric": "mae_gap_sec"
+      },
+      "stabilized_nested_guarded": {
+        "base_mode": "stabilized_nested",
+        "fp3_no_baseline_switch": true,
+        "guarded_checkpoint": "after_fp3",
+        "guarded_default_family": "ablation",
+        "guarded_default_feature_group": "base_plus_relative",
+        "guarded_default_model_name": "random_forest"
+      },
+      "static": {
+        "after_fp1": {
+          "family": "robust_baseline",
+          "feature_group": null,
+          "model_name": "robust_best_push_lap",
+          "temporal_weighting_policy": null
+        },
+        "after_fp2": {
+          "family": "robust_baseline",
+          "feature_group": null,
+          "model_name": "robust_theoretical_best_lap",
+          "temporal_weighting_policy": null
+        },
+        "after_fp3": {
+          "family": "ablation",
+          "feature_group": "base_plus_relative",
+          "model_name": "random_forest",
+          "temporal_weighting_policy": null
+        }
+      }
+    },
+    "feature_group_policy": {
+      "after_fp1": "base_lap_features",
+      "after_fp2": "base_plus_quality",
+      "after_fp3": "base_plus_relative"
+    },
+    "hist_gradient_boosting": {
+      "enabled": true,
+      "l2_regularization": 0.1,
+      "learning_rate": 0.05,
+      "max_iter": 200,
+      "max_leaf_nodes": 31,
+      "random_state": 42
+    },
+    "min_events": 5,
+    "policy_simulation": {
+      "conformal": {
+        "confidence_level": 0.9,
+        "fallback_order": [
+          "checkpoint_method_bucket",
+          "checkpoint_bucket",
+          "checkpoint_method",
+          "checkpoint",
+          "global"
+        ],
+        "min_residual_count": 20
+      }
+    },
+    "random_forest": {
+      "max_depth": 8,
+      "min_samples_leaf": 2,
+      "n_estimators": 200
+    },
+    "random_state": 42,
+    "ridge_alpha": 1.0,
+    "temporal_weighting": {
+      "current_season_weight": 1.0,
+      "half_life_events": 10.0,
+      "min_current_season_events": 5,
+      "older_season_weight": 0.1,
+      "policy": "uniform",
+      "previous_season_weight": 0.35
+    },
+    "uncertainty": {
+      "confidence_level": 0.9,
+      "interval_z": 1.64,
+      "min_residual_count": 20,
+      "predicted_gap_bucket": {
+        "bucket_thresholds_sec": {
+          "close_midfield": 1.5,
+          "midfield": 3.0,
+          "pole_contender": 0.5
+        },
+        "confidence_level": 0.9,
+        "fallback_order": [
+          "checkpoint_method_bucket",
+          "checkpoint_bucket",
+          "checkpoint_method",
+          "checkpoint",
+          "global"
+        ],
+        "min_residual_count": 20
+      }
+    }
+  },
+  "seasons": [
+    2023,
+    2024,
+    2025
+  ],
+  "sensitivity": {
+    "current_season": [
+      4,
+      5,
+      6
+    ],
+    "folds": [
+      4,
+      5,
+      6
+    ],
+    "margin": [
+      0.025,
+      0.05,
+      0.075
+    ],
+    "predictions": [
+      80,
+      100,
+      120
+    ]
+  },
+  "uncertainty_numeric_rule": "original replay helper: 0.90 quantile; minimum 20 residuals",
+  "version": "prospective_replay_v2"
+}
