@@ -55,3 +55,7 @@ web/tsconfig.tsbuildinfo
 /AGENTS.md
 /PROJECT_HANDOFF.md
 /reports/model_card.md
+
+# Local documentation and generated output
+guida-tecnica-interview.*
+/output/

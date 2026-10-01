@@ -37,7 +37,6 @@ Predictions are supported after **FP1, FP2 and FP3**. The primary target is each
 
 The project extends beyond offline model training: it includes guarded data ingestion, chronological backtesting, policy governance, prospective replay, immutable forecast and settlement records, an autonomous race-weekend orchestrator, a read-only API and a deployed public frontend.
 
-For an implementation-grounded explanation in Italian, see the [technical and interview guide](docs/guida-tecnica-interview.md): data processing, models, historical training, leakage controls, scheduler timing, idempotency, engineering tradeoffs, current limitations, and 40 interview questions. A standalone [LaTeX edition](docs/guida-tecnica-interview.tex) includes the complete guide, a clickable table of contents, and vector diagrams; compile it with XeLaTeX (also supported by Overleaf).
 
 |                       |                                                                |
 | --------------------- | -------------------------------------------------------------- |
