@@ -32,7 +32,31 @@ def test_baseline_is_deterministic_and_event_scoped(tmp_path: Path) -> None:
     assert event["settlement_fingerprint"]["row_count"] == 1
     assert event["event_table_fingerprints"]["training_manifest"]["row_count"] == 1
     assert "monitoring/monitoring_event_manifest.json" in event["evidence_fingerprints"]
-    assert "historical_dashboard_event" in event["evidence_fingerprints"]
+    assert "historical_dashboard_event" not in event["evidence_fingerprints"]
+
+
+def test_legacy_dashboard_projection_does_not_create_false_mutation(tmp_path: Path) -> None:
+    config = _runtime(tmp_path)
+    baseline = create_live_integrity_baseline(config)
+    for event in baseline["events"]:
+        event["evidence_fingerprints"]["historical_dashboard_event"] = {
+            "kind": "semantic_json",
+            "fingerprint": "previous-dashboard-filter",
+        }
+    dashboard = config.project_root / "reports/dashboard/historical_monitoring_summary.json"
+    dashboard.write_text(json.dumps({"data": {"valid_prospective_monitoring": {"events": []}}}))
+
+    assert compare_live_integrity(config, baseline)["classification"] == "UNCHANGED"
+
+    # Ignoring a derived view must never mask a changed original input artifact.
+    path = (
+        config.project_root
+        / "data/processed/monitoring/2026/older-gp/monitoring_event_manifest.json"
+    )
+    path.write_text('{"changed": true}')
+    result = compare_live_integrity(config, baseline)
+    assert result["classification"] == "PREEXISTING_EVENT_MUTATED"
+    assert "evidence_fingerprints" in result["mutated_preexisting_events"][0]["changed_fields"]
 
 
 def test_compare_accepts_only_chronological_append(tmp_path: Path) -> None:

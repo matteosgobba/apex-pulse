@@ -152,6 +152,21 @@ def test_autopilot_status_returns_validated_read_only_snapshot(tmp_path: Path) -
     assert status_path.read_bytes() == before
 
 
+def test_autopilot_exposes_missed_weekends_without_mutating_log(tmp_path: Path) -> None:
+    from f1_prediction.operational_diagnostics import WEEKEND_HISTORY_FILE
+
+    dashboard_dir = tmp_path / "reports/dashboard"
+    metrics = dashboard_dir.parent / "metrics"
+    metrics.mkdir(parents=True)
+    _write_json(metrics / "autopilot_status.json", _autopilot_status_payload())
+    history = [{"event": "USA", "action_result": "forecast_window_missed"}]
+    _write_json(metrics / WEEKEND_HISTORY_FILE, history)
+    before = (metrics / WEEKEND_HISTORY_FILE).read_bytes()
+    response = _request(create_dashboard_app(dashboard_dir), "GET", "/api/v1/autopilot-status")
+    assert response.json["data"]["weekend_history"] == history
+    assert (metrics / WEEKEND_HISTORY_FILE).read_bytes() == before
+
+
 def test_autopilot_status_exposes_scheduler_origin_and_last_tick(tmp_path: Path) -> None:
     dashboard_dir = tmp_path / "reports/dashboard"
     dashboard_dir.mkdir(parents=True)

@@ -29,6 +29,37 @@ const HEALTH: HealthResponse = {
 const TEST_NOW = new Date("2026-07-24T12:00:00Z");
 
 describe("CurrentEventPageView", () => {
+  test("missed weekends remain visible after rollover and installed rule is explicit", () => {
+    const status = sprintOperationalStatus();
+    status.data.prediction_policy = {
+      status: "ready", mode: "conditional", transition_prior_events: 5,
+      candidate_contract_valid: true, historical_dataset_valid: true
+    };
+    status.data.weekend_history = [{
+      season: 2026, event: "United States Grand Prix", event_slug: "united-states-grand-prix",
+      round_number: 18, orchestrator_state_after: "BLOCKED",
+      action_result: "forecast_window_missed", forecast_exists: false,
+      last_data_issue: "FastF1 timing unavailable"
+    }];
+    renderPage({ operationalStatus: status });
+    expect(screen.getByText("United States Grand Prix")).toBeInTheDocument();
+    expect(screen.getByText(/Practice timing data could not be loaded before qualifying/))
+      .toBeInTheDocument();
+    expect(screen.getByText(/season-aware selection is enabled after 5 eligible/))
+      .toBeInTheDocument();
+  });
+
+  test("configured but invalid policy is never advertised as active", () => {
+    const status = sprintOperationalStatus();
+    status.data.prediction_policy = {
+      status: "blocked", mode: "conditional", candidate_contract_valid: false,
+      historical_dataset_valid: false
+    };
+    renderPage({ operationalStatus: status });
+    expect(screen.getByText(/Prediction policy requires attention/)).toBeInTheDocument();
+    expect(screen.queryByText(/season-aware selection is enabled/)).not.toBeInTheDocument();
+  });
+
   test("homepage renders the artifact event and makes the forecast central", () => {
     renderPage();
 

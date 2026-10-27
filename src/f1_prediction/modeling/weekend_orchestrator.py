@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import socket
 import time
@@ -18,6 +19,7 @@ from typing import Any, Protocol
 import fastf1
 import pandas as pd
 import yaml
+from fastf1.exceptions import DataNotLoadedError
 
 from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig
 from f1_prediction.data.cache import initialize_fastf1_cache
@@ -277,6 +279,7 @@ class FastF1ReadinessProvider:
         self.data_config = data_config
 
     def probe(self, event: WeekendEvent, session_code: str) -> ReadinessProbeResult:
+        session = None
         try:
             initialize_fastf1_cache(self.data_config.fastf1_cache_dir)
             session = fastf1.get_session(event.season, event.event, session_code)
@@ -310,6 +313,12 @@ class FastF1ReadinessProvider:
             )
         except Exception as exc:
             message = _safe_message(exc)
+            if isinstance(exc, DataNotLoadedError):
+                message = (
+                    f"FastF1 timing unavailable for {event.season} {event.event} {session_code} "
+                    f"after Session.load (api_path={getattr(session, 'api_path', 'unknown')}). "
+                    "Public timing data could not be loaded; retry before qualifying."
+                )
             if _transient_message(message):
                 return ReadinessProbeResult(
                     ProbeStatus.TRANSIENT_ERROR,
@@ -1494,6 +1503,13 @@ def _write_operational_record(metrics_dir: Path, result: AutopilotTickResult) ->
         handle.write(json.dumps(payload, sort_keys=True) + "\n")
         handle.flush()
         os.fsync(handle.fileno())
+
+    from f1_prediction.operational_diagnostics import update_weekend_history
+
+    try:
+        update_weekend_history(metrics_dir, payload)
+    except (OSError, ValueError, KeyError):
+        logging.getLogger(__name__).exception("Could not update operational weekend history")
 
 
 def validate_autopilot_status(payload: Any) -> dict[str, Any]:

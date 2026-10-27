@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 import pytest
+from fastf1.exceptions import DataNotLoadedError
 
 from f1_prediction.config import DataConfig, load_feature_config, load_model_config
 from f1_prediction.data.qualifying_entry_list import QualifyingRosterError
@@ -186,6 +187,25 @@ def test_event_override_must_resolve_exact_calendar_identity() -> None:
             season_override=2026,
             event_override="invented race",
         )
+
+
+def test_readiness_missing_timing_explains_session_and_retries(monkeypatch, tmp_path):
+    class Session:
+        api_path = "/static/example/Practice_3/"
+
+        def load(self, **kwargs):
+            pass
+
+        @property
+        def laps(self):
+            raise DataNotLoadedError("not loaded")
+
+    monkeypatch.setattr("fastf1.get_session", lambda *args: Session())
+    monkeypatch.setattr("fastf1.Cache.enable_cache", lambda path: None)
+    result = FastF1ReadinessProvider(_data_config(tmp_path)).probe(_event(), "FP3")
+    assert result.retryable
+    assert "FP3 after Session.load" in result.reason
+    assert "/static/example/Practice_3/" in result.reason
 
 
 @pytest.mark.parametrize(

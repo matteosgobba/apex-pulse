@@ -72,6 +72,31 @@ def test_export_manifest_checksums_are_correct_and_source_is_unchanged(
     assert {path: path.read_bytes() for path in critical} == before
 
 
+def test_export_preserves_registered_practice_aggregates_for_conditional_policy(tmp_path):
+    root = _write_source_runtime(tmp_path / "source")
+    practice = root / (
+        "data/processed/session_features/2026/example-gp/practice_session_features.parquet"
+    )
+    practice.parent.mkdir(parents=True)
+    practice.write_bytes(b"preserved-derived-practice-aggregates")
+    snapshot = root / "reports/metrics/fp3_conditional_v1/test_protocol/example-gp/snapshot.json"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text('{"provenance": "immutable"}')
+    exported = export_production_state(root, tmp_path / "dist", created_at_utc=FIXED_CREATED_AT)
+    runtime = tmp_path / "runtime"
+    import_production_state(exported.bundle_path, runtime)
+    assert (runtime / practice.relative_to(root)).read_bytes() == practice.read_bytes()
+    assert (runtime / snapshot.relative_to(root)).read_bytes() == snapshot.read_bytes()
+    inventory = inventory_production_state(root)
+    record = next(
+        item
+        for item in inventory
+        if item.source_relative_path == practice.relative_to(root).as_posix()
+    )
+    assert record.required_for_future_forecast
+    assert record.included
+
+
 def test_export_is_byte_deterministic_given_fixed_creation_time(tmp_path: Path) -> None:
     root = _write_source_runtime(tmp_path / "source")
 

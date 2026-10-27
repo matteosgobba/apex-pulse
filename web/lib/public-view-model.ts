@@ -215,6 +215,27 @@ export function adaptCurrentEvent(
       { label: "Protocol version", value: currentData?.monitoring_protocol?.protocol_version },
       { label: "Checkpoint identifier", value: currentData?.monitoring_protocol?.checkpoint },
       {
+        label: "Forecast training policy",
+        value: page.forecast?.data.forecast_metadata?.candidate_or_policy_identity
+          ?.temporal_weighting_policy
+      },
+      {
+        label: "Forecast production rule",
+        value: page.forecast?.data.forecast_metadata?.production_policy_version
+      },
+      {
+        label: "Eligible prior current-season events",
+        value: page.forecast?.data.forecast_metadata?.prior_current_season_eligible_events
+      },
+      {
+        label: "Selected forecast candidate",
+        value: page.forecast?.data.forecast_metadata?.selected_candidate
+      },
+      {
+        label: "Forecast fallback reason",
+        value: page.forecast?.data.forecast_metadata?.fallback_reason
+      },
+      {
         label: "Registry lineage",
         value: currentData?.registry_lineage?.event_order_lineage_status
       },

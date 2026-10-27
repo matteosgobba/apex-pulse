@@ -1,0 +1,31 @@
+# Vercel builds the configured web/ root. Never upload Python environments,
+# historical data, model artifacts, reports or local credentials with the site.
+.git/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.Rhistory
+.DS_Store
+.env*
+AGENTS.md
+PROJECT_HANDOFF.md
+assets/
+configs/
+data/
+deploy/
+dist/
+docs/
+models/
+notebooks/
+output/
+reports/
+scripts/
+src/
+tests/
+guida-tecnica-interview.*
+web/node_modules/
+web/.next/
+web/.vercel/
+web/.env*
+web/coverage/
+web/tsconfig.tsbuildinfo

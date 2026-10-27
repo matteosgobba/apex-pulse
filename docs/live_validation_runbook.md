@@ -24,6 +24,16 @@ railway ssh --service apex-pulse python -m f1_prediction.cli autopilot-tick --dr
 
 `UNCHANGED` and `VALID_APPEND` are passing integrity outcomes. Every other
 classification requires operator investigation before mutation is re-enabled.
+Derived dashboard history is a filtered view and is not immutable event evidence;
+its disappearance alone must not be interpreted as a historical forecast rewrite.
+Existing baseline files remain valid without replacement.
+
+The autopilot endpoint also reports `prediction_policy`: verify `status=ready`,
+`production_policy_version=FP3_CONDITIONAL_POLICY_V1`, `mode=conditional`, and
+all three contract/dependency checks true. This describes the installed rule; the forecast's own
+metadata describes the model actually used for its immutable prediction. The
+`weekend_history` list retains skipped/missed outcomes after event rollover.
+See the [October 27 incident audit](prediction_incident_2026_10_27.md).
 
 ## Qualifying roster versus practice evidence
 

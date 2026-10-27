@@ -604,6 +604,18 @@ def _build_selection(root: Path) -> dict[str, dict[str, Any]]:
         selections[normalized] = value
 
     metrics_dir = root / "reports/metrics"
+    policy_snapshots = metrics_dir / "fp3_conditional_v1"
+    if policy_snapshots.is_dir():
+        for path in sorted(policy_snapshots.rglob("*")):
+            if path.is_file():
+                add(
+                    path.relative_to(root).as_posix(),
+                    "authoritative_required",
+                    "Immutable conditional-policy freeze and per-event provenance.",
+                    immutable=True,
+                    forecast=True,
+                    settlement=True,
+                )
     for filename in sorted(CORE_MONITORING_FILES):
         if (metrics_dir / filename).is_file():
             add(
@@ -635,6 +647,16 @@ def _build_selection(root: Path) -> dict[str, dict[str, Any]]:
         season = int(row["monitor_season"])
         slug = str(row["event_slug"])
         event_dir = f"data/processed/monitoring/{season}/{slug}"
+        practice = (
+            f"data/processed/session_features/{season}/{slug}/practice_session_features.parquet"
+        )
+        if (root / practice).is_file():
+            add(
+                practice,
+                "operational_required",
+                "Practice aggregates required by the frozen FP3 candidate adapter.",
+                forecast=True,
+            )
         for filename in (
             "monitoring_event_manifest.json",
             "monitoring_fp3_features.parquet",

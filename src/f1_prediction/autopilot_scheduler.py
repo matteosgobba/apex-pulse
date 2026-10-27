@@ -80,6 +80,7 @@ class SchedulerSnapshot:
     next_scheduled_run_at_utc: str | None
     last_tick_origin: str | None
     last_tick_result: dict[str, Any] | None
+    prediction_policy: dict[str, Any] | None = None
 
 
 class AutopilotScheduler:
@@ -92,6 +93,7 @@ class AutopilotScheduler:
         tick: Callable[[], AutopilotTickResult],
         *,
         clock: Callable[[], datetime] | None = None,
+        policy_status: dict[str, Any] | None = None,
     ) -> None:
         self.settings = settings
         self.status_path = status_path
@@ -109,6 +111,7 @@ class AutopilotScheduler:
         self._next_run: datetime | None = None
         self._last_result: dict[str, Any] | None = None
         self._consecutive_failures = 0
+        self._policy_status = policy_status
 
     @property
     def running(self) -> bool:
@@ -230,6 +233,7 @@ class AutopilotScheduler:
             next_scheduled_run_at_utc=_iso(self._next_run),
             last_tick_origin="scheduler" if self._last_started else None,
             last_tick_result=self._last_result,
+            prediction_policy=self._policy_status,
         )
 
     def _utc_now(self) -> datetime:
@@ -249,6 +253,10 @@ def build_production_scheduler(
     model_config = load_model_config(project_root=data_config.project_root)
     feature_config = load_feature_config(project_root=data_config.project_root)
     autopilot_config = load_autopilot_config(data_config.project_root / "configs/autopilot.yaml")
+    from f1_prediction.operational_diagnostics import prediction_policy_status
+
+    policy_status = prediction_policy_status(data_config, model_config, feature_config)
+    LOGGER.info("Installed prediction policy: %s", policy_status)
 
     def tick() -> AutopilotTickResult:
         result = run_autopilot_tick(
@@ -281,11 +289,12 @@ def build_production_scheduler(
         settings,
         data_config.metrics_output_dir / SCHEDULER_STATUS_FILE,
         tick,
+        policy_status=policy_status,
     )
 
 
 def validate_scheduler_status(payload: Any) -> dict[str, Any]:
-    required = set(SchedulerSnapshot.__dataclass_fields__)
+    required = set(SchedulerSnapshot.__dataclass_fields__) - {"prediction_policy"}
     if not isinstance(payload, dict) or required - set(payload):
         raise ValueError("Autopilot scheduler status schema is incomplete")
     if payload.get("schema_version") != SCHEDULER_SCHEMA_VERSION:

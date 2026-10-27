@@ -217,6 +217,11 @@ export interface ForecastProvenance extends Record<string, unknown> {
 }
 
 export interface ForecastMetadata extends Record<string, unknown> {
+  production_policy_version?: string | null;
+  selected_candidate?: string | null;
+  prior_current_season_eligible_events?: number | null;
+  regime?: string | null;
+  fallback_reason?: string | null;
   candidate_or_policy_identity?: ForecastMethodIdentity | null;
   checkpoint?: string | null;
   forecast_timestamp?: string | null;
@@ -472,6 +477,16 @@ export interface OperationalEvent {
 }
 
 export interface AutopilotStatusData extends Record<string, unknown> {
+  prediction_policy?: {
+    status: "ready" | "blocked" | "not_installed";
+    production_policy_version?: string | null;
+    mode: string;
+    transition_prior_events?: number | null;
+    candidate_contract_valid: boolean;
+    historical_dataset_valid: boolean;
+    prior_feature_dependencies_valid?: boolean;
+  } | null;
+  weekend_history?: OperationalWeekendOutcome[];
   operational_event?: OperationalEvent | null;
   orchestrator_state_after?: string | null;
   forecast_exists?: boolean | null;
@@ -482,6 +497,17 @@ export interface AutopilotStatusData extends Record<string, unknown> {
   scheduler_enabled?: boolean;
   scheduler_running?: boolean;
   last_tick_completed_at_utc?: string | null;
+}
+
+export interface OperationalWeekendOutcome {
+  season: number;
+  event: string;
+  event_slug: string;
+  round_number: number;
+  orchestrator_state_after: string;
+  action_result: string;
+  forecast_exists: boolean;
+  last_data_issue?: string | null;
 }
 
 export interface AutopilotStatusEnvelope {

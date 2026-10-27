@@ -134,6 +134,29 @@ def test_forecast_available_exports_ranked_leaderboard(tmp_path: Path) -> None:
     assert rows[0]["interval_available"] is False
 
 
+def test_public_metadata_uses_actual_forecast_policy_instead_of_protocol_default(tmp_path):
+    config = _config(tmp_path)
+    _write_protocol(config)
+    _write_registry(config, [_registry_event("Bahrain", 1)])
+    _write_forecasts(config, "Bahrain", [("VER", "Red Bull Racing", 0.3)])
+    path = config.metrics_output_dir / "prospective_monitoring_forecasts.parquet"
+    forecasts = pd.read_parquet(path)
+    forecasts["production_policy_version"] = "FP3_CONDITIONAL_POLICY_V1"
+    forecasts["selected_candidate"] = "season_aware_weighted_candidate"
+    forecasts["prior_current_season_eligible_events"] = 5
+    forecasts["temporal_weighting_policy"] = "current_season_only_with_prior"
+    forecasts["regime"] = "established"
+    forecasts.to_parquet(path, index=False)
+    export_dashboard_artifacts(config)
+    metadata = _read_dashboard(config, "event_forecast.json")["data"]["forecast_metadata"]
+    assert metadata["production_policy_version"] == "FP3_CONDITIONAL_POLICY_V1"
+    assert metadata["selected_candidate"] == "season_aware_weighted_candidate"
+    assert metadata["prior_current_season_eligible_events"] == 5
+    assert metadata["candidate_or_policy_identity"]["temporal_weighting_policy"] == (
+        "current_season_only_with_prior"
+    )
+
+
 def test_forecast_only_driver_is_exported_separately_from_primary_views(
     tmp_path: Path,
 ) -> None:

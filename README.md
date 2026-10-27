@@ -214,8 +214,13 @@ deployment-selector evaluation above.
 
 The implementation corrects missing current-season training history, preserves
 the historical feature contract, and separates new post-freeze evidence from
-historical replay. This task did not deploy a new cloud image. See the
+historical replay. The initial September implementation was not deployed; the
+October 27 investigation found the September 5 image still running. Runtime
+activation and per-forecast selection are now exposed independently. See the
 [audit, activation semantics, fallback and rollback instructions](docs/fp3_conditional_policy_v1.md).
+The [October availability audit](docs/prediction_incident_2026_10_27.md) explains
+the Singapore exclusion, missing USA timing, integrity correction and deployment
+checks. Git commit/push alone does not deploy the CLI-managed Railway backend.
 Inspect the configured policy without modifying artifacts with
 `python -m f1_prediction.cli fp3-policy-report`.
 

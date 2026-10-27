@@ -1502,6 +1502,13 @@ def _forecast_metadata(context: EventContext, live: pd.DataFrame) -> dict[str, A
             "temporal_weighting_policy": _row_value(row, "temporal_weighting_policy"),
         },
         "uncertainty_method": _row_value(row, "uncertainty_method"),
+        "production_policy_version": _row_value(row, "production_policy_version"),
+        "selected_candidate": _row_value(row, "selected_candidate"),
+        "prior_current_season_eligible_events": _row_value(
+            row, "prior_current_season_eligible_events"
+        ),
+        "regime": _row_value(row, "regime"),
+        "fallback_reason": _row_value(row, "fallback_reason"),
     }
 
 

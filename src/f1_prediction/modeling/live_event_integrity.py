@@ -108,7 +108,6 @@ def create_live_integrity_baseline(
         name: _read_table(metrics / filename, kind)
         for name, (filename, kind) in EVENT_TABLES.items()
     }
-    dashboard_events = _dashboard_event_records(config.project_root / "reports/dashboard")
     events: list[dict[str, Any]] = []
     ordered_registry = registry.sort_values(
         ["protocol_name", "monitor_season", "event_order", "event_slug"], kind="stable"
@@ -123,11 +122,6 @@ def create_live_integrity_baseline(
             for name, frame in tables.items()
         }
         evidence = _filesystem_evidence(config, season, event_slug)
-        if event_slug in dashboard_events:
-            evidence["historical_dashboard_event"] = {
-                "fingerprint": _canonical_fingerprint(dashboard_events[event_slug]),
-                "kind": "semantic_json",
-            }
         events.append(
             {
                 "protocol_name": protocol_name,
@@ -479,27 +473,6 @@ def _filesystem_evidence(config: DataConfig, season: int, event_slug: str) -> di
     return result
 
 
-def _dashboard_event_records(dashboard_dir: Path) -> dict[str, Any]:
-    path = dashboard_dir / "historical_monitoring_summary.json"
-    if not path.is_file():
-        return {}
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    data = payload.get("data", {})
-    records: list[Any] = []
-    records.extend(data.get("legacy_descriptive_records", []))
-    records.extend(data.get("synthetic_rehearsal_records", []))
-    valid = data.get("valid_prospective_monitoring", {})
-    if isinstance(valid, dict):
-        records.extend(valid.get("events", []))
-    result: dict[str, Any] = {}
-    for record in records:
-        identity = record.get("event_identity", {}) if isinstance(record, dict) else {}
-        slug = str(identity.get("event_slug") or "")
-        if slug:
-            result[slug] = record
-    return result
-
-
 def _current_artifact_errors(config: DataConfig) -> list[str]:
     metrics = config.metrics_output_dir
     errors: list[str] = []
@@ -612,6 +585,16 @@ def _chronology_errors(baseline: list[dict[str, Any]], current: list[dict[str, A
 
 
 def _event_changes(expected: Mapping[str, Any], current: Mapping[str, Any]) -> list[str]:
+    # Old baselines included a filtered, regenerated dashboard projection. Its
+    # removal/reclassification is not a mutation of canonical event evidence.
+    # Exclude only this derived field, including when reading existing baselines.
+    def canonical_evidence(event: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in event.get("evidence_fingerprints", {}).items()
+            if key != "historical_dashboard_event"
+        }
+
     fields = (
         "event",
         "event_order",
@@ -619,10 +602,12 @@ def _event_changes(expected: Mapping[str, Any], current: Mapping[str, Any]) -> l
         "forecast_fingerprint",
         "settlement_fingerprint",
         "event_table_fingerprints",
-        "evidence_fingerprints",
         "coverage_status",
     )
-    return [field for field in fields if expected.get(field) != current.get(field)]
+    changed = [field for field in fields if expected.get(field) != current.get(field)]
+    if canonical_evidence(expected) != canonical_evidence(current):
+        changed.append("evidence_fingerprints")
+    return changed
 
 
 def _event_rows(

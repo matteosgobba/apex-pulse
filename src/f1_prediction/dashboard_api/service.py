@@ -21,6 +21,7 @@ from f1_prediction.modeling.live_event_integrity import (
     validate_live_validation_status,
 )
 from f1_prediction.modeling.weekend_orchestrator import STATUS_FILE, validate_autopilot_status
+from f1_prediction.operational_diagnostics import WEEKEND_HISTORY_FILE
 from f1_prediction.utils.paths import get_project_root, resolve_project_path
 
 DASHBOARD_ARTIFACTS: dict[str, str] = {
@@ -161,6 +162,17 @@ class AutopilotStatusService:
             if key not in {"schema_version", "last_tick_result"}
         }
         data = {**(validated or {}), **scheduler_fields}
+        history = self.status_path.with_name(WEEKEND_HISTORY_FILE)
+        if history.is_file():
+            try:
+                records = json.loads(history.read_text())
+                if not isinstance(records, list) or any(
+                    not isinstance(row, dict) for row in records
+                ):
+                    raise ValueError("Invalid operational weekend history")
+                data["weekend_history"] = records[-12:]
+            except (OSError, ValueError) as exc:
+                raise DashboardArtifactInvalidError(artifact_type="weekend_history") from exc
         return {
             "schema_version": "1.0",
             "status": "available" if validated is not None else "not_initialized",

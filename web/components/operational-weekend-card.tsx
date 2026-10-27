@@ -39,6 +39,11 @@ export function OperationalWeekendCard({
   const forecastNotice = operationalForecastNotice(event, status);
   const weekendLabel =
     nowMs === null ? "Monitored weekend" : operationalWeekendLabel(event, new Date(nowMs));
+  const missedWeekends = (status?.weekend_history ?? []).filter(
+    (weekend) => weekend.event_slug !== event.event_slug && !weekend.forecast_exists &&
+      (weekend.action_result === "forecast_window_missed" ||
+        weekend.orchestrator_state_after === "UNSUPPORTED_WEEKEND_FORMAT")
+  ).slice(-4).reverse();
 
   return (
     <section aria-label="Operational Formula 1 weekend" className="space-y-5">
@@ -78,6 +83,33 @@ export function OperationalWeekendCard({
         initialNow={initialNow}
         forecastAvailable={event.supported ? (status?.forecast_exists ?? undefined) : false}
       />
+      {status?.prediction_policy ? (
+        <p className="text-sm text-apex-secondary">
+          {status.prediction_policy.status !== "ready"
+            ? "Prediction policy requires attention before the next forecast."
+            : status.prediction_policy.mode === "uniform_only"
+              ? "Prediction policy: Uniform rollback is active."
+              : `Prediction policy: season-aware selection is enabled after ${status.prediction_policy.transition_prior_events} eligible, settled events in the current season. Earlier forecasts use Uniform.`}
+        </p>
+      ) : null}
+      {missedWeekends.length > 0 ? (
+        <div className="rounded-2xl border border-apex-border bg-apex-panel p-5">
+          <h2 className="font-semibold text-apex-text">Recent weekends without a forecast</h2>
+          <ul className="mt-3 space-y-3 text-sm text-apex-secondary">
+            {missedWeekends.map((weekend) => (
+              <li key={`${weekend.season}/${weekend.event_slug}`}>
+                <span className="font-medium text-apex-text">{weekend.event}</span>
+                {" · "}
+                {weekend.orchestrator_state_after === "UNSUPPORTED_WEEKEND_FORMAT"
+                  ? "This weekend format is not supported by the FP3 model."
+                  : weekend.last_data_issue
+                    ? "Practice timing data could not be loaded before qualifying. No retrospective prediction was added."
+                    : "The safe forecast window closed before a prediction was created."}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </section>
   );
 }
