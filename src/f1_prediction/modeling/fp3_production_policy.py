@@ -435,9 +435,34 @@ def freeze_snapshot(
         "forecast_file_sha256": file_hash(path.with_name("forecasts.parquet")),
         "target_features_file_sha256": file_hash(path.with_name("target_features.parquet")),
         "candidate_contract": policy["candidate_contract"],
+        "practice_input_sources": practice_input_sources(config, slug, target_features),
     }
     with path.open("x") as stream:
         json.dump(snapshot, stream, indent=2)
+
+
+def practice_input_sources(config: DataConfig, slug: str, features: pd.DataFrame) -> list[dict]:
+    """Freeze source identity alongside each new forecast without relabeling old ones."""
+    if features.empty or "season" not in features:
+        return []
+    season = int(features["season"].iloc[0])
+    sources = []
+    for code in ("fp1", "fp2", "fp3"):
+        path = config.session_metadata_output_dir / str(season) / slug / f"{code}_metadata.json"
+        if path.is_file():
+            metadata = json.loads(path.read_text())
+            sources.append(
+                {
+                    "session": code.upper(),
+                    "data_source": metadata.get("data_source", "fastf1"),
+                    "metadata_sha256": file_hash(path),
+                    "laps_sha256": file_hash(
+                        config.lap_output_dir / str(season) / slug / f"{code}_laps.parquet"
+                    ),
+                    "source_metadata": metadata.get("source_metadata", {}),
+                }
+            )
+    return sources
 
 
 def decorate_predictions(forecasts: pd.DataFrame, context: dict, policy: dict) -> pd.DataFrame:

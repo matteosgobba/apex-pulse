@@ -17,7 +17,7 @@ const INTRODUCTION = [
   {
     number: "02",
     title: "Data sources",
-    body: "FastF1 provides public historical practice laps, results, timing, weather and limited public telemetry. Local cached event schedules supply the displayed session times."
+    body: "New sessions use OpenF1’s free historical laps, sectors, tyres and race-control messages after its 30-minute access delay. Earlier forecasts and training data retain their original FastF1 source. FastF1 still supplies the calendar. OpenF1 lap-quality checks use a documented consistency proxy and can differ from FastF1’s validation."
   }
 ];
 

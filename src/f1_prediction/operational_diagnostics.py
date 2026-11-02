@@ -26,6 +26,13 @@ def prediction_policy_status(
         "candidate_contract_valid": False,
         "historical_dataset_valid": False,
         "prior_feature_dependencies_valid": False,
+        "session_data_source": config.session_data_source,
+        "session_data_access": (
+            "free_historical" if config.session_data_source == "openf1" else "fastf1_archive"
+        ),
+        "session_adapter_version": (
+            "OPENF1_HISTORICAL_LAPS_V1" if config.session_data_source == "openf1" else None
+        ),
     }
     try:
         policy = fp3.load_policy(config)

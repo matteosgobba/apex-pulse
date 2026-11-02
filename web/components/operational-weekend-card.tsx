@@ -83,6 +83,20 @@ export function OperationalWeekendCard({
         initialNow={initialNow}
         forecastAvailable={event.supported ? (status?.forecast_exists ?? undefined) : false}
       />
+      {status?.prediction_policy?.session_data_source === "openf1" ? (
+        <div className="rounded-2xl border border-apex-border bg-apex-panel p-5 text-sm text-apex-secondary">
+          <p className="font-semibold text-apex-text">Practice data: OpenF1 historical access</p>
+          <p className="mt-2">
+            New forecasts use free OpenF1 data after the session has ended and its 30-minute
+            access delay has passed. Lap-quality checks use a documented consistency proxy;
+            coverage may differ from the FastF1 data used for training.
+          </p>
+          <p className="mt-2">
+            The FastF1 timing archive now requires a paid subscription. This prevented recent
+            forecasts, including Mexico. Earlier predictions retain their original data source.
+          </p>
+        </div>
+      ) : null}
       {status?.prediction_policy ? (
         <p className="text-sm text-apex-secondary">
           {status.prediction_policy.status !== "ready"

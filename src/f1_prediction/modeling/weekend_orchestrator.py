@@ -281,6 +281,21 @@ class FastF1ReadinessProvider:
     def probe(self, event: WeekendEvent, session_code: str) -> ReadinessProbeResult:
         session = None
         try:
+            if self.data_config.session_data_source == "openf1":
+                from f1_prediction.data.openf1_loader import load_openf1_session_data
+
+                loaded = load_openf1_session_data(
+                    event.season,
+                    event.event,
+                    session_code,
+                    self.data_config,
+                )
+                return ReadinessProbeResult(
+                    ProbeStatus.READY,
+                    f"OpenF1 free historical {session_code} lap data is available.",
+                    lap_count=len(loaded.laps),
+                    driver_count=len(loaded.drivers),
+                )
             initialize_fastf1_cache(self.data_config.fastf1_cache_dir)
             session = fastf1.get_session(event.season, event.event, session_code)
             session.load(laps=True, telemetry=False, weather=False, messages=False)

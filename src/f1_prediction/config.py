@@ -30,6 +30,7 @@ class DataConfig:
     load_telemetry: bool = False
     load_weather: bool = False
     load_messages: bool = False
+    session_data_source: str = "fastf1"
 
 
 @dataclass(frozen=True)
@@ -328,6 +329,9 @@ def load_data_config(
     fastf1_options = raw_config.get("fastf1", {})
     if not isinstance(fastf1_options, dict):
         raise ConfigError(f"'fastf1' must be a mapping in {path}")
+    source = raw_config.get("session_data_source", "fastf1")
+    if not isinstance(source, str) or source not in {"fastf1", "openf1"}:
+        raise ConfigError(f"session_data_source must be fastf1 or openf1 in {path}")
 
     cache_value = _required_string(paths, "fastf1_cache_dir", path)
     output_value = _required_string(paths, "lap_output_dir", path)
@@ -349,6 +353,7 @@ def load_data_config(
         load_telemetry=_boolean_option(fastf1_options, "load_telemetry", path),
         load_weather=_boolean_option(fastf1_options, "load_weather", path),
         load_messages=_boolean_option(fastf1_options, "load_messages", path),
+        session_data_source=source,
     )
 
 

@@ -48,6 +48,31 @@ def test_policy_missing_dataset_is_not_reported_ready(tmp_path):
     assert status["historical_dataset_valid"] is False
 
 
+def test_new_forecast_source_provenance_uses_original_ingestion_metadata(tmp_path):
+    import pandas as pd
+
+    from f1_prediction.modeling.fp3_production_policy import file_hash, practice_input_sources
+
+    config = replace(
+        load_data_config(),
+        session_metadata_output_dir=tmp_path / "metadata",
+        lap_output_dir=tmp_path / "laps",
+        session_data_source="openf1",
+    )
+    metadata = config.session_metadata_output_dir / "2026/example/fp3_metadata.json"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text('{"data_source": "fastf1"}')
+    laps = config.lap_output_dir / "2026/example/fp3_laps.parquet"
+    laps.parent.mkdir(parents=True)
+    laps.write_bytes(b"preserved source")
+    before = metadata.read_bytes()
+    source = practice_input_sources(config, "example", pd.DataFrame({"season": [2026]}))[0]
+    assert source["data_source"] == "fastf1"
+    assert source["metadata_sha256"] == file_hash(metadata)
+    assert source["laps_sha256"] == file_hash(laps)
+    assert metadata.read_bytes() == before
+
+
 def test_policy_readiness_blocks_missing_prior_practice_dependency(monkeypatch, tmp_path):
     import pandas as pd
     import pytest

@@ -100,7 +100,12 @@ def ingest_event(
 
         _report(progress, f"LOAD {session_identifier}: starting")
         try:
-            session_data = load_fastf1_session_data(
+            loader = load_fastf1_session_data
+            if config.session_data_source == "openf1":
+                from f1_prediction.data.openf1_loader import load_openf1_session_data
+
+                loader = load_openf1_session_data
+            session_data = loader(
                 season=season,
                 event=event,
                 session_identifier=session_identifier,
@@ -188,19 +193,23 @@ def build_success_metadata(
     laps_path: Path,
 ) -> dict[str, object]:
     """Build portable metadata for a successful session load."""
-    return _base_metadata(
-        season=session_data.season,
-        event_input=session_data.event_input,
-        event_name=session_data.event_name,
-        session_input=session_data.session_input,
-        session_name=session_data.session_name,
-        config=config,
-        laps_path=laps_path,
-        n_laps=len(session_data.laps),
-        drivers=list(session_data.drivers),
-        status="success",
-        error_message=None,
-    )
+    return {
+        **_base_metadata(
+            season=session_data.season,
+            event_input=session_data.event_input,
+            event_name=session_data.event_name,
+            session_input=session_data.session_input,
+            session_name=session_data.session_name,
+            config=config,
+            laps_path=laps_path,
+            n_laps=len(session_data.laps),
+            drivers=list(session_data.drivers),
+            status="success",
+            error_message=None,
+        ),
+        "data_source": session_data.data_source,
+        "source_metadata": session_data.source_metadata,
+    }
 
 
 def build_failed_metadata(

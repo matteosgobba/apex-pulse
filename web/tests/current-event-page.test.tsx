@@ -29,6 +29,20 @@ const HEALTH: HealthResponse = {
 const TEST_NOW = new Date("2026-07-24T12:00:00Z");
 
 describe("CurrentEventPageView", () => {
+  test("free source migration is disclosed without relabeling the previous forecast", () => {
+    const status = missedForecastOperationalStatus();
+    status.data.prediction_policy = {
+      status: "ready", mode: "conditional", candidate_contract_valid: true,
+      historical_dataset_valid: true, session_data_source: "openf1"
+    };
+    renderPage({ operationalStatus: status });
+    expect(screen.getByText("Practice data: OpenF1 historical access")).toBeInTheDocument();
+    expect(screen.getByText(/30-minute/)).toBeInTheDocument();
+    expect(screen.getByText(/coverage may differ/)).toBeInTheDocument();
+    expect(screen.getByText(/Earlier predictions retain their original data source/))
+      .toBeInTheDocument();
+  });
+
   test("missed weekends remain visible after rollover and installed rule is explicit", () => {
     const status = sprintOperationalStatus();
     status.data.prediction_policy = {

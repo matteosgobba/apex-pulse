@@ -1,7 +1,8 @@
 autopilot:
-  practice_initial_grace_minutes: 5
-  fp3_initial_grace_minutes: 15
-  qualifying_initial_grace_minutes: 15
+  # OpenF1's free historical access starts 30 minutes after a session ends.
+  practice_initial_grace_minutes: 35
+  fp3_initial_grace_minutes: 35
+  qualifying_initial_grace_minutes: 35
   retry_interval_minutes: 10
   post_qualifying_event_hold_hours: 24
   settled_check_interval_minutes: 360

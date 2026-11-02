@@ -48,6 +48,15 @@ fastf1:
     assert config.load_telemetry is False
     assert config.load_weather is True
     assert config.load_messages is False
+    assert config.session_data_source == "fastf1"
+
+
+@pytest.mark.parametrize("source", ["paid", "[openf1]", "{mode: openf1}"])
+def test_invalid_session_data_source_is_a_configuration_error(tmp_path, source):
+    config_path = tmp_path / "data.yaml"
+    config_path.write_text(f"paths: {{}}\nsession_data_source: {source}\n")
+    with pytest.raises(ConfigError, match="session_data_source"):
+        load_data_config(config_path=config_path)
 
 
 def test_load_yaml_config_rejects_non_mapping_root(tmp_path: Path) -> None:

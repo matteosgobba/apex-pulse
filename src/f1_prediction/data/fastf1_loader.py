@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +34,8 @@ class FastF1SessionData:
     session_name: str
     laps: pd.DataFrame
     drivers: tuple[str, ...]
+    data_source: str = "fastf1"
+    source_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,8 +56,13 @@ def load_fastf1_session(
     session_identifier: str,
     config: DataConfig,
 ) -> SessionLoadResult:
-    """Load one historical session and save its basic laps as Parquet."""
-    session_data = load_fastf1_session_data(
+    """Load from the configured session source and save its basic laps as Parquet."""
+    loader = load_fastf1_session_data
+    if config.session_data_source == "openf1":
+        from f1_prediction.data.openf1_loader import load_openf1_session_data
+
+        loader = load_openf1_session_data
+    session_data = loader(
         season=season,
         event=event,
         session_identifier=session_identifier,

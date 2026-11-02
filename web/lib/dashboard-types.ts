@@ -485,6 +485,9 @@ export interface AutopilotStatusData extends Record<string, unknown> {
     candidate_contract_valid: boolean;
     historical_dataset_valid: boolean;
     prior_feature_dependencies_valid?: boolean;
+    session_data_source?: "fastf1" | "openf1";
+    session_data_access?: string;
+    session_adapter_version?: string | null;
   } | null;
   weekend_history?: OperationalWeekendOutcome[];
   operational_event?: OperationalEvent | null;

@@ -46,7 +46,7 @@ The project extends beyond offline model training: it includes guarded data inge
 | Dataset columns       | **182**                                                        |
 | Drivers / teams       | **28 / 11**                                                    |
 | Walk-forward folds    | **39 / 39**                                                    |
-| Data source           | **FastF1**                                                     |
+| Data sources          | **OpenF1 free historical sessions; FastF1 calendar and prior data** |
 | Public app            | [apex-pulse-ten.vercel.app](https://apex-pulse-ten.vercel.app) |
 
 <p align="center">
@@ -63,7 +63,7 @@ The project extends beyond offline model training: it includes guarded data inge
 
 ```mermaid
 flowchart LR
-    A[FastF1 sessions] --> B[Lap cleaning & validation]
+    A[OpenF1 historical sessions / preserved FastF1 data] --> B[Lap cleaning & validation]
     B --> C[Checkpoint-safe features]
     C --> D[Historical modeling dataset]
     D --> E[Walk-forward evaluation]
@@ -358,6 +358,43 @@ python -m f1_prediction.cli autopilot-tick --dry-run --json
 
 Dry-run mode performs event discovery and readiness inspection without mutating operational artifacts.
 
+### Free session ingestion after the archive access change
+
+Since October 2026, the F1 timing archive used by FastF1 requires a paid F1 TV
+subscription ([upstream incident](https://github.com/theOehrly/Fast-F1/issues/978)).
+The project remains subscription-free: `configs/data.yaml` selects
+`session_data_source: openf1` for new downloads. FastF1 still supplies the calendar;
+existing training data, forecasts and cached raw sessions keep their original source.
+
+```bash
+python -m f1_prediction.cli load-session --season 2026 --event "Mexico City Grand Prix" --session FP3
+python -m f1_prediction.cli ingest-event --season 2026 --event "Mexico City Grand Prix" --sessions FP1 FP2 FP3
+```
+
+These commands save historical laps only. They cannot recover a missed prospective
+forecast. Live forecasts remain restricted to the window before qualifying.
+
+OpenF1 historical access is free from 30 minutes after a session ends. The adapter
+waits 31 minutes and the scheduler starts its probes after 35 minutes. Requests are
+spaced below the free rate limit, cached locally, and never authenticated. Live-window
+restrictions and unpublished data remain retryable; errors/empty responses are not cached.
+
+The versioned `OPENF1_HISTORICAL_LAPS_V1` adapter matches year, location, session type
+and UTC start exactly. It preserves lap/sector times, maps tyre life from observed stint
+age, and excludes pit laps, identified deleted laps, red-flag/SC/VSC laps, and laps
+with inconsistent sector sums. Missing driver identity can be recovered only from an
+earlier practice session in the same meeting. Practice loads never request qualifying
+or race performance. Every ingested session records its source and adapter version;
+new forecast snapshots also freeze source metadata and input hashes.
+
+`IsAccurate` in adapted data is explicitly a sector-consistency/quality **proxy**,
+not FastF1's own accuracy signal. If a deletion cannot be assigned to one lap, that
+driver's timing is conservatively excluded from valid/push pace, while participation
+is preserved. Missing mini-sector samples alone do not invalidate complete sectors.
+Coverage and aggregates may differ from the FastF1 training distribution; prior
+backtest accuracy does not establish accuracy after this source migration.
+See [the investigation and validation report](docs/prediction_incident_2026_11_02.md).
+
 ---
 
 ## Repository layout
@@ -462,7 +499,9 @@ These constraints are surfaced explicitly rather than corrected retrospectively.
 
 ## Data and trademark notice
 
-Apex Pulse uses the [FastF1](https://github.com/theOehrly/Fast-F1) ecosystem for publicly accessible Formula 1 timing and session data.
+Apex Pulse uses [OpenF1](https://openf1.org/) for free historical session downloads
+and [FastF1](https://github.com/theOehrly/Fast-F1) for calendars and preserved prior data.
+No paid API or F1 TV subscription is required by the production workflow.
 
 Formula 1, team names, driver names, logos and related marks belong to their respective owners. Apex Pulse is an independent educational and research project and is not affiliated with Formula 1, the FIA or any Formula 1 team.
 

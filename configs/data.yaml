@@ -1,3 +1,6 @@
+# Free completed-session data; FastF1 remains the calendar and historical-cache source.
+session_data_source: openf1
+
 paths:
   fastf1_cache_dir: data/raw/fastf1_cache
   lap_output_dir: data/raw/laps

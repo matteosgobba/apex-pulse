@@ -236,7 +236,7 @@ def load_session_command(
     ] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v")] = False,
 ) -> None:
-    """Load one FastF1 session and save its lap data as Parquet."""
+    """Load one session from the configured source and save lap data as Parquet."""
     configure_logging(verbose=verbose)
     config = load_data_config(config_path=config_path)
     try:

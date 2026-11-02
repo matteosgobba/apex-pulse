@@ -33,7 +33,12 @@ The autopilot endpoint also reports `prediction_policy`: verify `status=ready`,
 all three contract/dependency checks true. This describes the installed rule; the forecast's own
 metadata describes the model actually used for its immutable prediction. The
 `weekend_history` list retains skipped/missed outcomes after event rollover.
-See the [October 27 incident audit](prediction_incident_2026_10_27.md).
+For the subscription-free ingestion installed on November 2, also confirm
+`session_data_source=openf1` and `session_data_access=free_historical`. The scheduler
+waits 35 minutes after practice ends, then retries free historical data before
+qualifying. The model being ready does not prove that future session data is published.
+See the [November 2 source migration](prediction_incident_2026_11_02.md) and
+[October 27 incident audit](prediction_incident_2026_10_27.md).
 
 ## Qualifying roster versus practice evidence
 
