@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, test } from "vitest";
 
 import MethodologyPage from "@/app/methodology/page";
@@ -29,18 +29,18 @@ const HEALTH: HealthResponse = {
 const TEST_NOW = new Date("2026-07-24T12:00:00Z");
 
 describe("CurrentEventPageView", () => {
-  test("free source migration is disclosed without relabeling the previous forecast", () => {
+  test("source details stay secondary behind a closed note and methodology link", () => {
     const status = missedForecastOperationalStatus();
     status.data.prediction_policy = {
       status: "ready", mode: "conditional", candidate_contract_valid: true,
       historical_dataset_valid: true, session_data_source: "openf1"
     };
     renderPage({ operationalStatus: status });
-    expect(screen.getByText("Practice data: OpenF1 historical access")).toBeInTheDocument();
-    expect(screen.getByText(/30-minute/)).toBeInTheDocument();
-    expect(screen.getByText(/coverage may differ/)).toBeInTheDocument();
-    expect(screen.getByText(/Earlier predictions retain their original data source/))
-      .toBeInTheDocument();
+    expect(screen.queryByText("Practice data: OpenF1 historical access")).not.toBeInTheDocument();
+    const summary = screen.getByText("Weekend & data notes");
+    expect(summary.closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(summary);
+    expect(screen.getByRole("link", { name: "Data sources & methodology ↗" })).toHaveAttribute("href", "/methodology");
   });
 
   test("missed weekends remain visible after rollover and installed rule is explicit", () => {
@@ -61,6 +61,12 @@ describe("CurrentEventPageView", () => {
       .toBeInTheDocument();
     expect(screen.getByText(/season-aware selection is enabled after 5 eligible/))
       .toBeInTheDocument();
+    const notes = screen.getByText("Weekend & data notes").closest("details");
+    expect(notes).not.toHaveAttribute("open");
+    expect(screen.getByText("United States Grand Prix")).not.toBeVisible();
+    expect(within(screen.getByLabelText("Operational Formula 1 weekend")).queryByText("United States Grand Prix")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText("Weekend & data notes"));
+    expect(screen.getByText("United States Grand Prix")).toBeVisible();
   });
 
   test("configured but invalid policy is never advertised as active", () => {

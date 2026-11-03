@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type CSSProperties } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { TeamMark } from "@/components/team-mark";
 import { formatSignedGap } from "@/lib/formatters";
 import type {
@@ -11,14 +11,16 @@ import type {
 export function ForecastRanking({
   rows,
   comparison = [],
+  context,
 }: {
   rows: PublicRankingRow[];
   comparison?: PublicComparisonRow[];
+  context?: ReactNode;
 }) {
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState(false);
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
-  const [reality, setReality] = useState(false);
+  const hasResults = comparison.some((row) => row.actualPosition !== null);
   const selected =
     rows.find((row) => row.driverCode === selectedCode) ?? rows[0];
   const actual = comparison.find(
@@ -40,17 +42,16 @@ export function ForecastRanking({
           <h2 id="forecast-title">
             Less noise.
             <br />
-            More racing intelligence.
+            <span className="muted-type">More racing intelligence.</span>
           </h2>
         </div>
         <p className="section-intro">
           One clear view of the model’s call.
-          <br />
-          Explore a driver. Check the outcome.
-          <br />
-          See where the prediction stands.
+          <br /> Explore a driver. Check the outcome.
+          <br /> See where the prediction stands.
         </p>
       </div>
+      {context ? <div className="forecast-context-block">{context}</div> : null}
       {rows.length === 0 ? (
         <div className="leaderboard-panel p-8">
           <h3>Prediction unavailable</h3>
@@ -58,29 +59,22 @@ export function ForecastRanking({
         </div>
       ) : (
         <div className="pit-grid">
-          <div className="leaderboard-panel">
+          <div className="leaderboard-panel unified-ranking">
             <div className="table-toolbar">
-              <div className="segmented" aria-label="Forecast view">
-                <button
-                  type="button"
-                  className={!reality ? "selected" : ""}
-                  aria-pressed={!reality}
-                  onClick={() => setReality(false)}
-                >
-                  Prediction
-                </button>
-                <button
-                  type="button"
-                  className={reality ? "selected" : ""}
-                  aria-pressed={reality}
-                  disabled={!comparison.length}
-                  onClick={() => setReality(true)}
-                >
-                  Versus reality
-                </button>
-              </div>
+              <span className="ranking-caption">QUALIFYING FORECAST</span>
               <label className="search-box">
-                <span aria-hidden="true">⌕</span>
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  aria-hidden="true"
+                >
+                  <circle cx="8.5" cy="8.5" r="5.5" />
+                  <path d="m13 13 4 4" />
+                </svg>
                 <span className="sr-only">Search driver or team</span>
                 <input
                   type="search"
@@ -90,11 +84,26 @@ export function ForecastRanking({
                 />
               </label>
             </div>
+            <p className="comparison-key">
+              {hasResults ? (
+                <>
+                  In predicted order. <span>↑ Higher</span> <span>↓ Lower</span>{" "}
+                  <span>= Matched</span>
+                  <span className="sr-only">
+                    Arrows compare the official qualifying position with the
+                    prediction.
+                  </span>
+                </>
+              ) : (
+                "Awaiting official qualifying results. Predictions are shown below."
+              )}
+            </p>
             <div className="ranking-labels" aria-hidden="true">
-              <span>POS</span>
+              <span>PREDICTED</span>
               <span>DRIVER / TEAM</span>
-              <span>MODEL GAP</span>
-              <span>{reality ? "ACTUAL" : "PACE SPREAD"}</span>
+              <span className="model-gap-heading">MODEL GAP</span>
+              <span>OFFICIAL</span>
+              <span>CHANGE</span>
             </div>
             <ol
               aria-label="Predicted qualifying ranking"
@@ -104,10 +113,6 @@ export function ForecastRanking({
                 const result = comparison.find(
                   (item) => item.driverCode === row.driverCode,
                 );
-                const spread =
-                  row.intervalUpperSec !== null && row.intervalLowerSec !== null
-                    ? Math.max(0, row.intervalUpperSec - row.intervalLowerSec)
-                    : null;
                 return (
                   <li
                     key={row.driverCode}
@@ -116,10 +121,13 @@ export function ForecastRanking({
                       { "--team-color": row.team.primary } as CSSProperties
                     }
                   >
-                    <span className="rank-position">
+                    <span
+                      className="rank-position"
+                      aria-label={`Predicted position ${row.predictedPosition ?? "unavailable"}`}
+                    >
                       {row.predictedPosition === null
                         ? "—"
-                        : String(row.predictedPosition).padStart(2, "0")}
+                        : `P${row.predictedPosition}`}
                     </span>
                     <button
                       type="button"
@@ -137,29 +145,29 @@ export function ForecastRanking({
                     <span
                       className={`row-gap ${row.predictedPosition === 1 ? "pole" : ""}`}
                     >
-                      {formatSignedGap(row.predictedGapSec)}
+                      <span className="inline-gap-label" aria-hidden="true">
+                        Gap{" "}
+                      </span>
+                      <span
+                        aria-label={`Model gap ${formatSignedGap(row.predictedGapSec)}`}
+                      >
+                        {formatSignedGap(row.predictedGapSec)}
+                      </span>
                     </span>
-                    <span className="spread-cell">
-                      {reality ? (
-                        <span title="Official qualifying position">
-                          {result?.actualPosition
-                            ? `P${result.actualPosition}`
-                            : "—"}
-                        </span>
-                      ) : spread !== null ? (
-                        <span
-                          className="spread-bar"
-                          title={`Prediction interval width: ${spread.toFixed(3)} seconds`}
-                        >
-                          <i
-                            style={{
-                              width: `${Math.min(100, (spread / 3) * 100)}%`,
-                            }}
-                          />
-                        </span>
-                      ) : (
-                        <span className="muted">—</span>
-                      )}
+                    <span
+                      className="official-position"
+                      aria-label={`Official position ${result?.actualPosition ?? "unavailable"}`}
+                    >
+                      {result?.actualPosition
+                        ? `P${result.actualPosition}`
+                        : "—"}
+                    </span>
+                    <span className="position-change-cell">
+                      <PositionChange
+                        predicted={row.predictedPosition}
+                        actual={result?.actualPosition}
+                        awaitingResults={!hasResults}
+                      />
                     </span>
                   </li>
                 );
@@ -185,8 +193,9 @@ export function ForecastRanking({
               ) : null}
             </div>
             <p className="table-disclosure">
-              Model gap = estimated seconds to the actual pole benchmark. Rank 1
-              may have a non-zero estimate.
+              Model gap = estimated seconds to the pole benchmark. Arrows
+              compare the official position with the prediction; rows stay in
+              predicted order.
             </p>
           </div>
           {selected ? (
@@ -197,7 +206,9 @@ export function ForecastRanking({
             >
               <div className="driver-panel-top">
                 <span className="eyebrow muted">DRIVER SPOTLIGHT</span>
-                <span className="mono small red-type">↗</span>
+                <span className="mono small muted">
+                  P{selected.predictedPosition ?? "—"}
+                </span>
               </div>
               <span className="driver-monogram" aria-hidden="true">
                 {selected.driverCode}
@@ -257,7 +268,7 @@ export function ForecastRanking({
                 <span className="insight-symbol">↳</span>
                 <span>
                   {actual?.actualPosition
-                    ? `The preserved forecast placed ${selected.driverCode} P${selected.predictedPosition}; official qualifying position: P${actual.actualPosition}.`
+                    ? `Predicted P${selected.predictedPosition} → qualified P${actual.actualPosition}. ${selected.predictedPosition === actual.actualPosition ? "An exact position match." : "See the position change in the ranking."}`
                     : "This forecast was preserved before qualifying. Official results appear only after settlement."}
                 </span>
               </p>
@@ -270,5 +281,51 @@ export function ForecastRanking({
         </div>
       )}
     </section>
+  );
+}
+
+function PositionChange({
+  predicted,
+  actual,
+  awaitingResults,
+}: {
+  predicted: number | null;
+  actual?: number | null;
+  awaitingResults: boolean;
+}) {
+  if (predicted === null || actual === null || actual === undefined) {
+    return (
+      <span
+        className="position-change is-pending"
+        aria-label="Position change unavailable"
+      >
+        —
+        <small>
+          {actual == null
+            ? awaitingResults
+              ? "Awaiting"
+              : "No result"
+            : "No rank"}
+        </small>
+      </span>
+    );
+  }
+  const delta = predicted - actual;
+  const direction = delta === 0 ? "matched" : delta > 0 ? "higher" : "lower";
+  const label =
+    delta === 0
+      ? "Exact position match"
+      : `Qualified ${Math.abs(delta)} ${Math.abs(delta) === 1 ? "place" : "places"} ${direction} than predicted`;
+  return (
+    <span
+      className={`position-change is-${direction}`}
+      aria-label={label}
+      title={label}
+    >
+      <strong>
+        {delta === 0 ? "=" : `${delta > 0 ? "↑" : "↓"} ${Math.abs(delta)}`}
+      </strong>
+      <small>{delta === 0 ? "Matched" : delta > 0 ? "Higher" : "Lower"}</small>
+    </span>
   );
 }

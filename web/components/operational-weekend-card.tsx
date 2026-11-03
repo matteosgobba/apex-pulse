@@ -3,13 +3,16 @@
 import { useEffect, useState } from "react";
 
 import { SessionCountdown } from "@/components/session-countdown";
-import type { AutopilotStatusData, OperationalEvent } from "@/lib/dashboard-types";
+import type {
+  AutopilotStatusData,
+  OperationalEvent,
+} from "@/lib/dashboard-types";
 import { formatEventNameWithFlag } from "@/lib/event-display";
 import {
   operationalEventSchedule,
   operationalForecastNotice,
   operationalFormatLabel,
-  operationalWeekendLabel
+  operationalWeekendLabel,
 } from "@/lib/operational-event";
 
 export function OperationalWeekendCard({
@@ -17,7 +20,7 @@ export function OperationalWeekendCard({
   status,
   initialNow,
   primaryHeading = true,
-  showCountdown = true
+  showCountdown = true,
 }: {
   event: OperationalEvent;
   status?: AutopilotStatusData | null;
@@ -26,7 +29,7 @@ export function OperationalWeekendCard({
   showCountdown?: boolean;
 }) {
   const [nowMs, setNowMs] = useState<number | null>(
-    initialNow ? Date.parse(initialNow) : null
+    initialNow ? Date.parse(initialNow) : null,
   );
   useEffect(() => {
     if (initialNow) {
@@ -43,15 +46,15 @@ export function OperationalWeekendCard({
   const schedule = operationalEventSchedule(event);
   const forecastNotice = operationalForecastNotice(event, status);
   const weekendLabel =
-    nowMs === null ? "Monitored weekend" : operationalWeekendLabel(event, new Date(nowMs));
-  const missedWeekends = (status?.weekend_history ?? []).filter(
-    (weekend) => weekend.event_slug !== event.event_slug && !weekend.forecast_exists &&
-      (weekend.action_result === "forecast_window_missed" ||
-        weekend.orchestrator_state_after === "UNSUPPORTED_WEEKEND_FORMAT")
-  ).slice(-4).reverse();
+    nowMs === null
+      ? "Monitored weekend"
+      : operationalWeekendLabel(event, new Date(nowMs));
 
   return (
-    <section aria-label="Operational Formula 1 weekend" className="space-y-5">
+    <section
+      aria-label="Operational Formula 1 weekend"
+      className={primaryHeading ? "space-y-5" : "operational-weekend-compact"}
+    >
       <div className="rounded-[2rem] border border-apex-border bg-apex-panel p-6 shadow-card sm:p-8">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
@@ -82,52 +85,15 @@ export function OperationalWeekendCard({
           <p className="mt-1">{forecastNotice.detail}</p>
         </div>
       </div>
-      {showCountdown ? <SessionCountdown
-        schedule={schedule}
-        lifecycle="practice_in_progress"
-        initialNow={initialNow}
-        forecastAvailable={event.supported ? (status?.forecast_exists ?? undefined) : false}
-      /> : null}
-      {status?.prediction_policy?.session_data_source === "openf1" ? (
-        <div className="rounded-2xl border border-apex-border bg-apex-panel p-5 text-sm text-apex-secondary">
-          <p className="font-semibold text-apex-text">Practice data: OpenF1 historical access</p>
-          <p className="mt-2">
-            New forecasts use free OpenF1 data after the session has ended and its 30-minute
-            access delay has passed. Lap-quality checks use a documented consistency proxy;
-            coverage may differ from the FastF1 data used for training.
-          </p>
-          <p className="mt-2">
-            The FastF1 timing archive now requires a paid subscription. This prevented recent
-            forecasts, including Mexico. Earlier predictions retain their original data source.
-          </p>
-        </div>
-      ) : null}
-      {status?.prediction_policy ? (
-        <p className="text-sm text-apex-secondary">
-          {status.prediction_policy.status !== "ready"
-            ? "Prediction policy requires attention before the next forecast."
-            : status.prediction_policy.mode === "uniform_only"
-              ? "Prediction policy: Uniform rollback is active."
-              : `Prediction policy: season-aware selection is enabled after ${status.prediction_policy.transition_prior_events} eligible, settled events in the current season. Earlier forecasts use Uniform.`}
-        </p>
-      ) : null}
-      {missedWeekends.length > 0 ? (
-        <div className="rounded-2xl border border-apex-border bg-apex-panel p-5">
-          <h2 className="font-semibold text-apex-text">Recent weekends without a forecast</h2>
-          <ul className="mt-3 space-y-3 text-sm text-apex-secondary">
-            {missedWeekends.map((weekend) => (
-              <li key={`${weekend.season}/${weekend.event_slug}`}>
-                <span className="font-medium text-apex-text">{weekend.event}</span>
-                {" · "}
-                {weekend.orchestrator_state_after === "UNSUPPORTED_WEEKEND_FORMAT"
-                  ? "This weekend format is not supported by the FP3 model."
-                  : weekend.last_data_issue
-                    ? "Practice timing data could not be loaded before qualifying. No retrospective prediction was added."
-                    : "The safe forecast window closed before a prediction was created."}
-              </li>
-            ))}
-          </ul>
-        </div>
+      {showCountdown ? (
+        <SessionCountdown
+          schedule={schedule}
+          lifecycle="practice_in_progress"
+          initialNow={initialNow}
+          forecastAvailable={
+            event.supported ? (status?.forecast_exists ?? undefined) : false
+          }
+        />
       ) : null}
     </section>
   );

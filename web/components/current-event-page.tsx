@@ -3,6 +3,7 @@ import { ContactSection } from "@/components/contact-section";
 import { EventHero } from "@/components/event-hero";
 import { EventMetrics } from "@/components/event-metrics";
 import { ForecastRanking } from "@/components/forecast-ranking";
+import { ForecastNotes } from "@/components/forecast-notes";
 import { MethodologyPreview } from "@/components/methodology-preview";
 import { OperationalWeekendCard } from "@/components/operational-weekend-card";
 import { PredictionOfficialComparison } from "@/components/prediction-official-comparison";
@@ -73,26 +74,30 @@ export function CurrentEventPageView({
       ) : null}
       {displayedForecastEvent ? (
         <>
-          <EventHero
-            event={displayedForecastEvent}
-            primary={!operationalEvent && primaryHeading}
-            contextLabel={
-              operationalIsDifferentEvent
-                ? "Last completed prediction"
-                : "Latest Apex Pulse prediction / result"
-            }
-          />
-          <div>
-            <WeekendTimeline
-              schedule={displayedForecastEvent.schedule}
-              sessions={displayedForecastEvent.sessions}
-              lifecycle={displayedForecastEvent.lifecycle}
-              now={now}
-            />
-          </div>
           <ForecastRanking
             rows={displayedForecastEvent.ranking}
             comparison={displayedForecastEvent.comparison}
+            context={
+              <>
+                <EventHero
+                  event={displayedForecastEvent}
+                  primary={!operationalEvent && primaryHeading}
+                  compact={!primaryHeading}
+                  contextLabel={
+                    operationalIsDifferentEvent
+                      ? "Last completed prediction"
+                      : "Latest Apex Pulse prediction / result"
+                  }
+                />
+                <WeekendTimeline
+                  schedule={displayedForecastEvent.schedule}
+                  sessions={displayedForecastEvent.sessions}
+                  lifecycle={displayedForecastEvent.lifecycle}
+                  now={now}
+                  compact={!primaryHeading}
+                />
+              </>
+            }
           />
           {!primaryHeading && displayedForecastEvent.hasSettlement ? (
             <CoverageNotice
@@ -102,14 +107,15 @@ export function CurrentEventPageView({
           ) : null}
           {displayedForecastEvent.hasSettlement ? (
             <>
-              <PredictionOfficialComparison
-                compact={!primaryHeading}
-                rows={displayedForecastEvent.comparison}
-                coverage={displayedForecastEvent.metrics.coverage}
-                unforecastedEntrants={
-                  displayedForecastEvent.unforecastedEntrants
-                }
-              />
+              {primaryHeading ? (
+                <PredictionOfficialComparison
+                  rows={displayedForecastEvent.comparison}
+                  coverage={displayedForecastEvent.metrics.coverage}
+                  unforecastedEntrants={
+                    displayedForecastEvent.unforecastedEntrants
+                  }
+                />
+              ) : null}
               <EventMetrics metrics={displayedForecastEvent.metrics} />
             </>
           ) : null}
@@ -122,6 +128,7 @@ export function CurrentEventPageView({
           detail="This weekend is being reported from the operational monitor, but no immutable pre-qualifying forecast is available to display."
         />
       )}
+      <ForecastNotes status={data.operationalStatus?.data} />
       <MethodologyPreview />
       <ContactSection />
     </div>

@@ -31,19 +31,21 @@ export function MethodologyPreview() {
           <h2 id="methodology-preview-title">
             Built on data.
             <br />
-            Driven by curiosity.
+            <span className="muted-type">Driven by curiosity.</span>
           </h2>
         </div>
-        <Link href="/methodology" className="text-link">
-          Data, limitations & methodology <span>↗</span>
-        </Link>
+        <p className="section-intro">
+          No crystal ball. No private team data.
+          <br /> Just a transparent machine learning project
+          <br /> exploring the pace before qualifying.
+        </p>
       </div>
       <div className="method-steps">
         {STEPS.map((step, index) => (
           <article key={step.number}>
             <p className="step-number">
               {step.number}
-              <span>↗</span>
+              <span>{index === 2 ? "⚑" : "↗"}</span>
             </p>
             <svg
               className="method-icon"
@@ -52,17 +54,19 @@ export function MethodologyPreview() {
               aria-hidden="true"
             >
               {index === 0 ? (
-                <>
-                  <path d="M0 32h80M4 29l10-7 10 3 10-17 10 14 10-8 10 7 12-18" />
-                  <circle cx="34" cy="8" r="3" />
-                </>
+                <path d="M0 30h12l6-16 9 17 12-26 10 20 6-10 7 15h18" />
               ) : index === 1 ? (
                 <>
-                  <path d="M4 7h24v26H4zM52 7h24v26H52zM28 20h24m-7-6 7 6-7 6" />
-                  <path d="m10 23 5-6 6 3m37 5 6-11 6 6" />
+                  <path d="M10 5v30m30-30v30M70 5v30M10 10l30 20 30-20M10 30 40 10l30 20" />
+                  <circle cx="10" cy="10" r="4" />
+                  <circle cx="40" cy="30" r="4" />
+                  <circle cx="70" cy="10" r="4" />
                 </>
               ) : (
-                <path d="M2 34h70M10 34V23h12v11M35 34V12h12v22M60 34V5h12v29" />
+                <>
+                  <path d="M10 35H72" />
+                  <path d="M20 35V22H32V35M40 35V12H52V35M60 35V5H72V35" />
+                </>
               )}
             </svg>
             <h3>{step.title}</h3>
@@ -71,10 +75,9 @@ export function MethodologyPreview() {
           </article>
         ))}
       </div>
-      <p className="metrics-note">
-        No crystal ball. No private team data. Just a transparent machine
-        learning project exploring the pace before qualifying.
-      </p>
+      <Link href="/methodology" className="methodology-link text-link">
+        Data, limitations & methodology <span>↗</span>
+      </Link>
     </section>
   );
 }

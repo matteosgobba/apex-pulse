@@ -1,7 +1,7 @@
 import type {
   EventSchedule,
   LifecycleState,
-  SessionStatus
+  SessionStatus,
 } from "@/lib/dashboard-types";
 import { selectNextSession, sessionDisplayName } from "@/lib/session-schedule";
 
@@ -11,38 +11,50 @@ export function WeekendTimeline({
   schedule,
   sessions,
   lifecycle,
-  now = new Date()
+  now = new Date(),
+  compact = false,
 }: {
   schedule: EventSchedule | null;
   sessions: SessionStatus[];
   lifecycle: LifecycleState;
   now?: Date;
+  compact?: boolean;
 }) {
   const next = selectNextSession(schedule, lifecycle, now);
   return (
     <section
       id="weekend"
       aria-labelledby="weekend-title"
-      className="rounded-3xl border border-apex-border bg-apex-panel p-6 shadow-card"
+      className={`rounded-3xl border border-apex-border bg-apex-panel p-6 shadow-card ${compact ? "weekend-checkpoints" : ""}`}
     >
-      <div>
+      <div className={compact ? "sr-only" : undefined}>
         <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-muted">
           Weekend progression
         </p>
-        <h2 id="weekend-title" className="mt-2 text-2xl font-semibold text-apex-text">
+        <h2
+          id="weekend-title"
+          className="mt-2 text-2xl font-semibold text-apex-text"
+        >
           Practice to qualifying
         </h2>
       </div>
       <ol className="mt-7 grid gap-3 sm:grid-cols-4">
         {SESSION_CODES.map((code, index) => {
           const practice = sessions.find((session) => session.session === code);
-          const scheduled = schedule?.sessions?.find((session) => session.session === code);
-          const isNext = next.state === "upcoming" && next.session?.session === code;
+          const scheduled = schedule?.sessions?.find(
+            (session) => session.session === code,
+          );
+          const isNext =
+            next.state === "upcoming" && next.session?.session === code;
           const completed =
             lifecycle === "settled" ||
             lifecycle === "settled_partial_coverage" ||
             Boolean(practice?.available && !isNext);
-          const status = completed ? "Completed" : isNext ? "Next" : "Unavailable";
+          const status = completed
+            ? "Completed"
+            : isNext
+              ? "Next"
+              : "Unavailable";
           return (
             <li key={code} className="relative">
               <div
@@ -67,9 +79,13 @@ export function WeekendTimeline({
                   >
                     {completed ? "✓" : index + 1}
                   </span>
-                  <span className="font-semibold text-apex-text">{sessionDisplayName(code)}</span>
+                  <span className="font-semibold text-apex-text">
+                    {sessionDisplayName(code)}
+                  </span>
                 </div>
-                <p className="mt-3 text-xs font-medium text-apex-muted">{status}</p>
+                <p className="mt-3 text-xs font-medium text-apex-muted">
+                  {status}
+                </p>
                 <p className="mt-1 text-xs text-apex-muted">
                   {formatScheduleTime(scheduled?.scheduled_start_utc)}
                 </p>
@@ -79,7 +95,8 @@ export function WeekendTimeline({
         })}
       </ol>
       <p className="mt-4 text-xs leading-5 text-apex-muted">
-        Status reflects exported artifact availability, not lap-by-lap live coverage.
+        Status reflects exported artifact availability, not lap-by-lap live
+        coverage.
       </p>
     </section>
   );
@@ -97,6 +114,6 @@ function formatScheduleTime(value: string | null | undefined): string {
     month: "short",
     day: "numeric",
     hour: "2-digit",
-    minute: "2-digit"
+    minute: "2-digit",
   }).format(parsed);
 }

@@ -2,7 +2,7 @@ import type { UnforecastedActualEntrant } from "@/lib/dashboard-types";
 
 export function CoverageNotice({
   coverage,
-  entrants
+  entrants,
 }: {
   coverage: string | null;
   entrants: UnforecastedActualEntrant[];
@@ -15,14 +15,11 @@ export function CoverageNotice({
     .filter(Boolean)
     .join(", ");
   return (
-    <aside
-      aria-label="Forecast coverage"
-      className="status-warning rounded-2xl border p-4 text-sm"
-    >
-      <p className="font-semibold">
-        Forecast coverage: {coverage ?? "partial"}
-      </p>
-      <p className="mt-1 leading-6">
+    <aside aria-label="Forecast coverage" className="coverage-note">
+      <span aria-hidden="true">ⓘ</span>
+      <p>
+        <strong>Forecast coverage: {coverage ?? "partial"}</strong>
+        {" · "}
         {names
           ? `${names} appeared in the official result but was not included in the original pre-qualifying forecast. No retrospective prediction has been added.`
           : "Only entrants included in the original forecast are evaluated."}

@@ -11,12 +11,11 @@ export function ContactSection() {
         </p>
         <h2 id="about-title">
           A little obsession.
-          <br />A lot of race data.
+          <br />A lot of <span className="red-type">race data.</span>
         </h2>
         <p>
           Exploring what machine learning can read between the laps.
-          <br />
-          Built in the open, for the love of the sport.
+          <br /> Built in the open, for the love of the sport.
         </p>
         <div className="contact-links">
           {contactLinks().map((link) => (

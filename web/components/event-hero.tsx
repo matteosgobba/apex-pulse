@@ -6,10 +6,12 @@ export function EventHero({
   event,
   primary = true,
   contextLabel = "Latest Apex Pulse prediction / result",
+  compact = false,
 }: {
   event: PublicEventViewModel;
   primary?: boolean;
   contextLabel?: string;
+  compact?: boolean;
 }) {
   const Heading = primary ? "h1" : "h2";
   return (
@@ -28,12 +30,14 @@ export function EventHero({
       <div className="forecast-context">
         <span className="status-pill">{event.lifecycleLabel}</span>
         <strong>{event.checkpointLabel}</strong>
-        <p>
-          {event.hasForecast
-            ? "Generated before qualifying from the practice data available at this checkpoint."
-            : "No pre-qualifying forecast is available for this event."}
-        </p>
-        <p>{event.lifecycleDetail}</p>
+        {!compact ? (
+          <p>
+            {event.hasForecast
+              ? "Generated before qualifying from the practice data available at this checkpoint."
+              : "No pre-qualifying forecast is available for this event."}
+          </p>
+        ) : null}
+        {!compact || !event.hasForecast ? <p>{event.lifecycleDetail}</p> : null}
         <DataFreshnessNotice
           freshness={event.freshness}
           terminal={

@@ -10,7 +10,10 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RacingWeekend } from "@/components/racing-weekend";
 import { ForecastRanking } from "@/components/forecast-ranking";
 import { getTeamIdentity } from "@/lib/team-identity";
-import type { PublicRankingRow } from "@/lib/public-view-model";
+import type {
+  PublicComparisonRow,
+  PublicRankingRow,
+} from "@/lib/public-view-model";
 import { CACHE_KEY } from "@/lib/racing/calendar-source.mjs";
 import bootstrap from "@/lib/racing/racing-bootstrap.json";
 
@@ -40,12 +43,10 @@ const flush = async (ms: number) => {
 const online = () =>
   vi.stubGlobal(
     "fetch",
-    vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({ bundle: bootstrap, status: "fresh" }),
-      }),
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ bundle: bootstrap, status: "fresh" }),
+    }),
   );
 
 test("native countdown reaches zero, advances to FP2, and selects a different real circuit", async () => {
@@ -128,7 +129,15 @@ test("forecast controls preserve original model gaps and the absence of official
   });
   expect(within(ranking).getAllByRole("listitem")).toHaveLength(7);
   expect(within(ranking).getByText("+0.144s")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Versus reality" })).toBeDisabled();
+  expect(
+    screen.queryByRole("button", { name: "Versus reality" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Awaiting official qualifying results/),
+  ).toBeInTheDocument();
+  expect(
+    within(ranking).getAllByLabelText("Official position unavailable"),
+  ).toHaveLength(7);
   fireEvent.click(screen.getByRole("button", { name: /show full field/i }));
   expect(within(ranking).getAllByRole("listitem")).toHaveLength(9);
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "D8" } });
@@ -151,20 +160,82 @@ test("a cold server fallback never overwrites a newer browser calendar", async (
   window.localStorage.setItem(CACHE_KEY, JSON.stringify(newer));
   vi.stubGlobal(
     "fetch",
-    vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          bundle: bootstrap,
-          status: "cached",
-          warning: "Last verified schedule",
-        }),
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        bundle: bootstrap,
+        status: "cached",
+        warning: "Last verified schedule",
       }),
+    }),
   );
   render(<RacingWeekend />);
   await flush(0);
   expect(
     JSON.parse(window.localStorage.getItem(CACHE_KEY)!).retrievedAtUtc,
   ).toBe(newer.retrievedAtUtc);
+});
+
+test("one ranking keeps model gaps and correctly joined official positions visible as results arrive", () => {
+  const rows: PublicRankingRow[] = Array.from({ length: 4 }, (_, index) => ({
+    driverCode: `D${index}`,
+    driverName: null,
+    team: getTeamIdentity("mclaren"),
+    predictedPosition: index + 1,
+    predictedGapSec: index * 0.2,
+    intervalLowerSec: null,
+    intervalUpperSec: null,
+  }));
+  const comparison: PublicComparisonRow[] = rows
+    .slice(0, 3)
+    .map((row, index) => ({
+      ...row,
+      actualPosition: [3, 1, 3][index],
+      actualGapSec: index * 0.1,
+      absoluteGapErrorSec: null,
+    }))
+    .reverse();
+  const page = render(<ForecastRanking rows={rows} />);
+  expect(
+    screen.queryByRole("button", { name: "Versus reality" }),
+  ).not.toBeInTheDocument();
+  page.rerender(<ForecastRanking rows={rows} comparison={comparison} />);
+  expect(
+    screen.queryByRole("button", { name: "Prediction" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByText(/Awaiting official qualifying results/),
+  ).not.toBeInTheDocument();
+  const ranking = screen.getByRole("list", {
+    name: "Predicted qualifying ranking",
+  });
+  const entries = within(ranking).getAllByRole("listitem");
+  expect(within(entries[0]).getByText("D0")).toBeInTheDocument();
+  expect(
+    within(entries[0]).getByLabelText("Predicted position 1"),
+  ).toHaveTextContent("P1");
+  expect(
+    within(entries[0]).getByLabelText("Official position 3"),
+  ).toHaveTextContent("P3");
+  expect(
+    within(entries[0]).getByLabelText(
+      "Qualified 2 places lower than predicted",
+    ),
+  ).toHaveTextContent("↓ 2");
+  expect(
+    within(entries[1]).getByLabelText(
+      "Qualified 1 place higher than predicted",
+    ),
+  ).toHaveTextContent("↑ 1");
+  expect(
+    within(entries[2]).getByLabelText("Exact position match"),
+  ).toHaveTextContent("Matched");
+  expect(
+    within(entries[3]).getByLabelText("Position change unavailable"),
+  ).toHaveTextContent("No result");
+  expect(within(entries[1]).getByText("+0.200s")).toBeInTheDocument();
+  expect(
+    within(entries[1]).getByLabelText("Official position 1"),
+  ).toHaveTextContent("P1");
+  expect(within(entries[1]).getByText("Higher")).toBeInTheDocument();
 });
