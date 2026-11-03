@@ -1,6 +1,6 @@
 import { test } from "vitest";
 import assert from "node:assert/strict";
-import data from "../data/racing-bootstrap.json";
+import data from "../lib/racing/racing-bootstrap.json";
 import {
   selectWeekend,
   lightCount,

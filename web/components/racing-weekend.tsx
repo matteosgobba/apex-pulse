@@ -8,7 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import bootstrap from "@/data/racing-bootstrap.json";
+import bootstrap from "@/lib/racing/racing-bootstrap.json";
 import {
   CACHE_KEY,
   REFRESH_INTERVAL_MS,
