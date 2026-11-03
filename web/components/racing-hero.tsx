@@ -7,7 +7,7 @@ export function RacingHero() {
       <section className="hero" id="home" aria-labelledby="racing-title">
         <div className="hero-copy">
           <p className="eyebrow">
-            <span className="pulse-dot" /> A DIFFERENT KIND OF RACE INTELLIGENCE
+            <span className="pulse-dot" /> MACHINE LEARNING. RACING INSTINCT.
           </p>
           <h1 id="racing-title">
             READ THE PACE.
@@ -17,21 +17,21 @@ export function RacingHero() {
             THE GRID<span className="red-type">.</span>
           </h1>
           <p className="hero-description">
-            Free practice tells a story. We turn it into a forecast.
+            The story of qualifying starts in practice.
             <br />
-            Machine learning. Public F1 data. Every prediction on record.
+            We turn the laps into a forecast. You see the bigger picture.
           </p>
           <div className="hero-actions">
             <a className="button button-red" href="#forecast">
               Explore the forecast <span>↗</span>
             </a>
-            <Link href="/methodology" className="text-link">
-              How it works <span>↗</span>
+            <Link href="#methodology" className="text-link">
+              How it works <span>↓</span>
             </Link>
           </div>
           <p className="hero-footnote">
-            <span className="tiny-check">✓</span> PUBLIC DATA <span>/</span>{" "}
-            PRESERVED FORECASTS <span>/</span> NO HINDSIGHT
+            <span className="tiny-check">✓</span> Public data <span>/</span>{" "}
+            Preserved predictions <span>/</span> Open methodology
           </p>
         </div>
         <RacingWeekend />
@@ -40,8 +40,8 @@ export function RacingHero() {
         <div className="ticker-track">
           {[0, 1, 2, 3].map((index) => (
             <span key={index}>
-              DATA IN. LIGHTS OUT. <b>✳</b> READ THE PACE. <b>✳</b> FIND YOUR
-              EDGE. <b>✳</b> EVERY LAP COUNTS. <b>✳</b>{" "}
+              DATA IN. LIGHTS OUT. <b>✳</b> FIND YOUR EDGE. <b>✳</b> EVERY
+              MILLISECOND MATTERS. <b>✳</b>{" "}
             </span>
           ))}
         </div>

@@ -128,8 +128,8 @@ test("forecast controls preserve original model gaps and the absence of official
   });
   expect(within(ranking).getAllByRole("listitem")).toHaveLength(7);
   expect(within(ranking).getByText("+0.144s")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "vs. reality" })).toBeDisabled();
-  fireEvent.click(screen.getByRole("button", { name: /view full field/i }));
+  expect(screen.getByRole("button", { name: "Versus reality" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: /show full field/i }));
   expect(within(ranking).getAllByRole("listitem")).toHaveLength(9);
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "D8" } });
   expect(within(ranking).getAllByRole("listitem")).toHaveLength(1);

@@ -79,7 +79,7 @@ describe("CurrentEventPageView", () => {
 
     expect(screen.getByRole("heading", { name: "Italy\u00A0🇮🇹", level: 1 })).toBeInTheDocument();
     expect(screen.getByText("Practice data ready")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Predicted starting order" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Less noise.*More racing intelligence/i })).toBeInTheDocument();
     expect(screen.getAllByText("NOR").length).toBeGreaterThan(0);
   });
 
@@ -272,7 +272,7 @@ describe("CurrentEventPageView", () => {
   test("missing settlement keeps a prediction-only layout", () => {
     renderPage({ settlement: null });
 
-    expect(screen.getByRole("heading", { name: "Predicted starting order" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Less noise.*More racing intelligence/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "How the forecast compared" })).not.toBeInTheDocument();
   });
 
@@ -317,7 +317,7 @@ describe("CurrentEventPageView", () => {
   test("contact renders the public profile links and technical details stay secondary", () => {
     renderPage();
 
-    expect(screen.getByText("Built by Matteo Sgobba")).toBeInTheDocument();
+    expect(screen.getByText("AN INDEPENDENT PROJECT BY MATTEO SGOBBA")).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "GitHub" }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: "Email" }).length).toBeGreaterThan(0);
     const linkedIn = screen.getAllByRole("link", { name: "LinkedIn" });
@@ -345,7 +345,7 @@ describe("MethodologyPage", () => {
     expect(screen.getByText("Technical lifecycle details").closest("details")).not.toHaveAttribute(
       "open"
     );
-    expect(screen.getByRole("link", { name: "History" })).toHaveAttribute("href", "/history");
+    expect(within(screen.getByRole("navigation", { name: "Primary navigation" })).getByRole("link", { name: "Track record" })).toHaveAttribute("href", "/history");
   });
 });
 

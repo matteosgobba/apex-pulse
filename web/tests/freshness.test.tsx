@@ -79,7 +79,7 @@ describe("dashboard freshness", () => {
     );
 
     expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Current Event" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "The forecast" })).toHaveAttribute("href", "/#forecast");
     expect(container.querySelector("aside")).toBeNull();
   });
 

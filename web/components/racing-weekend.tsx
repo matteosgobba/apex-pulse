@@ -4,6 +4,7 @@ import {
   Fragment,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -148,7 +149,18 @@ export function RacingWeekend() {
   const circuit = event?.circuitId
     ? bundle.circuits[event.circuitId]
     : undefined;
-  const outline = circuit ? projectCircuit(circuit.points) : null;
+  const outline = useMemo(
+    () =>
+      circuit
+        ? projectCircuit(circuit.points, {
+            x: 24,
+            y: 20,
+            width: 612,
+            height: 380,
+          })
+        : null,
+    [circuit],
+  );
   const demoAge = demo !== null && now !== null ? now - demo : null;
   const demoActive = demoAge !== null && demoAge < 8000;
   const lights = demoActive
@@ -194,7 +206,7 @@ export function RacingWeekend() {
         <div className="stage-top">
           <span>
             <i className="status-square" />
-            NEXT ON THE CALENDAR
+            THE NEXT RACING LINE
           </span>
           <span>
             ROUND {event ? pad(event.round) : "—"} / {event?.season ?? "—"}
@@ -214,13 +226,10 @@ export function RacingWeekend() {
             </p>
           </div>
         </div>
-        <span className="track-word" aria-hidden="true">
-          {event?.countryCode ?? "F1"}
-        </span>
         {outline ? (
           <svg
             className="track-svg"
-            viewBox="0 0 660 500"
+            viewBox="0 0 660 420"
             aria-label={`${circuit?.name} circuit outline`}
             role="img"
           >
@@ -249,15 +258,6 @@ export function RacingWeekend() {
               stroke="var(--red)"
               strokeWidth="2"
             />
-            <path
-              className="track-flow"
-              d={outline.path}
-              fill="none"
-              stroke="var(--ink)"
-              opacity=".5"
-              strokeWidth="2"
-              strokeDasharray="16 100"
-            />
             <circle
               className="race-dot race-dot-one"
               r="4"
@@ -266,8 +266,15 @@ export function RacingWeekend() {
             />
             <circle
               className="race-dot race-dot-two"
-              r="3"
+              r="3.6"
               fill="var(--red)"
+              style={{ offsetPath: `path('${outline.path}')` }}
+            />
+            <circle
+              className="race-dot race-dot-three"
+              r="3.2"
+              fill="var(--ink)"
+              opacity=".5"
               style={{ offsetPath: `path('${outline.path}')` }}
             />
           </svg>
@@ -279,8 +286,8 @@ export function RacingWeekend() {
           </p>
         )}
         <div className="stage-bottom">
-          <span>REAL CIRCUIT GEOMETRY</span>
-          <span>ILLUSTRATIVE LAP ANIMATION</span>
+          <span>CIRCUIT OUTLINE / ILLUSTRATIVE LAP</span>
+          <span>MOVE TO EXPLORE ↔</span>
         </div>
       </div>
       <section
@@ -289,7 +296,7 @@ export function RacingWeekend() {
       >
         <div className="console-topline">
           <p className={`eyebrow ${demoActive ? "is-demo" : ""}`}>
-            {demoActive ? "LIGHTS DEMO / 8 SECONDS" : "THE NEXT LIGHTS OUT"}
+            {demoActive ? "LIGHTS DEMO / 8 SECONDS" : "UP NEXT"}
           </p>
           <div
             id="starting-lights"
@@ -339,9 +346,7 @@ export function RacingWeekend() {
           ))}
         </div>
         <div className="clock-caption">
-          <span>
-            YOUR LOCAL TIME · SCHEDULED START, NOT LIVE SESSION STATUS
-          </span>
+          <span>CLOSER TO THE START. ONE LIGHT AT A TIME.</span>
           <button
             type="button"
             onClick={() => {
@@ -392,11 +397,26 @@ export function RacingWeekend() {
             </select>
           </label>
           <button
+            className="calendar-refresh"
             type="button"
             aria-label="Refresh calendar"
+            title="Refresh calendar"
+            aria-busy={status === "Checking calendar…"}
+            disabled={status === "Checking calendar…"}
             onClick={() => refresh.current()}
           >
-            ↻
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 10a9 9 0 0 1 15.36-6.36L21 6m0-4v4h-4" />
+              <path d="M21 14a9 9 0 0 1-15.36 6.36L3 18m0 4v-4h4" />
+            </svg>
           </button>
           <a
             href="https://github.com/theOehrly/f1schedule"

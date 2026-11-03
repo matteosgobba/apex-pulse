@@ -3,21 +3,21 @@ import Link from "next/link";
 const STEPS = [
   {
     number: "01",
-    title: "Observe practice",
-    body: "Public FP1, FP2 and FP3 timing, weather and session context form the pre-qualifying evidence.",
-    tag: "LAPS / WEATHER / CONTEXT",
+    title: "Listen to the laps.",
+    body: "Practice timing, representative laps, relative pace and session context become interpretable features.",
+    tag: "PRACTICE → FEATURES",
   },
   {
     number: "02",
-    title: "Predict qualifying pace",
-    body: "A selected tabular model estimates each driver’s gap to pole, then produces the predicted ranking.",
-    tag: "FEATURES / MODEL / FORECAST",
+    title: "Find the signal.",
+    body: "A tabular model estimates qualifying gaps. Historical features use only information available before the weekend.",
+    tag: "FEATURES → FORECAST",
   },
   {
     number: "03",
-    title: "Preserve and evaluate",
-    body: "The forecast is frozen before qualifying and compared with the official result afterwards.",
-    tag: "FROZEN FORECAST / REAL RESULTS",
+    title: "Face the stopwatch.",
+    body: "The preserved forecast is compared with the qualifying result. Errors, missing drivers and limitations stay visible.",
+    tag: "FORECAST → EVIDENCE",
   },
 ];
 export function MethodologyPreview() {
@@ -28,10 +28,14 @@ export function MethodologyPreview() {
           <p className="eyebrow">
             <span className="section-number">03 /</span> UNDER THE HOOD
           </p>
-          <h2 id="methodology-preview-title">From practice to prediction.</h2>
+          <h2 id="methodology-preview-title">
+            Built on data.
+            <br />
+            Driven by curiosity.
+          </h2>
         </div>
         <Link href="/methodology" className="text-link">
-          Explore methodology <span>↗</span>
+          Data, limitations & methodology <span>↗</span>
         </Link>
       </div>
       <div className="method-steps">
@@ -68,8 +72,8 @@ export function MethodologyPreview() {
         ))}
       </div>
       <p className="metrics-note">
-        Public data only. No private team telemetry or paid live feed. Forecast
-        availability depends on the supported model checkpoint.
+        No crystal ball. No private team data. Just a transparent machine
+        learning project exploring the pace before qualifying.
       </p>
     </section>
   );

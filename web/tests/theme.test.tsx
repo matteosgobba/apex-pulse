@@ -196,7 +196,7 @@ describe.each(["dark", "light"] as const)("public routes in %s mode", (theme) =>
     setRootTheme(theme);
     render(<CurrentEventPageView data={currentEventData()} now={new Date("2026-07-24T12:00:00Z")} />);
 
-    expect(screen.getByRole("heading", { name: "Predicted starting order" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Less noise.*More racing intelligence/i })).toBeInTheDocument();
     expect(document.documentElement.dataset.theme).toBe(theme);
   });
 

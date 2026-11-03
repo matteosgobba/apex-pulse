@@ -35,13 +35,20 @@ export function ForecastRanking({
       <div className="section-heading">
         <div>
           <p className="eyebrow">
-            <span className="section-number">01 /</span> THE FORECAST
+            <span className="section-number">01 /</span> THE PIT WALL
           </p>
-          <h2 id="forecast-title">Predicted starting order</h2>
+          <h2 id="forecast-title">
+            Less noise.
+            <br />
+            More racing intelligence.
+          </h2>
         </div>
         <p className="section-intro">
-          Practice pace, translated into qualifying potential.
-          <br /> {rows.length} forecast drivers · select a driver to explore.
+          One clear view of the model’s call.
+          <br />
+          Explore a driver. Check the outcome.
+          <br />
+          See where the prediction stands.
         </p>
       </div>
       {rows.length === 0 ? (
@@ -69,7 +76,7 @@ export function ForecastRanking({
                   disabled={!comparison.length}
                   onClick={() => setReality(true)}
                 >
-                  vs. reality
+                  Versus reality
                 </button>
               </div>
               <label className="search-box">
@@ -86,8 +93,8 @@ export function ForecastRanking({
             <div className="ranking-labels" aria-hidden="true">
               <span>POS</span>
               <span>DRIVER / TEAM</span>
-              <span>GAP (S)</span>
-              <span>{reality ? "ACTUAL" : "SPREAD"}</span>
+              <span>MODEL GAP</span>
+              <span>{reality ? "ACTUAL" : "PACE SPREAD"}</span>
             </div>
             <ol
               aria-label="Predicted qualifying ranking"
@@ -173,14 +180,13 @@ export function ForecastRanking({
                   type="button"
                   onClick={() => setExpanded((value) => !value)}
                 >
-                  {expanded ? "Show top 7 ↑" : "View full field ↓"}
+                  {expanded ? "Show top 7 ↑" : "Show full field ↓"}
                 </button>
               ) : null}
             </div>
             <p className="table-disclosure">
-              Model estimates of gap to the official pole benchmark. The leading
-              prediction can have a non-zero gap. Spread shows the exported
-              prediction interval when available.
+              Model gap = estimated seconds to the actual pole benchmark. Rank 1
+              may have a non-zero estimate.
             </p>
           </div>
           {selected ? (
@@ -208,11 +214,11 @@ export function ForecastRanking({
               </div>
               <div className="detail-values">
                 <div>
-                  <span>Predicted gap</span>
+                  <span>Model gap to pole</span>
                   <strong>{formatSignedGap(selected.predictedGapSec)}</strong>
                 </div>
                 <div>
-                  <span>Official result</span>
+                  <span>Official position</span>
                   <strong>
                     {actual?.actualPosition ? `P${actual.actualPosition}` : "—"}
                   </strong>

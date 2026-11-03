@@ -17,7 +17,7 @@ export function SiteHeader({ health }: { health: HealthResponse | null }) {
         <ApexPulseLogo compact priority className="brand-symbol" />
         <span>
           APEX<span className="brand-pulse">PULSE</span>
-          <small>QUALIFYING. DECODED.</small>
+          <small>QUALIFYING INTELLIGENCE</small>
         </span>
       </Link>
       <SiteNavigation />

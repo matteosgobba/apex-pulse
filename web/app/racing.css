@@ -411,15 +411,6 @@ h2 {
   font-size: 7px;
   letter-spacing: 0.5px;
 }
-.track-word {
-  position: absolute;
-  top: 100px;
-  left: 4%;
-  font: 800 clamp(100px, 13vw, 200px) var(--display);
-  letter-spacing: 7px;
-  opacity: 0.026;
-  transform: rotate(-12deg);
-}
 .track-svg {
   position: absolute;
   top: 5px;
@@ -428,16 +419,18 @@ h2 {
   height: 100%;
   overflow: visible;
 }
-.track-flow {
-  animation: trackflow 7s linear infinite;
-}
 .race-dot {
   offset-rotate: 0deg;
-  animation: race 13s linear infinite;
+  animation: race 9s linear infinite;
   filter: drop-shadow(0 0 8px #ff463c);
 }
 .race-dot-two {
-  animation-delay: -5s;
+  animation-delay: -4.5s;
+  animation-duration: 14s;
+}
+.race-dot-three {
+  animation-duration: 20s;
+  animation-delay: -12s;
 }
 .ticker {
   border-block: 1px solid var(--line);
@@ -1051,11 +1044,6 @@ footer a:hover {
     offset-distance: 100%;
   }
 }
-@keyframes trackflow {
-  to {
-    stroke-dashoffset: -1505;
-  }
-}
 @keyframes ticker {
   to {
     transform: translateX(-50%);
@@ -1353,11 +1341,6 @@ footer a:hover {
     left: 0;
     font-size: 6px;
     bottom: 0;
-  }
-  .track-word {
-    top: 70px;
-    left: 15%;
-    font-size: 130px;
   }
   .ticker {
     height: 49px;
@@ -1701,6 +1684,7 @@ footer a:hover {
   }
   .race-dot-two {
     offset-distance: 60%;
+    animation-duration: 14s;
   }
 }
 
@@ -1715,7 +1699,7 @@ footer a:hover {
   flex-shrink: 0;
 }
 .weekend-visual .track-stage {
-  height: 335px;
+  height: 430px;
   margin: 0;
 }
 .weekend-visual .stage-top {
@@ -1730,21 +1714,12 @@ footer a:hover {
   right: 12px;
   font-size: 6px;
 }
-.weekend-visual .track-word {
-  top: 52px;
-  left: 30%;
-  font-size: 190px;
-  opacity: 0.022;
-}
 .weekend-visual .track-svg {
-  top: 13px;
-  height: calc(100% - 22px);
+  top: 90px;
+  height: calc(100% - 112px);
 }
 .weekend-visual .stage-grid {
   inset: 15px -5px;
-}
-.weekend-visual .track-flow {
-  animation-name: circuit-flow;
 }
 .circuit-identity {
   position: absolute;
@@ -1781,7 +1756,7 @@ footer a:hover {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
-  padding: 20px 22px 13px;
+  padding: 14px 18px 10px;
 }
 .console-topline {
   display: flex;
@@ -1844,7 +1819,7 @@ footer a:hover {
   margin-top: 8px;
 }
 .countdown-heading h3 {
-  font: 600 25px var(--display);
+  font: 600 23px var(--display);
 }
 .countdown-heading time {
   font: 8px/1.6 var(--mono);
@@ -1855,7 +1830,7 @@ footer a:hover {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  padding: 15px 0 8px;
+  padding: 10px 0 6px;
 }
 .weekend-clock > div {
   text-align: center;
@@ -1863,7 +1838,7 @@ footer a:hover {
 }
 .weekend-clock strong {
   display: block;
-  font: 500 37px/1.1 var(--mono);
+  font: 500 32px/1.1 var(--mono);
   letter-spacing: -1.5px;
   font-variant-numeric: tabular-nums;
 }
@@ -1887,7 +1862,7 @@ footer a:hover {
   justify-content: space-between;
   align-items: center;
   gap: 10px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 .clock-caption > span {
   font: 6px/1.7 var(--mono);
@@ -1911,7 +1886,7 @@ footer a:hover {
   display: grid;
   grid-template-columns: repeat(var(--session-count, 5), minmax(0, 1fr));
   border-top: 1px solid var(--line);
-  padding: 12px 0;
+  padding: 8px 0;
   gap: 8px;
 }
 .weekend-session {
@@ -1953,17 +1928,17 @@ footer a:hover {
   background: var(--muted);
 }
 .calendar-controls {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  column-gap: 10px;
-  row-gap: 8px;
+  column-gap: 12px;
+  row-gap: 3px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
 }
 .calendar-controls > label {
-  max-width: 60%;
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
 }
 .calendar-controls select {
@@ -1973,11 +1948,14 @@ footer a:hover {
   background: var(--surface);
   color: var(--ink);
   padding: 4px 14px 4px 0;
-  font: 8px var(--font);
+  font: 10px var(--font);
   cursor: pointer;
   outline-offset: 2px;
 }
 .calendar-controls a {
+  grid-column: 1;
+  grid-row: 2;
+  justify-self: start;
   font: 8px var(--mono);
   color: var(--subtle);
   white-space: nowrap;
@@ -1985,22 +1963,45 @@ footer a:hover {
 .calendar-controls a:hover {
   color: var(--red);
 }
-.calendar-controls button {
-  padding: 2px 0;
-  color: var(--red);
-  background: none;
-  font-size: 8px;
-}
-#refresh-calendar {
+.calendar-controls .calendar-refresh {
+  grid-column: 2;
+  grid-row: 1 / 3;
   display: inline-grid;
   place-items: center;
-  width: 24px;
-  min-height: 24px;
-  margin-left: -4px;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
   color: var(--muted);
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease;
 }
-#refresh-calendar:hover {
+.calendar-refresh svg {
+  width: 18px;
+  height: 18px;
+}
+.calendar-controls .calendar-refresh:hover {
   color: var(--red);
+  border-color: var(--red);
+}
+.calendar-refresh:focus-visible {
+  outline: 2px solid var(--red);
+  outline-offset: 3px;
+}
+.calendar-refresh:disabled {
+  cursor: wait;
+}
+.calendar-refresh[aria-busy="true"] svg {
+  animation: calendar-refresh-spin 1s linear infinite;
+}
+@keyframes calendar-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 #calendar-checked[data-status="offline"],
 #calendar-checked[data-status="geometry_cached"] {
@@ -2023,26 +2024,21 @@ footer a:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-@keyframes circuit-flow {
-  to {
-    stroke-dashoffset: -1000;
-  }
-}
 @media (min-width: 1500px) {
   .hero {
     min-height: 740px;
   }
   .weekend-visual .track-stage {
-    height: 300px;
+    height: 450px;
   }
   .weekend-console {
-    padding: 22px 26px 14px;
+    padding: 14px 18px 10px;
   }
   .weekend-clock strong {
-    font-size: 43px;
+    font-size: 35px;
   }
   .countdown-heading h3 {
-    font-size: 29px;
+    font-size: 25px;
   }
   .weekend-clock > div {
     min-width: 62px;
@@ -2053,19 +2049,16 @@ footer a:hover {
   .weekend-session > time {
     font-size: 9px;
   }
-  .calendar-controls select {
-    font-size: 9px;
-  }
   .calendar-controls a {
     font-size: 8px;
   }
 }
 @media (max-width: 1150px) {
   .weekend-visual .track-stage {
-    height: 295px;
+    height: 410px;
   }
   .weekend-console {
-    padding: 16px 17px 12px;
+    padding: 14px 18px 10px;
   }
   .countdown-heading {
     align-items: flex-start;
@@ -2090,10 +2083,10 @@ footer a:hover {
     font-size: 7.4vw;
   }
   .weekend-visual .track-stage {
-    height: 280px;
+    height: 340px;
   }
   .weekend-console {
-    padding: 15px 13px 11px;
+    padding: 14px 18px 10px;
   }
   .console-topline .eyebrow {
     font-size: 6px;
@@ -2138,9 +2131,6 @@ footer a:hover {
   .weekend-session {
     padding-left: 7px;
   }
-  .calendar-controls > label {
-    max-width: 100%;
-  }
   .calendar-controls a {
     font-size: 7px;
   }
@@ -2157,7 +2147,7 @@ footer a:hover {
     gap: 6px;
   }
   .weekend-visual .track-stage {
-    height: 280px;
+    height: 320px;
     max-width: none;
   }
   .weekend-visual .stage-top,
@@ -2167,10 +2157,6 @@ footer a:hover {
   }
   .weekend-visual .stage-top {
     font-size: 6px;
-  }
-  .weekend-visual .track-word {
-    top: 58px;
-    font-size: 135px;
   }
   .circuit-identity {
     top: 26px;
@@ -2187,7 +2173,7 @@ footer a:hover {
     font-size: 26px;
   }
   .weekend-console {
-    padding: 17px 17px 12px;
+    padding: 14px 18px 10px;
   }
   .console-topline .eyebrow {
     font-size: 7px;
@@ -2237,9 +2223,6 @@ footer a:hover {
   .calendar-controls select {
     font-size: 9px;
     min-height: 32px;
-  }
-  .calendar-controls > label {
-    max-width: 100%;
   }
   .calendar-controls a {
     font-size: 7px;
@@ -2294,6 +2277,9 @@ footer a:hover {
 @media (prefers-reduced-motion: reduce) {
   .start-light {
     transition: none;
+  }
+  .calendar-refresh[aria-busy="true"] svg {
+    animation: none;
   }
 }
 
@@ -2696,4 +2682,9 @@ footer nav {
 }
 .segmented {
   flex-shrink: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .race-dot-three {
+    offset-distance: 80%;
+  }
 }

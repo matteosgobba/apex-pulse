@@ -4,7 +4,6 @@ import { AppShell } from "@/components/app-shell";
 import { TechnicalDetails } from "@/components/technical-details";
 
 export const metadata: Metadata = {
-  title: "Methodology",
   description: "How Apex Pulse creates and evaluates Formula 1 qualifying predictions."
 };
 

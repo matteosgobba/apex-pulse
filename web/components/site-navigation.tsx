@@ -4,10 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAVIGATION = [
-  { href: "/", label: "Current Event" },
-  { href: "/history", label: "History" },
-  { href: "/methodology", label: "Methodology" },
-  { href: "/#about", label: "About" },
+  { href: "/#forecast", label: "The forecast" },
+  { href: "/history", label: "Track record" },
+  { href: "/methodology", label: "Under the hood" },
 ];
 
 export function SiteNavigation() {
@@ -15,7 +14,7 @@ export function SiteNavigation() {
   return (
     <nav aria-label="Primary navigation">
       {NAVIGATION.map((item) => {
-        const active = pathname === item.href;
+        const active = pathname === item.href.split("#")[0];
         return (
           <Link
             key={item.href}

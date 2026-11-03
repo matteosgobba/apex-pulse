@@ -7,10 +7,10 @@ export function SiteFooter() {
       <Link href="/" className="footer-brand">
         APEXPULSE
       </Link>
-      <span>READ THE PACE. ANTICIPATE THE GRID.</span>
+      <span>PUBLIC DATA. OPEN METHODOLOGY. RACING CURIOSITY.</span>
       <nav aria-label="Footer navigation">
-        <Link href="/history">Prediction history</Link>
-        <Link href="/methodology">Methodology</Link>
+        <Link href="/history">Track record</Link>
+        <Link href="/methodology">Under the hood</Link>
         {contactLinks().map((link) => (
           <a
             key={link.label}
