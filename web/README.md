@@ -82,9 +82,11 @@ Five red lights illuminate at 7 days, 24 hours, 6 hours, 1 hour and 5 minutes, a
 The clearly labelled eight-second light demo changes only the light animation. Selecting another
 upcoming event changes the circuit and its countdown; Auto follows the next Grand Prix again.
 
-The initial fallback is `data/racing-bootstrap.json`, containing public calendar metadata and
-circuit coordinates, never forecast rows. Last verified calendars are cached in browser storage
-when available. Upstream failure keeps the last verified schedule with a visible warning and
+The initial fallback is `lib/racing/racing-bootstrap.json`, containing public calendar metadata and
+circuit coordinates, never forecast rows. The bundle lives with the application source because the
+repository’s `.vercelignore` excludes directories named `data/`, including nested ones.
+Keep required frontend build inputs outside those excluded directories. Last verified calendars
+are cached in browser storage when available. Upstream failure keeps the last verified schedule with a visible warning and
 verification time. A cold server fallback cannot overwrite a newer saved browser calendar.
 Dates remain dependent on the public provider's own updates; refresh is not an official live feed.
 

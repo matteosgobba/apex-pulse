@@ -12,7 +12,7 @@ import { ForecastRanking } from "@/components/forecast-ranking";
 import { getTeamIdentity } from "@/lib/team-identity";
 import type { PublicRankingRow } from "@/lib/public-view-model";
 import { CACHE_KEY } from "@/lib/racing/calendar-source.mjs";
-import bootstrap from "@/data/racing-bootstrap.json";
+import bootstrap from "@/lib/racing/racing-bootstrap.json";
 
 beforeEach(() => {
   vi.useFakeTimers();

@@ -1,4 +1,4 @@
-import bootstrap from "@/data/racing-bootstrap.json";
+import bootstrap from "@/lib/racing/racing-bootstrap.json";
 import {
   fetchCalendarUpdate,
   REFRESH_INTERVAL_MS,
