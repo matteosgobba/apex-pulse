@@ -1,61 +1,53 @@
 import Link from "next/link";
-
 import { ApexPulseLogo } from "@/components/apex-pulse-logo";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { SiteNavigation } from "@/components/site-navigation";
+import { MotionToggle } from "@/components/racing-motion";
+import { SITE_CONTACT } from "@/lib/site-config";
 import type { HealthResponse } from "@/lib/dashboard-types";
-
-const NAVIGATION = [
-  { href: "/", label: "Current Event" },
-  { href: "/history", label: "History" },
-  { href: "/methodology", label: "Methodology" },
-  { href: "/#about", label: "About" }
-];
 
 export function SiteHeader({ health }: { health: HealthResponse | null }) {
   const available = Boolean(
-    health && !["unavailable", "invalid"].includes(health.dashboard_artifact_status)
+    health &&
+      !["unavailable", "invalid"].includes(health.dashboard_artifact_status),
   );
   return (
-    <header className="sticky top-0 z-50 border-b border-apex-border/80 bg-apex-bg/95 backdrop-blur-xl">
-      <div className="mx-auto flex min-h-16 max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-4 py-2 md:flex-nowrap md:py-0 lg:px-8">
-        <Link
-          href="/"
-          aria-label="Apex Pulse home"
-          className="flex h-10 w-24 items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-apex-accent sm:w-28"
+    <header className="header">
+      <Link href="/" aria-label="Apex Pulse home" className="brand">
+        <ApexPulseLogo compact priority className="brand-symbol" />
+        <span>
+          APEX<span className="brand-pulse">PULSE</span>
+          <small>QUALIFYING. DECODED.</small>
+        </span>
+      </Link>
+      <SiteNavigation />
+      <div className="header-actions">
+        <a
+          className="icon-button github-link"
+          href={SITE_CONTACT.github}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Apex Pulse on GitHub"
+          title="View the GitHub repository"
         >
-          <ApexPulseLogo compact priority className="h-10 w-full" />
-        </Link>
-        <nav
-          aria-label="Primary navigation"
-          className="order-3 w-full min-w-0 md:order-none md:w-auto"
-        >
-          <ul className="flex items-center justify-between gap-1 text-xs font-medium text-apex-secondary sm:justify-start sm:text-sm md:gap-2">
-            {NAVIGATION.map((item) => (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  className="inline-flex rounded-full px-2 py-2 transition-colors hover:bg-apex-surface hover:text-apex-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-apex-accent sm:px-3"
-                >
-                  {item.label}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        </nav>
-        <div className="flex shrink-0 items-center gap-2">
-          <ThemeToggle />
-          <div
-            className="hidden items-center gap-2 text-xs text-apex-muted md:flex"
-            aria-label={available ? "Exported data available" : "Exported data unavailable"}
+          <svg
+            width="17"
+            height="17"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            aria-hidden="true"
           >
-            <span
-              className={`h-2 w-2 rounded-full ${
-                available ? "bg-apex-success" : "bg-apex-warning"
-              }`}
-            />
-            {available ? "Data available" : "Data unavailable"}
-          </div>
-        </div>
+            <path d="M12 .8a11.2 11.2 0 0 0-3.54 21.82c.56.1.77-.24.77-.54v-2.1c-3.13.68-3.79-1.33-3.79-1.33-.51-1.3-1.25-1.65-1.25-1.65-1.02-.7.08-.69.08-.69 1.13.08 1.72 1.16 1.72 1.16 1 1.72 2.63 1.22 3.27.93.1-.73.39-1.22.71-1.5-2.5-.29-5.13-1.25-5.13-5.54 0-1.23.44-2.23 1.16-3.02-.12-.29-.5-1.43.11-2.98 0 0 .95-.31 3.08 1.15a10.75 10.75 0 0 1 5.6 0c2.14-1.46 3.08-1.15 3.08-1.15.61 1.55.23 2.69.11 2.98.72.79 1.16 1.79 1.16 3.02 0 4.3-2.64 5.25-5.15 5.53.4.35.76 1.03.76 2.08v3.11c0 .3.2.65.77.54A11.2 11.2 0 0 0 12 .8Z" />
+          </svg>
+        </a>
+        <MotionToggle />
+        <ThemeToggle />
+        <Link href="/#forecast" className="header-cta">
+          Enter the pit wall <span>↗</span>
+        </Link>
+        <span className="sr-only">
+          {available ? "Exported data available" : "Exported data unavailable"}
+        </span>
       </div>
     </header>
   );

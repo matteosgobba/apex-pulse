@@ -13,7 +13,8 @@ export function TeamMark({
   const accessibleLabel = team.logoPath ? undefined : `${team.displayName} team mark`;
   return (
     <span
-      className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-xl border border-white/10 font-bold tracking-wide shadow-sm ring-1 ring-apex-border/40 ${sizeClass}`}
+      data-team={team.key}
+      className={`team-avatar inline-flex shrink-0 items-center justify-center overflow-hidden rounded-sm border border-white/10 font-bold tracking-wide shadow-sm ring-1 ring-apex-border/40 ${sizeClass}`}
       style={{
         backgroundColor: team.logoPath ? "#2b2b30" : team.primary,
         color: team.foreground
@@ -27,7 +28,7 @@ export function TeamMark({
           alt={`${team.displayName} logo`}
           width={40}
           height={40}
-          className="h-full w-full object-contain p-1.5"
+          className="h-full w-full object-contain"
         />
       ) : (
         team.monogram

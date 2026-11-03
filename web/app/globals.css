@@ -4,15 +4,15 @@
 
 :root {
   color-scheme: dark;
-  --apex-background: 7 11 18;
-  --apex-surface: 17 24 39;
-  --apex-surface-elevated: 13 19 30;
-  --apex-surface-muted: 23 32 51;
-  --apex-foreground: 248 250 252;
-  --apex-secondary: 168 179 199;
-  --apex-muted: 124 135 155;
-  --apex-border: 43 52 67;
-  --apex-brand: 225 6 0;
+  --apex-background: 16 17 18;
+  --apex-surface: 22 23 24;
+  --apex-surface-elevated: 28 29 31;
+  --apex-surface-muted: 28 29 31;
+  --apex-foreground: 242 241 237;
+  --apex-secondary: 163 164 164;
+  --apex-muted: 146 147 147;
+  --apex-border: 44 45 46;
+  --apex-brand: 255 70 60;
   --apex-brand-soft: 64 22 25;
   --apex-success: 52 211 153;
   --apex-success-soft: 14 48 42;
@@ -23,8 +23,8 @@
   --apex-danger: 248 113 113;
   --apex-danger-soft: 66 25 30;
   --apex-danger-text: 254 202 202;
-  --apex-ink: 13 19 30;
-  --apex-on-strong: 248 250 252;
+  --apex-ink: 28 29 31;
+  --apex-on-strong: 242 241 237;
   --apex-on-strong-muted: 203 213 225;
   --shadow-panel: 0 18px 56px rgba(0, 0, 0, 0.26);
   --shadow-card: 0 10px 34px rgba(0, 0, 0, 0.2);
@@ -33,15 +33,15 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --apex-background: 247 248 250;
-  --apex-surface: 255 255 255;
-  --apex-surface-elevated: 255 255 255;
-  --apex-surface-muted: 241 245 249;
-  --apex-foreground: 15 23 42;
-  --apex-secondary: 71 85 105;
-  --apex-muted: 100 116 139;
-  --apex-border: 226 232 240;
-  --apex-brand: 225 6 0;
+  --apex-background: 245 243 238;
+  --apex-surface: 255 254 250;
+  --apex-surface-elevated: 255 254 250;
+  --apex-surface-muted: 236 234 228;
+  --apex-foreground: 32 34 34;
+  --apex-secondary: 88 90 87;
+  --apex-muted: 102 104 100;
+  --apex-border: 216 214 207;
+  --apex-brand: 219 48 41;
   --apex-brand-soft: 254 242 242;
   --apex-success: 5 150 105;
   --apex-success-soft: 236 253 245;
@@ -52,8 +52,8 @@
   --apex-danger: 220 38 38;
   --apex-danger-soft: 254 242 242;
   --apex-danger-text: 153 27 27;
-  --apex-ink: 17 24 39;
-  --apex-on-strong: 248 250 252;
+  --apex-ink: 22 23 24;
+  --apex-on-strong: 242 241 237;
   --apex-on-strong-muted: 203 213 225;
   --shadow-panel: 0 16px 50px rgba(15, 23, 42, 0.08);
   --shadow-card: 0 8px 30px rgba(15, 23, 42, 0.055);

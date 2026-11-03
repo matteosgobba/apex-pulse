@@ -55,17 +55,81 @@ to components through the existing `apex-*` utilities, so the public routes shar
 implementation rather than separate dark and light trees. Theme transitions are limited to color
 changes and reduced to effectively instant when `prefers-reduced-motion` is enabled.
 
-## Data and countdown
+## Racing homepage and calendar
 
-The app consumes the existing version `1.0` dashboard JSON envelopes through the read-only FastAPI
-service. The optional additive `event_schedule` block is exported from already-cached FastF1
-`session_info.ff1pkl` metadata. The frontend never calls FastF1 or another calendar service while
-rendering.
+The approved racing design is implemented in the real Next.js application, not loaded from
+`output/redesign-preview`. The ranking, driver detail, official comparison, coverage and metrics
+still come exclusively from the existing version `1.0` dashboard envelopes through the FastAPI
+service. The leading predicted gap is preserved, including when it is non-zero. Search, full-field
+expansion and driver selection never generate or modify predictions. Official results remain
+unavailable until exported by the backend. A full comparison can be expanded below the ranking.
 
-The countdown chooses the first verified future session in `FP1 → FP2 → FP3 → Qualifying` order,
-updates once per second in the browser, uses the visitor's local time, clamps at zero, and shows a
-safe unavailable state when schedule data is absent. Settled events show `Qualifying complete`.
-The timeline reflects exported artifact availability, not lap-by-lap live telemetry.
+`GET /api/calendar` fetches the current and following season from the public FastF1 schedule
+repository. Browser checks run every five minutes, on focus, on reconnect and when returning to
+a visible tab. The server deduplicates concurrent requests and retains responses for five minutes.
+Source requests time out after ten seconds. This endpoint requires a Next.js server runtime;
+it is not compatible with a static-only export.
+
+Schedule ingestion discovers the actual session slots, including Sprint formats, and converts
+explicit local offsets or UTC timestamps. Corrections, removed/cancelled events, reordered rounds
+and next-season publication are incorporated on refresh. Event selection uses a stable identity
+rather than a round number. Postponed or unconfirmed sessions do not receive invented countdowns.
+The animation and countdown describe the public schedule; they do not indicate live session status.
+
+The counter ticks once a second, uses the visitor's timezone, reaches zero for 30 seconds at each
+scheduled start, then advances to the following session and eventually the next Grand Prix.
+Five red lights illuminate at 7 days, 24 hours, 6 hours, 1 hour and 5 minutes, and go out at zero.
+The clearly labelled eight-second light demo changes only the light animation. Selecting another
+upcoming event changes the circuit and its countdown; Auto follows the next Grand Prix again.
+
+The initial fallback is `data/racing-bootstrap.json`, containing public calendar metadata and
+circuit coordinates, never forecast rows. Last verified calendars are cached in browser storage
+when available. Upstream failure keeps the last verified schedule with a visible warning and
+verification time. A cold server fallback cannot overwrite a newer saved browser calendar.
+Dates remain dependent on the public provider's own updates; refresh is not an official live feed.
+
+Real circuit geometry comes from [f1-circuits](https://github.com/bacinger/f1-circuits), with a local
+projection that preserves proportions and can rotate tall tracks. Unknown venues show an explicit
+unavailable outline rather than a substitute circuit. The MIT attribution is included in
+`public/CIRCUITS-LICENSE.md` and linked in the footer. The source may not yet contain newly added venues.
+
+`lib/racing/race-engine.mjs` and `calendar-source.mjs` are framework-independent modules shared
+with the tested preview logic; `.d.mts` files define their TypeScript interfaces. The server cache
+and endpoint live in `calendar-service.ts` and `app/api/calendar/route.ts`. The React integration
+is in `racing-weekend.tsx`. These modules do not call the prediction pipeline.
+
+`app/racing.css` supplies the approved charcoal/cream palette and responsive layout. Barlow
+Condensed, DM Sans and IBM Plex Mono are served locally from `public/fonts` with their SIL OFL
+licenses, so building the app does not require Google Fonts access. The shared header includes
+the repository link, persisted theme switch and animation pause. Reduced-motion preferences and
+coarse pointers disable decorative cursor effects. Pausing motion does not stop the real clock.
+
+The existing artifact-derived session countdown remains available in operational components when
+used outside the landing page. The artifact timeline reports loaded data availability separately
+from the refreshed public calendar. The page never assumes calendar activity means a forecast exists.
+
+## Review and publish the integration
+
+No backend model or API schema migration is required. Keep the existing
+`NEXT_PUBLIC_APEX_PULSE_API_BASE_URL` configured to the deployed dashboard API. From `web/`:
+
+```bash
+npm test
+npm run lint
+npm run typecheck
+npm run build
+npm run dev -- --port 3001
+```
+
+The app is available at `http://localhost:3001`. The Python API must also be running to show real
+prediction exports. For a visual-only local review, start it with
+`APEX_PULSE_AUTOPILOT_SCHEDULER_ENABLED=false .venv/bin/python -m f1_prediction.cli dashboard-api`
+from the repository root; this explicitly disables automatic prediction operations.
+
+Commit the changes under `web/` and push the redesign branch for review. A connected Vercel project
+with `web` as its root can build this branch as a preview; production publication follows merging
+into the project's configured production branch. This integration does not change that deployment
+configuration or publish automatically from this working tree.
 
 ## Team identity and assets
 

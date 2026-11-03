@@ -13,12 +13,10 @@ export function ThemeToggle() {
       aria-label={label}
       title={label}
       onClick={toggleTheme}
-      className="inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-full border border-apex-border bg-apex-surface px-3 text-apex-secondary transition-colors hover:border-apex-muted hover:bg-apex-panel hover:text-apex-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-apex-accent focus-visible:ring-offset-2 focus-visible:ring-offset-apex-bg"
+      className="icon-button min-h-11 min-w-11"
     >
       {theme === "dark" ? <SunIcon /> : <MoonIcon />}
-      <span className="hidden text-xs font-semibold xl:inline">
-        {theme === "dark" ? "Light" : "Dark"}
-      </span>
+
     </button>
   );
 }

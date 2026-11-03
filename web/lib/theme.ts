@@ -7,8 +7,8 @@ export const THEME_STORAGE_KEY = "apex-pulse-theme";
 export const THEME_CHANGE_EVENT = "apex-pulse-theme-change";
 
 export const THEME_COLORS: Record<Theme, string> = {
-  dark: "#070B12",
-  light: "#F7F8FA"
+  dark: "#101112",
+  light: "#F5F3EE"
 };
 
 export function isTheme(value: unknown): value is Theme {

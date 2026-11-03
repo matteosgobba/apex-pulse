@@ -69,7 +69,7 @@ describe("theme initialization", () => {
     runThemeInitializer();
 
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(themeColorContent()).toBe("#F7F8FA");
+    expect(themeColorContent()).toBe("#F5F3EE");
   });
 
   test("a valid stored dark preference initializes dark mode", () => {
@@ -77,7 +77,7 @@ describe("theme initialization", () => {
     runThemeInitializer();
 
     expect(document.documentElement.dataset.theme).toBe("dark");
-    expect(themeColorContent()).toBe("#070B12");
+    expect(themeColorContent()).toBe("#101112");
   });
 
   test("an invalid stored preference falls back safely to dark", () => {

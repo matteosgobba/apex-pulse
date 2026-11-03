@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Analytics } from "@vercel/analytics/next";
 
 import "@/app/globals.css";
+import "@/app/racing.css";
 import {
   DEFAULT_THEME,
   THEME_COLORS,
