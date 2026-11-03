@@ -1,0 +1,313 @@
+{
+  "generatedAt": "2026-07-30T17:58:15.940382+00:00",
+  "event": {
+    "event": "Hungarian Grand Prix",
+    "event_order": 11,
+    "event_slug": "hungarian-grand-prix",
+    "season": 2026
+  },
+  "schedule": {
+    "available": true,
+    "circuit": "Hungaroring",
+    "country": "Hungary",
+    "location": "Budapest",
+    "reason": "",
+    "sessions": [
+      {
+        "display_name": "Practice 1",
+        "scheduled_end_utc": "2026-07-24T12:30:00+00:00",
+        "scheduled_start_utc": "2026-07-24T11:30:00+00:00",
+        "session": "FP1"
+      },
+      {
+        "display_name": "Practice 2",
+        "scheduled_end_utc": "2026-07-24T16:00:00+00:00",
+        "scheduled_start_utc": "2026-07-24T15:00:00+00:00",
+        "session": "FP2"
+      },
+      {
+        "display_name": "Practice 3",
+        "scheduled_end_utc": "2026-07-25T11:30:00+00:00",
+        "scheduled_start_utc": "2026-07-25T10:30:00+00:00",
+        "session": "FP3"
+      },
+      {
+        "display_name": "Qualifying",
+        "scheduled_end_utc": "2026-07-25T15:00:00+00:00",
+        "scheduled_start_utc": "2026-07-25T14:00:00+00:00",
+        "session": "Q"
+      }
+    ],
+    "source": "fastf1_cached_session_info",
+    "timezone": "UTC"
+  },
+  "checkpoint": "after_fp3",
+  "rows": [
+    {
+      "driver_code": "HAM",
+      "team": "Ferrari",
+      "team_key": "ferrari",
+      "predicted_position": 1,
+      "predicted_gap_to_pole_sec": 0.14391973644075964,
+      "actual_position": 2,
+      "actual_gap_to_pole_sec": 0.012000000000000455,
+      "absolute_gap_error_sec": 0.1319197364407592
+    },
+    {
+      "driver_code": "LEC",
+      "team": "Ferrari",
+      "team_key": "ferrari",
+      "predicted_position": 2,
+      "predicted_gap_to_pole_sec": 0.3434690945646128,
+      "actual_position": 3,
+      "actual_gap_to_pole_sec": 0.23799999999999955,
+      "absolute_gap_error_sec": 0.10546909456461323
+    },
+    {
+      "driver_code": "NOR",
+      "team": "McLaren",
+      "team_key": "mclaren",
+      "predicted_position": 3,
+      "predicted_gap_to_pole_sec": 0.36822727982634534,
+      "actual_position": 1,
+      "actual_gap_to_pole_sec": 0.0,
+      "absolute_gap_error_sec": 0.36822727982634534
+    },
+    {
+      "driver_code": "ANT",
+      "team": "Mercedes",
+      "team_key": "mercedes",
+      "predicted_position": 4,
+      "predicted_gap_to_pole_sec": 0.4316917023365424,
+      "actual_position": 4,
+      "actual_gap_to_pole_sec": 0.27200000000000557,
+      "absolute_gap_error_sec": 0.15969170233653684
+    },
+    {
+      "driver_code": "PIA",
+      "team": "McLaren",
+      "team_key": "mclaren",
+      "predicted_position": 5,
+      "predicted_gap_to_pole_sec": 0.5623723520807228,
+      "actual_position": 5,
+      "actual_gap_to_pole_sec": 0.47700000000000387,
+      "absolute_gap_error_sec": 0.08537235208071892
+    },
+    {
+      "driver_code": "RUS",
+      "team": "Mercedes",
+      "team_key": "mercedes",
+      "predicted_position": 6,
+      "predicted_gap_to_pole_sec": 0.6779557516972833,
+      "actual_position": 7,
+      "actual_gap_to_pole_sec": 0.5530000000000115,
+      "absolute_gap_error_sec": 0.1249557516972718
+    },
+    {
+      "driver_code": "VER",
+      "team": "Red Bull Racing",
+      "team_key": "red_bull",
+      "predicted_position": 7,
+      "predicted_gap_to_pole_sec": 0.7247601380718902,
+      "actual_position": 6,
+      "actual_gap_to_pole_sec": 0.5180000000000007,
+      "absolute_gap_error_sec": 0.20676013807188953
+    },
+    {
+      "driver_code": "HAD",
+      "team": "Red Bull Racing",
+      "team_key": "red_bull",
+      "predicted_position": 8,
+      "predicted_gap_to_pole_sec": 0.8452473132228557,
+      "actual_position": 8,
+      "actual_gap_to_pole_sec": 0.6490000000000009,
+      "absolute_gap_error_sec": 0.19624731322285482
+    },
+    {
+      "driver_code": "HUL",
+      "team": "Audi",
+      "team_key": "audi",
+      "predicted_position": 9,
+      "predicted_gap_to_pole_sec": 1.0566218240325786,
+      "actual_position": 10,
+      "actual_gap_to_pole_sec": 1.4320000000000022,
+      "absolute_gap_error_sec": 0.3753781759674235
+    },
+    {
+      "driver_code": "LAW",
+      "team": "Racing Bulls",
+      "team_key": "racing_bulls",
+      "predicted_position": 10,
+      "predicted_gap_to_pole_sec": 1.0918765214750825,
+      "actual_position": 11,
+      "actual_gap_to_pole_sec": 1.558000000000007,
+      "absolute_gap_error_sec": 0.4661234785249244
+    },
+    {
+      "driver_code": "BOR",
+      "team": "Audi",
+      "team_key": "audi",
+      "predicted_position": 11,
+      "predicted_gap_to_pole_sec": 1.2839584559352266,
+      "actual_position": 14,
+      "actual_gap_to_pole_sec": 1.862000000000009,
+      "absolute_gap_error_sec": 0.5780415440647824
+    },
+    {
+      "driver_code": "GAS",
+      "team": "Alpine",
+      "team_key": "alpine",
+      "predicted_position": 12,
+      "predicted_gap_to_pole_sec": 1.67083960672644,
+      "actual_position": 12,
+      "actual_gap_to_pole_sec": 1.6370000000000005,
+      "absolute_gap_error_sec": 0.033839606726439486
+    },
+    {
+      "driver_code": "BEA",
+      "team": "Haas F1 Team",
+      "team_key": "haas",
+      "predicted_position": 13,
+      "predicted_gap_to_pole_sec": 1.7843012994885854,
+      "actual_position": 17,
+      "actual_gap_to_pole_sec": 3.0260000000000105,
+      "absolute_gap_error_sec": 1.241698700511425
+    },
+    {
+      "driver_code": "OCO",
+      "team": "Haas F1 Team",
+      "team_key": "haas",
+      "predicted_position": 14,
+      "predicted_gap_to_pole_sec": 1.9157379809585513,
+      "actual_position": 15,
+      "actual_gap_to_pole_sec": 2.527000000000001,
+      "absolute_gap_error_sec": 0.6112620190414497
+    },
+    {
+      "driver_code": "ALO",
+      "team": "Aston Martin",
+      "team_key": "aston_martin",
+      "predicted_position": 15,
+      "predicted_gap_to_pole_sec": 1.9808531599838028,
+      "actual_position": 16,
+      "actual_gap_to_pole_sec": 2.6010000000000133,
+      "absolute_gap_error_sec": 0.6201468400162105
+    },
+    {
+      "driver_code": "COL",
+      "team": "Alpine",
+      "team_key": "alpine",
+      "predicted_position": 16,
+      "predicted_gap_to_pole_sec": 2.005689716948572,
+      "actual_position": 13,
+      "actual_gap_to_pole_sec": 1.8200000000000074,
+      "absolute_gap_error_sec": 0.1856897169485645
+    },
+    {
+      "driver_code": "BOT",
+      "team": "Cadillac",
+      "team_key": "cadillac",
+      "predicted_position": 17,
+      "predicted_gap_to_pole_sec": 2.064456620881005,
+      "actual_position": 21,
+      "actual_gap_to_pole_sec": 3.679000000000002,
+      "absolute_gap_error_sec": 1.614543379118997
+    },
+    {
+      "driver_code": "LIN",
+      "team": "Racing Bulls",
+      "team_key": "racing_bulls",
+      "predicted_position": 18,
+      "predicted_gap_to_pole_sec": 2.301170869908735,
+      "actual_position": 9,
+      "actual_gap_to_pole_sec": 1.0740000000000123,
+      "absolute_gap_error_sec": 1.227170869908723
+    },
+    {
+      "driver_code": "STR",
+      "team": "Aston Martin",
+      "team_key": "aston_martin",
+      "predicted_position": 19,
+      "predicted_gap_to_pole_sec": 2.508978972133061,
+      "actual_position": 20,
+      "actual_gap_to_pole_sec": 3.4520000000000124,
+      "absolute_gap_error_sec": 0.9430210278669513
+    },
+    {
+      "driver_code": "SAI",
+      "team": "Williams",
+      "team_key": "williams",
+      "predicted_position": 20,
+      "predicted_gap_to_pole_sec": 2.5584340391628495,
+      "actual_position": 18,
+      "actual_gap_to_pole_sec": 3.4140000000000015,
+      "absolute_gap_error_sec": 0.855565960837152
+    },
+    {
+      "driver_code": "ALB",
+      "team": "Williams",
+      "team_key": "williams",
+      "predicted_position": 21,
+      "predicted_gap_to_pole_sec": 2.5905137321201277,
+      "actual_position": 19,
+      "actual_gap_to_pole_sec": 3.4510000000000076,
+      "absolute_gap_error_sec": 0.8604862678798799
+    }
+  ],
+  "metrics": {
+    "actual_pole_driver": "NOR",
+    "actual_qualifying_driver_count": 22,
+    "coverage_warning": "partial qualifying-entry coverage",
+    "driver_count": 21,
+    "evaluable_driver_count": 21,
+    "excluded_driver_count": 0,
+    "forecast_coverage": "21/22",
+    "forecast_coverage_percentage": 95.45454545454545,
+    "forecast_coverage_ratio": 0.9545454545454546,
+    "forecast_coverage_status": "partial_coverage",
+    "forecast_driver_count": 21,
+    "forecast_only_non_qualifier_count": 0,
+    "forecast_only_non_qualifiers": [],
+    "mae_gap_sec": 0.5234100455073292,
+    "mean_absolute_position_error": 1.8095238095238095,
+    "median_absolute_gap_error_sec": 0.3753781759674235,
+    "rmse_gap_sec": 0.6829968355420933,
+    "scored_driver_count": 21,
+    "settlement_evaluable_driver_count": 21,
+    "top_10_agreement": 0.9,
+    "top_3_agreement": 1.0,
+    "top_5_agreement": 1.0,
+    "unforecasted_actual_entrant_count": 1,
+    "unforecasted_actual_entrants": [
+      {
+        "driver": "PER",
+        "driver_code": "PER",
+        "reason": "pre_q_entry_list_resolution_miss"
+      }
+    ]
+  },
+  "history": [
+    {
+      "event": {
+        "event": "Belgian Grand Prix",
+        "event_order": 10,
+        "event_slug": "belgian-grand-prix",
+        "season": 2026
+      },
+      "checkpoint": "after_fp3",
+      "state": "awaiting_qualifying_targets",
+      "count": 22
+    },
+    {
+      "event": {
+        "event": "Hungarian Grand Prix",
+        "event_order": 11,
+        "event_slug": "hungarian-grand-prix",
+        "season": 2026
+      },
+      "checkpoint": "after_fp3",
+      "state": "settled_partial_coverage",
+      "count": 21
+    }
+  ]
+}

@@ -38,18 +38,18 @@ export function EventMetrics({ metrics }: { metrics: PublicEventViewModel["metri
     return null;
   }
   return (
-    <section aria-labelledby="metrics-title">
+    <section aria-labelledby="metrics-title" className="integrated-metrics">
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
         Event performance
       </p>
       <h2 id="metrics-title" className="mt-2 text-3xl font-semibold tracking-tight text-apex-text">
         Forecast at a glance
       </h2>
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="integrated-metric-grid">
         {cards.map((card) => (
           <article
             key={card.label}
-            className="rounded-2xl border border-apex-border bg-apex-panel p-5 shadow-card"
+            className="metric"
             title={card.hint}
           >
             <p className="text-sm font-medium text-apex-muted">{card.label}</p>

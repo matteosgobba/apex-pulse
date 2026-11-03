@@ -3,36 +3,44 @@ import { TeamMark } from "@/components/team-mark";
 import { formatSignedGap } from "@/lib/formatters";
 import {
   positionDeltaLabel,
-  type PublicComparisonRow
+  type PublicComparisonRow,
 } from "@/lib/public-view-model";
 import type { UnforecastedActualEntrant } from "@/lib/dashboard-types";
 
 export function PredictionOfficialComparison({
   rows,
   coverage,
-  unforecastedEntrants
+  unforecastedEntrants,
+  compact = false,
 }: {
   rows: PublicComparisonRow[];
   coverage: string | null;
   unforecastedEntrants: UnforecastedActualEntrant[];
+  compact?: boolean;
 }) {
   if (rows.length === 0) {
     return null;
   }
-  return (
-    <section id="comparison" aria-labelledby="comparison-title">
+  const content = (
+    <section
+      id={compact ? undefined : "comparison"}
+      aria-labelledby="comparison-title"
+    >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
             Prediction versus result
           </p>
-          <h2 id="comparison-title" className="mt-2 text-3xl font-semibold tracking-tight text-apex-text">
+          <h2
+            id="comparison-title"
+            className="mt-2 text-3xl font-semibold tracking-tight text-apex-text"
+          >
             How the forecast compared
           </h2>
         </div>
         <p className="max-w-md text-xs leading-5 text-apex-muted">
-          “Over” means the model predicted a better finishing position than achieved. “Under”
-          means the driver finished higher than predicted.
+          “Over” means the model predicted a better finishing position than
+          achieved. “Under” means the driver finished higher than predicted.
         </p>
       </div>
       <div className="mt-6">
@@ -50,7 +58,10 @@ export function PredictionOfficialComparison({
         </div>
         <ol aria-label="Prediction and official result comparison">
           {rows.map((row) => {
-            const delta = positionDeltaLabel(row.predictedPosition, row.actualPosition);
+            const delta = positionDeltaLabel(
+              row.predictedPosition,
+              row.actualPosition,
+            );
             return (
               <li
                 key={`${row.driverCode}-${row.predictedPosition}`}
@@ -59,8 +70,12 @@ export function PredictionOfficialComparison({
                 <div className="flex min-w-0 items-center gap-3">
                   <TeamMark team={row.team} size="sm" />
                   <div className="min-w-0">
-                    <p className="font-semibold text-apex-text">{row.driverCode}</p>
-                    <p className="truncate text-xs text-apex-muted">{row.team.displayName}</p>
+                    <p className="font-semibold text-apex-text">
+                      {row.driverCode}
+                    </p>
+                    <p className="truncate text-xs text-apex-muted">
+                      {row.team.displayName}
+                    </p>
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:contents">
@@ -83,8 +98,14 @@ export function PredictionOfficialComparison({
                       {delta.shortLabel}
                     </p>
                   </div>
-                  <Value label="Pred. gap" value={formatSignedGap(row.predictedGapSec)} />
-                  <Value label="Official gap" value={formatSignedGap(row.actualGapSec)} />
+                  <Value
+                    label="Pred. gap"
+                    value={formatSignedGap(row.predictedGapSec)}
+                  />
+                  <Value
+                    label="Official gap"
+                    value={formatSignedGap(row.actualGapSec)}
+                  />
                   <Value
                     label="Gap error"
                     value={
@@ -101,15 +122,36 @@ export function PredictionOfficialComparison({
       </div>
     </section>
   );
+  return compact ? (
+    <details id="comparison" className="archive-details">
+      <summary>
+        <span>Full prediction versus official result</span>
+        <span className="summary-plus" aria-hidden="true">
+          +
+        </span>
+      </summary>
+      {content}
+    </details>
+  ) : (
+    content
+  );
 }
 
-function Value({ label, value }: { label: string; value: string | number | null }) {
+function Value({
+  label,
+  value,
+}: {
+  label: string;
+  value: string | number | null;
+}) {
   return (
     <div>
       <span className="text-[10px] font-medium uppercase tracking-wide text-apex-muted lg:hidden">
         {label}
       </span>
-      <p className="mt-1 text-sm font-semibold text-apex-text lg:mt-0">{value ?? "—"}</p>
+      <p className="mt-1 text-sm font-semibold text-apex-text lg:mt-0">
+        {value ?? "—"}
+      </p>
     </div>
   );
 }

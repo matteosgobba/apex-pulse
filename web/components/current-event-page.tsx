@@ -1,3 +1,4 @@
+import { CoverageNotice } from "@/components/coverage-notice";
 import { ContactSection } from "@/components/contact-section";
 import { EventHero } from "@/components/event-hero";
 import { EventMetrics } from "@/components/event-metrics";
@@ -8,30 +9,39 @@ import { PredictionOfficialComparison } from "@/components/prediction-official-c
 import { TechnicalDetails } from "@/components/technical-details";
 import { WeekendTimeline } from "@/components/weekend-timeline";
 import type { CurrentEventPageData } from "@/lib/dashboard-types";
-import { adaptCurrentEvent, adaptLatestCompletedForecast } from "@/lib/public-view-model";
+import {
+  adaptCurrentEvent,
+  adaptLatestCompletedForecast,
+} from "@/lib/public-view-model";
 import { availableOperationalEvent } from "@/lib/operational-event";
 
 export function CurrentEventPageView({
   data,
-  now
+  now,
+  primaryHeading = true,
 }: {
   data: CurrentEventPageData;
   now?: Date;
+  primaryHeading?: boolean;
 }) {
   const operationalEvent = availableOperationalEvent(data.operationalStatus);
   if (data.error && !operationalEvent) {
     return (
       <PublicEmptyState
+        primaryHeading={primaryHeading}
         title="Prediction data is unavailable"
         detail="The exported dashboard artifacts could not be loaded. This public interface remains read-only and will not attempt to regenerate them."
       />
     );
   }
   const event = adaptCurrentEvent(data, { now });
-  const historicalForecast = adaptLatestCompletedForecast(data.historicalMonitoring, {
-    excludeEventSlug: operationalEvent?.event_slug,
-    now
-  });
+  const historicalForecast = adaptLatestCompletedForecast(
+    data.historicalMonitoring,
+    {
+      excludeEventSlug: operationalEvent?.event_slug,
+      now,
+    },
+  );
   const displayedForecastEvent =
     event.available && event.hasForecast
       ? event
@@ -39,6 +49,7 @@ export function CurrentEventPageView({
   if (!displayedForecastEvent && !operationalEvent) {
     return (
       <PublicEmptyState
+        primaryHeading={primaryHeading}
         title="No current prediction is available"
         detail="A valid current or recently settled prospective event is not present in the exported artifacts."
       />
@@ -56,13 +67,15 @@ export function CurrentEventPageView({
           event={operationalEvent}
           status={data.operationalStatus?.data}
           initialNow={now?.toISOString()}
+          primaryHeading={primaryHeading}
+          showCountdown={primaryHeading}
         />
       ) : null}
       {displayedForecastEvent ? (
         <>
           <EventHero
             event={displayedForecastEvent}
-            primary={!operationalEvent}
+            primary={!operationalEvent && primaryHeading}
             contextLabel={
               operationalIsDifferentEvent
                 ? "Last completed prediction"
@@ -77,13 +90,25 @@ export function CurrentEventPageView({
               now={now}
             />
           </div>
-          <ForecastRanking rows={displayedForecastEvent.ranking} />
+          <ForecastRanking
+            rows={displayedForecastEvent.ranking}
+            comparison={displayedForecastEvent.comparison}
+          />
+          {!primaryHeading && displayedForecastEvent.hasSettlement ? (
+            <CoverageNotice
+              coverage={displayedForecastEvent.metrics.coverage}
+              entrants={displayedForecastEvent.unforecastedEntrants}
+            />
+          ) : null}
           {displayedForecastEvent.hasSettlement ? (
             <>
               <PredictionOfficialComparison
+                compact={!primaryHeading}
                 rows={displayedForecastEvent.comparison}
                 coverage={displayedForecastEvent.metrics.coverage}
-                unforecastedEntrants={displayedForecastEvent.unforecastedEntrants}
+                unforecastedEntrants={
+                  displayedForecastEvent.unforecastedEntrants
+                }
               />
               <EventMetrics metrics={displayedForecastEvent.metrics} />
             </>
@@ -92,6 +117,7 @@ export function CurrentEventPageView({
         </>
       ) : (
         <PublicEmptyState
+          primaryHeading={primaryHeading}
           title="No completed prediction is available"
           detail="This weekend is being reported from the operational monitor, but no immutable pre-qualifying forecast is available to display."
         />
@@ -102,13 +128,27 @@ export function CurrentEventPageView({
   );
 }
 
-function PublicEmptyState({ title, detail }: { title: string; detail: string }) {
+function PublicEmptyState({
+  title,
+  detail,
+  primaryHeading = true,
+}: {
+  title: string;
+  detail: string;
+  primaryHeading?: boolean;
+}) {
+  const Heading = primaryHeading ? "h1" : "h2";
   return (
-    <section className="mx-auto max-w-2xl rounded-[2rem] border border-dashed border-apex-border bg-apex-panel p-10 text-center shadow-card">
+    <section
+      id="forecast"
+      className="mx-auto max-w-2xl rounded-[2rem] border border-dashed border-apex-border bg-apex-panel p-10 text-center shadow-card"
+    >
       <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
         Apex Pulse
       </p>
-      <h1 className="mt-4 text-3xl font-semibold text-apex-text">{title}</h1>
+      <Heading className="mt-4 text-3xl font-semibold text-apex-text">
+        {title}
+      </Heading>
       <p className="mt-3 text-sm leading-6 text-apex-secondary">{detail}</p>
     </section>
   );

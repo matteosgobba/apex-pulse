@@ -1,78 +1,266 @@
+"use client";
+
+import { useState, type CSSProperties } from "react";
 import { TeamMark } from "@/components/team-mark";
 import { formatSignedGap } from "@/lib/formatters";
-import type { PublicRankingRow } from "@/lib/public-view-model";
+import type {
+  PublicComparisonRow,
+  PublicRankingRow,
+} from "@/lib/public-view-model";
 
-export function ForecastRanking({ rows }: { rows: PublicRankingRow[] }) {
+export function ForecastRanking({
+  rows,
+  comparison = [],
+}: {
+  rows: PublicRankingRow[];
+  comparison?: PublicComparisonRow[];
+}) {
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const [reality, setReality] = useState(false);
+  const selected =
+    rows.find((row) => row.driverCode === selectedCode) ?? rows[0];
+  const actual = comparison.find(
+    (row) => row.driverCode === selected?.driverCode,
+  );
+  const matching = rows.filter((row) =>
+    `${row.driverCode} ${row.driverName ?? ""} ${row.team.displayName}`
+      .toLowerCase()
+      .includes(query.toLowerCase().trim()),
+  );
+  const visible = expanded || query.trim() ? matching : matching.slice(0, 7);
   return (
     <section id="forecast" aria-labelledby="forecast-title">
-      <div className="flex flex-wrap items-end justify-between gap-4">
+      <div className="section-heading">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
-            Qualifying prediction
+          <p className="eyebrow">
+            <span className="section-number">01 /</span> THE FORECAST
           </p>
-          <h2 id="forecast-title" className="mt-2 text-3xl font-semibold tracking-tight text-apex-text">
-            Predicted starting order
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-apex-secondary">
-            Ranked from the pre-qualifying forecast. Gaps are relative to the predicted pole lap.
-          </p>
+          <h2 id="forecast-title">Predicted starting order</h2>
         </div>
-        <span className="rounded-full bg-apex-surface px-3 py-1.5 text-xs font-medium text-apex-secondary">
-          {rows.length} forecast drivers
-        </span>
+        <p className="section-intro">
+          Practice pace, translated into qualifying potential.
+          <br /> {rows.length} forecast drivers · select a driver to explore.
+        </p>
       </div>
       {rows.length === 0 ? (
-        <div className="mt-6 rounded-3xl border border-dashed border-apex-border bg-apex-panel p-8 text-center">
-          <h3 className="text-lg font-semibold text-apex-text">Prediction unavailable</h3>
-          <p className="mt-2 text-sm text-apex-secondary">
-            No forecast rows are present in the current dashboard export.
-          </p>
+        <div className="leaderboard-panel p-8">
+          <h3>Prediction unavailable</h3>
+          <p>No forecast rows are present in the current dashboard export.</p>
         </div>
       ) : (
-        <div className="mt-6 overflow-hidden rounded-3xl border border-apex-border bg-apex-panel shadow-card">
-          <div className="hidden grid-cols-[64px_minmax(220px,1fr)_160px_130px] gap-4 border-b border-apex-border bg-apex-surface px-6 py-3 text-xs font-semibold uppercase tracking-wide text-apex-muted md:grid">
-            <span>Rank</span>
-            <span>Driver</span>
-            <span>Team</span>
-            <span className="text-right">Predicted gap</span>
-          </div>
-          <ol aria-label="Predicted qualifying ranking">
-            {rows.map((row) => (
-              <li
-                key={`${row.driverCode}-${row.predictedPosition}`}
-                className="relative grid grid-cols-[48px_1fr_auto] items-center gap-3 border-b border-apex-border/70 px-4 py-4 transition-colors last:border-b-0 hover:bg-apex-surface/55 md:grid-cols-[64px_minmax(220px,1fr)_160px_130px] md:gap-4 md:px-6"
-              >
-                <span
-                  className="absolute inset-y-0 left-0 w-1"
-                  style={{ backgroundColor: row.team.primary }}
-                  aria-hidden="true"
+        <div className="pit-grid">
+          <div className="leaderboard-panel">
+            <div className="table-toolbar">
+              <div className="segmented" aria-label="Forecast view">
+                <button
+                  type="button"
+                  className={!reality ? "selected" : ""}
+                  aria-pressed={!reality}
+                  onClick={() => setReality(false)}
+                >
+                  Prediction
+                </button>
+                <button
+                  type="button"
+                  className={reality ? "selected" : ""}
+                  aria-pressed={reality}
+                  disabled={!comparison.length}
+                  onClick={() => setReality(true)}
+                >
+                  vs. reality
+                </button>
+              </div>
+              <label className="search-box">
+                <span aria-hidden="true">⌕</span>
+                <span className="sr-only">Search driver or team</span>
+                <input
+                  type="search"
+                  placeholder="Driver or team…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
                 />
-                <span className="text-2xl font-semibold text-apex-text">
-                  {row.predictedPosition ?? "—"}
-                </span>
-                <div className="flex min-w-0 items-center gap-3">
-                  <TeamMark team={row.team} />
-                  <div className="min-w-0">
-                    <p className="text-lg font-semibold text-apex-text">{row.driverCode}</p>
-                    <p className="truncate text-xs text-apex-muted md:hidden">
-                      {row.team.displayName}
-                    </p>
-                  </div>
-                </div>
-                <p className="hidden truncate text-sm text-apex-secondary md:block">
-                  {row.team.displayName}
+              </label>
+            </div>
+            <div className="ranking-labels" aria-hidden="true">
+              <span>POS</span>
+              <span>DRIVER / TEAM</span>
+              <span>GAP (S)</span>
+              <span>{reality ? "ACTUAL" : "SPREAD"}</span>
+            </div>
+            <ol
+              aria-label="Predicted qualifying ranking"
+              className="racing-ranking"
+            >
+              {visible.map((row) => {
+                const result = comparison.find(
+                  (item) => item.driverCode === row.driverCode,
+                );
+                const spread =
+                  row.intervalUpperSec !== null && row.intervalLowerSec !== null
+                    ? Math.max(0, row.intervalUpperSec - row.intervalLowerSec)
+                    : null;
+                return (
+                  <li
+                    key={row.driverCode}
+                    className={`ranking-row ${selected?.driverCode === row.driverCode ? "selected" : ""}`}
+                    style={
+                      { "--team-color": row.team.primary } as CSSProperties
+                    }
+                  >
+                    <span className="rank-position">
+                      {row.predictedPosition === null
+                        ? "—"
+                        : String(row.predictedPosition).padStart(2, "0")}
+                    </span>
+                    <button
+                      type="button"
+                      className="driver-button"
+                      aria-label={`Explore ${row.driverCode}`}
+                      aria-pressed={selected?.driverCode === row.driverCode}
+                      onClick={() => setSelectedCode(row.driverCode)}
+                    >
+                      <TeamMark team={row.team} size="sm" />
+                      <span>
+                        <strong>{row.driverCode}</strong>
+                        <small>{row.team.displayName}</small>
+                      </span>
+                    </button>
+                    <span
+                      className={`row-gap ${row.predictedPosition === 1 ? "pole" : ""}`}
+                    >
+                      {formatSignedGap(row.predictedGapSec)}
+                    </span>
+                    <span className="spread-cell">
+                      {reality ? (
+                        <span title="Official qualifying position">
+                          {result?.actualPosition
+                            ? `P${result.actualPosition}`
+                            : "—"}
+                        </span>
+                      ) : spread !== null ? (
+                        <span
+                          className="spread-bar"
+                          title={`Prediction interval width: ${spread.toFixed(3)} seconds`}
+                        >
+                          <i
+                            style={{
+                              width: `${Math.min(100, (spread / 3) * 100)}%`,
+                            }}
+                          />
+                        </span>
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+            {!visible.length ? (
+              <p className="no-results" role="status">
+                No drivers match your search.
+              </p>
+            ) : null}
+            <div className="table-bottom">
+              <span className="mono small muted">
+                {visible.length} / {rows.length} DRIVERS
+              </span>
+              {rows.length > 7 ? (
+                <button
+                  className="text-link"
+                  type="button"
+                  onClick={() => setExpanded((value) => !value)}
+                >
+                  {expanded ? "Show top 7 ↑" : "View full field ↓"}
+                </button>
+              ) : null}
+            </div>
+            <p className="table-disclosure">
+              Model estimates of gap to the official pole benchmark. The leading
+              prediction can have a non-zero gap. Spread shows the exported
+              prediction interval when available.
+            </p>
+          </div>
+          {selected ? (
+            <aside
+              className="driver-panel"
+              aria-label="Selected driver details"
+              style={{ "--team-color": selected.team.primary } as CSSProperties}
+            >
+              <div className="driver-panel-top">
+                <span className="eyebrow muted">DRIVER SPOTLIGHT</span>
+                <span className="mono small red-type">↗</span>
+              </div>
+              <span className="driver-monogram" aria-hidden="true">
+                {selected.driverCode}
+              </span>
+              <div className="driver-title">
+                <p className="team-rule">
+                  {selected.team.displayName.toUpperCase()}
                 </p>
-                <div className="text-right">
-                  <p className="font-semibold text-apex-text">{formatSignedGap(row.predictedGapSec)}</p>
-                  {row.intervalLowerSec !== null && row.intervalUpperSec !== null ? (
-                    <p className="mt-1 text-xs text-apex-muted">
-                      {formatSignedGap(row.intervalLowerSec)}–{formatSignedGap(row.intervalUpperSec)}
-                    </p>
-                  ) : null}
+                <h3>{selected.driverName ?? selected.driverCode}</h3>
+                <p>
+                  {selected.driverCode} / PREDICTED P
+                  {selected.predictedPosition ?? "—"}
+                </p>
+              </div>
+              <div className="detail-values">
+                <div>
+                  <span>Predicted gap</span>
+                  <strong>{formatSignedGap(selected.predictedGapSec)}</strong>
                 </div>
-              </li>
-            ))}
-          </ol>
+                <div>
+                  <span>Official result</span>
+                  <strong>
+                    {actual?.actualPosition ? `P${actual.actualPosition}` : "—"}
+                  </strong>
+                </div>
+              </div>
+              <div className="pace-comparison">
+                <div>
+                  <span>PREDICTED GAP</span>
+                  <span>{formatSignedGap(selected.predictedGapSec)}</span>
+                </div>
+                <div className="pace-rail">
+                  <span
+                    style={{
+                      width: `${Math.min(100, (Math.max(0, selected.predictedGapSec ?? 0) / 3) * 100)}%`,
+                    }}
+                  />
+                </div>
+                {actual?.actualGapSec !== null &&
+                actual?.actualGapSec !== undefined ? (
+                  <>
+                    <div>
+                      <span>OFFICIAL GAP</span>
+                      <span>{formatSignedGap(actual.actualGapSec)}</span>
+                    </div>
+                    <div className="pace-rail actual">
+                      <span
+                        style={{
+                          width: `${Math.min(100, (Math.max(0, actual.actualGapSec) / 3) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </>
+                ) : null}
+              </div>
+              <p className="driver-insight">
+                <span className="insight-symbol">↳</span>
+                <span>
+                  {actual?.actualPosition
+                    ? `The preserved forecast placed ${selected.driverCode} P${selected.predictedPosition}; official qualifying position: P${actual.actualPosition}.`
+                    : "This forecast was preserved before qualifying. Official results appear only after settlement."}
+                </span>
+              </p>
+              <p className="detail-note">
+                Public practice data. No private team telemetry. Estimates are
+                model outputs, not guarantees.
+              </p>
+            </aside>
+          ) : null}
         </div>
       )}
     </section>

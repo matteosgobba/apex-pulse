@@ -15,11 +15,15 @@ import {
 export function OperationalWeekendCard({
   event,
   status,
-  initialNow
+  initialNow,
+  primaryHeading = true,
+  showCountdown = true
 }: {
   event: OperationalEvent;
   status?: AutopilotStatusData | null;
   initialNow?: string;
+  primaryHeading?: boolean;
+  showCountdown?: boolean;
 }) {
   const [nowMs, setNowMs] = useState<number | null>(
     initialNow ? Date.parse(initialNow) : null
@@ -35,6 +39,7 @@ export function OperationalWeekendCard({
       window.clearInterval(timer);
     };
   }, [initialNow]);
+  const Heading = primaryHeading ? "h1" : "h2";
   const schedule = operationalEventSchedule(event);
   const forecastNotice = operationalForecastNotice(event, status);
   const weekendLabel =
@@ -53,9 +58,9 @@ export function OperationalWeekendCard({
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-apex-accent">
               {weekendLabel}
             </p>
-            <h1 className="mt-3 break-words text-3xl font-semibold tracking-tight text-apex-text sm:text-4xl">
+            <Heading className="mt-3 break-words text-3xl font-semibold tracking-tight text-apex-text sm:text-4xl">
               {formatEventNameWithFlag(event.event)}
-            </h1>
+            </Heading>
             <p className="mt-2 text-sm text-apex-secondary">
               {event.season} · Round {event.round_number}
             </p>
@@ -77,12 +82,12 @@ export function OperationalWeekendCard({
           <p className="mt-1">{forecastNotice.detail}</p>
         </div>
       </div>
-      <SessionCountdown
+      {showCountdown ? <SessionCountdown
         schedule={schedule}
         lifecycle="practice_in_progress"
         initialNow={initialNow}
         forecastAvailable={event.supported ? (status?.forecast_exists ?? undefined) : false}
-      />
+      /> : null}
       {status?.prediction_policy?.session_data_source === "openf1" ? (
         <div className="rounded-2xl border border-apex-border bg-apex-panel p-5 text-sm text-apex-secondary">
           <p className="font-semibold text-apex-text">Practice data: OpenF1 historical access</p>
