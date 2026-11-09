@@ -47,13 +47,23 @@ only drivers eligible for the weekend qualifying prediction. The practice-eviden
 every driver observed in FP1, FP2 or FP3, including test and substitute drivers, so their laps may
 contribute to team-level features without being copied into another driver's direct features.
 
+The OpenF1 workflow checks FIA entry-list documents and revisions with a publication timestamp before
+the forecast. An explicit event roster remains the operator override. The latest verified practice
+session is the fallback when FIA data is unavailable. A newer FIA driver-change decision with no
+revised list yet is retryable. The successful forecast snapshot records the official document URL
+and timestamp when available, alongside the entrants and their actual model inputs.
+
 Inspect the event audit under
 `reports/metrics/qualifying_entry_lists/<season>/<event>/`. The summary and CSV files identify the
 selected roster source, eligible drivers, all practice participants and their sessions, safe
 practice-only exclusions, current weekend team mapping, and any typed retryable ambiguity. Different
 FP1 and FP3 participant sets are normal and are not a blocker by themselves. Duplicate identities,
 contradictory team mappings in the selected source, missing teams, empty/incomplete source sessions,
-or an otherwise indeterminate current roster remain blockers.
+or an otherwise indeterminate current roster remain blockers. A verified entrant can miss practice
+and still be scored when the team has usable pace from an earlier or the latest session. The
+registered practice artifact retains the full practice population and the frozen scoring input
+contains only entrants. Settlement uses the frozen roster and records actual-only entrants as
+unforecasted.
 
 Before qualifying, retryable roster ambiguity is left to the scheduler so newly published public
 data can resolve it. Once qualifying starts without an immutable forecast, expect
@@ -65,7 +75,8 @@ registry, and do not regenerate historical forecast artifacts.
 Timeouts, unpublished sessions, incomplete public results, and temporary
 Railway network failures remain retryable. The scheduler loop survives, no
 partial forecast or settlement should be committed, and the next scheduled tick
-retries. Human intervention is needed only when retries persist beyond the
+retries. Successful local practice exports with matching event identity and counts are reused
+during OpenF1 access interruptions. Human intervention is needed only when retries persist beyond the
 normal publication delay, the scheduler stops, capacity warnings appear, or a
 blocking integrity/preflight condition is reported.
 

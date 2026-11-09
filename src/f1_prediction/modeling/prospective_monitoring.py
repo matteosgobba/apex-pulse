@@ -17,6 +17,7 @@ from f1_prediction.data.fastf1_loader import build_lap_output_path
 from f1_prediction.data.ingest import build_metadata_output_path
 from f1_prediction.data.monitoring_onboarding import (
     REGISTRY_ONBOARDING_COLUMNS,
+    align_entrant_features,
     ensure_registry_columns,
     feature_artifact_path,
     forbidden_target_columns,
@@ -35,6 +36,7 @@ from f1_prediction.data.qualifying_entry_list import (
     constrain_features_to_entry_list,
 )
 from f1_prediction.data.season_builder import build_combined_dataset_path
+from f1_prediction.features.build import build_session_features_output_path
 from f1_prediction.features.historical_features import add_historical_features
 from f1_prediction.modeling.feature_groups import get_feature_columns_for_group
 from f1_prediction.modeling.fp3_production_policy import serialized_monitoring_write
@@ -268,7 +270,6 @@ def create_prospective_monitoring_forecast(
         registry_path=metrics_dir / "prospective_monitoring_event_registry.csv",
         strict=True,
     )
-    dataset = monitoring_dataset_for_forecast(config, protocol, dataset, event_row)
     policy_context = None
     if policy:
         source_path = resolve_protocol_dataset_path(config, protocol)
@@ -280,16 +281,39 @@ def create_prospective_monitoring_forecast(
             config, protocol, registry, event_row, dataset, policy, forecast_time=utc_now()
         )
         policy_context["qualifying_start_utc"] = deadline
-    entry_audit = audit_qualifying_entry_list(
-        config,
-        season=int(protocol["monitor_season"]),
-        event=str(event_row.get("event", event)),
-        event_order=int(event_order_lineage["event_order"]),
-        feature_rows=dataset[event_key_series(dataset).astype(str).eq(event_key)].copy(),
+    else:
+        dataset = monitoring_dataset_for_forecast(config, protocol, dataset, event_row)
+    season = int(protocol["monitor_season"])
+    event_name = str(event_row.get("event", event))
+    event_order_number = int(event_order_lineage["event_order"])
+    current_rows = event_key_series(dataset).astype(str).eq(event_key)
+    current_features = dataset.loc[current_rows]
+    practice_path = build_session_features_output_path(
+        config.session_features_output_dir, season, event_name
     )
-    if not entry_audit.forecast_allowed:
-        reasons = "; ".join(entry_audit.summary.get("blocking_reasons", []))
-        raise ValueError(f"Qualifying entry-list audit blocks forecast creation: {reasons}")
+    has_practice_aggregates = practice_path.is_file()
+    if has_practice_aggregates:
+        roster = audit_qualifying_entry_list(
+            config, season=season, event=event_name, event_order=event_order_number
+        )
+        if roster.forecast_allowed:
+            current_features = align_entrant_features(
+                current_features, roster.drivers, pd.read_parquet(practice_path)
+            )
+    eligible_features, entry_audit = constrain_features_to_entry_list(
+        config,
+        season=season,
+        event=event_name,
+        event_order=event_order_number,
+        feature_rows=current_features,
+        allow_earlier_practice=has_practice_aggregates,
+    )
+    target_features = current_features.loc[eligible_features.index]
+    dataset = pd.concat(
+        [dataset.loc[~current_rows], target_features], ignore_index=True, sort=False
+    )
+    if policy_context is not None:
+        policy_context["target_features_fingerprint"] = fp3.frame_hash(target_features)
     assert_forecast_can_be_created(
         config,
         protocol_name,
@@ -399,11 +423,12 @@ def create_prospective_monitoring_forecast(
         shadow = forecasts[forecasts["diagnostic_only"].astype(bool)].copy()
     forecast_entry_audit = audit_qualifying_entry_list(
         config,
-        season=int(protocol["monitor_season"]),
-        event=str(event_row.get("event", event)),
-        event_order=int(event_order_lineage["event_order"]),
-        feature_rows=dataset[event_key_series(dataset).astype(str).eq(event_key)].copy(),
+        season=season,
+        event=event_name,
+        event_order=event_order_number,
+        feature_rows=target_features,
         forecast_rows=forecasts,
+        allow_earlier_practice=has_practice_aggregates,
     )
     if not forecast_entry_audit.forecast_allowed:
         reasons = "; ".join(forecast_entry_audit.summary.get("blocking_reasons", []))
@@ -435,7 +460,19 @@ def create_prospective_monitoring_forecast(
             protocol_name,
             str(event_row["event_slug"]),
             forecasts,
-            policy_context,
+            {
+                **policy_context,
+                "qualifying_roster": {
+                    key: entry_audit.summary.get(key)
+                    for key in (
+                        "resolution_source",
+                        "official_document_url",
+                        "official_document_published_at_utc",
+                        "forecast_eligible_drivers",
+                        "excluded_practice_only_drivers",
+                    )
+                },
+            },
             policy,
             source["test"],
         )
@@ -1651,15 +1688,6 @@ def monitoring_dataset_for_forecast(
     for column in target_columns:
         if column not in feature_rows:
             feature_rows[column] = pd.NA
-    feature_rows, _entry_audit = constrain_features_to_entry_list(
-        config,
-        season=int(protocol["monitor_season"]),
-        event=str(event_row.get("event", event_row["event_slug"])),
-        event_order=(
-            int(event_row["event_order"]) if not pd.isna(event_row["event_order"]) else None
-        ),
-        feature_rows=feature_rows,
-    )
     return pd.concat([historical, feature_rows], ignore_index=True, sort=False)
 
 

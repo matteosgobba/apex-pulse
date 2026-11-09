@@ -48,6 +48,7 @@ EVENT_ALIASES: dict[str, set[str]] = {
     "bahrain": {"bahrain", "sakhir"},
     "great-britain": {"great-britain", "britain", "british", "united-kingdom", "silverstone"},
     "italy": {"italy", "italian", "monza"},
+    "mexico-city": {"mexico", "mexico-city"},
     "saudi-arabia": {"saudi-arabia", "saudi-arabian", "jeddah"},
     "united-states": {"united-states", "united-states-of-america", "usa", "us", "austin"},
 }

@@ -7,9 +7,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from test_prospective_monitoring import _config, _init, _write_dataset, _write_target_artifact
+from test_prospective_monitoring import (
+    _config,
+    _init,
+    _write_dataset,
+    _write_entry_list,
+    _write_target_artifact,
+)
 
 from f1_prediction.config import load_data_config, load_feature_config, load_model_config
+from f1_prediction.data.identity import add_identity_columns
+from f1_prediction.data.monitoring_onboarding import build_target_artifacts_with_coverage
 from f1_prediction.features.build import build_session_features_output_path
 from f1_prediction.modeling import fp3_production_policy as policy
 from f1_prediction.modeling import prospective_monitoring as monitoring
@@ -79,6 +87,100 @@ def forecast(config, event="Bahrain", model=None):
 
 def rows(config):
     return pd.read_parquet(config.metrics_output_dir / "prospective_monitoring_forecasts.parquet")
+
+
+def test_forecast_excludes_practice_only_drivers_from_frozen_candidate(project):
+    config, _, _ = project
+    registry_path = config.metrics_output_dir / "prospective_monitoring_event_registry.csv"
+    registry = pd.read_csv(registry_path)
+    current_event = registry.event_slug.eq("bahrain")
+    path = monitoring.resolve_registered_path(
+        config, registry.loc[current_event, "feature_artifact_path"].iloc[0]
+    )
+    features = pd.read_parquet(path)
+    reserve = features.iloc[[0]].assign(driver="RES", driver_key="RES")
+    pd.concat([features, reserve], ignore_index=True).to_parquet(path, index=False)
+    registry.loc[current_event, "feature_artifact_fingerprint"] = (
+        monitoring.onboarding_artifact_fingerprint(path)
+    )
+    registry.to_csv(registry_path, index=False)
+
+    assert forecast(config).status == "forecast_created"
+    data = rows(config)
+    for _, predictions in data.groupby("prediction_role"):
+        assert len(predictions) == len(features)
+        assert set(predictions.driver) == set(features.driver)
+    snapshot = policy.snapshot_path(config, "season_2026_v1", "bahrain")
+    frozen_inputs = pd.read_parquet(snapshot.with_name("target_features.parquet"))
+    assert set(frozen_inputs.driver) == set(features.driver)
+
+
+def test_forecast_fills_team_pace_for_driver_without_personal_practice(project):
+    config, _, _ = project
+    registry = pd.read_csv(config.metrics_output_dir / "prospective_monitoring_event_registry.csv")
+    row = registry.query("event_slug == 'bahrain'").iloc[0]
+    features_path = monitoring.resolve_registered_path(config, row["feature_artifact_path"])
+    features = pd.read_parquet(features_path)
+    features.loc[features.driver.eq("VER"), "fp1_best_push_lap_time_sec"] = np.nan
+    features["fp1_team_best_push_lap_time_sec"] = np.nan
+    features["fp3_team_best_push_lap_time_sec"] = np.nan
+    features.to_parquet(features_path, index=False)
+    registry.loc[registry.event_slug.eq("bahrain"), "feature_artifact_fingerprint"] = (
+        monitoring.onboarding_artifact_fingerprint(features_path)
+    )
+    registry.to_csv(
+        config.metrics_output_dir / "prospective_monitoring_event_registry.csv", index=False
+    )
+    roster = features.copy()
+    roster.loc[roster.driver.eq("HAM"), ["driver", "driver_key"]] = "NEW"
+    roster["team_key"] = roster.team.str.lower().str.replace(" ", "_")
+    _write_entry_list(config, "Bahrain", roster)
+    practice = pd.DataFrame(
+        [
+            ("FP1", "DEV", "Team 0", 79.0),
+            ("FP3", "VER", "Team 0", 80.0),
+            ("FP3", "NOR", "Team 1", 80.2),
+            ("FP3", "LEC", "Team 2", 80.4),
+            ("FP3", "HAM", "Team 3", 80.6),
+        ],
+        columns=["session", "driver", "team", "best_push_lap_time_sec"],
+    ).assign(
+        season=2026, event_slug="bahrain", session_slug=lambda frame: frame.session.str.lower()
+    )
+    path = build_session_features_output_path(config.session_features_output_dir, 2026, "Bahrain")
+    practice.to_parquet(path, index=False)
+
+    assert forecast(config).status == "forecast_created"
+    live = rows(config).query("prediction_role == 'observed_live_policy'")
+    assert set(live.driver) == {"VER", "NOR", "LEC", "NEW"}
+    assert live.prediction_gap_sec.notna().all()
+    snapshot = policy.snapshot_path(config, "season_2026_v1", "bahrain")
+    inputs = pd.read_parquet(snapshot.with_name("target_features.parquet")).set_index("driver")
+    assert pd.isna(inputs.at["VER", "fp1_best_push_lap_time_sec"])
+    assert inputs.at["VER", "fp1_team_best_push_lap_time_sec"] == 79.0
+    assert pd.isna(inputs.at["NEW", "fp3_best_push_lap_time_sec"])
+    assert inputs.at["NEW", "fp3_team_best_push_lap_time_sec"] == 80.6
+
+    actual = inputs.reset_index()[["season", "event", "event_slug", "driver", "team"]]
+    actual = actual.assign(
+        quali_position=[1, 2, 3, 4],
+        quali_gap_to_pole_sec=[0.0, 0.1, 0.2, 0.3],
+        quali_best_lap_time_sec=[80.0, 80.1, 80.2, 80.3],
+    )
+    late_change = actual.iloc[[0]].assign(
+        driver="LATE", quali_position=5, quali_best_lap_time_sec=80.4, quali_gap_to_pole_sec=0.4
+    )
+    targets, coverage, summary = build_target_artifacts_with_coverage(
+        inputs.reset_index(),
+        add_identity_columns(pd.concat([actual, late_change], ignore_index=True)),
+        season=2026,
+        event="Bahrain",
+        allow_unforecasted_targets=True,
+    )
+    assert set(targets.driver) == {"VER", "NOR", "LEC", "NEW", "LATE"}
+    assert set(coverage.loc[coverage.included_in_settlement_metrics, "driver"]) == set(inputs.index)
+    assert coverage.set_index("driver").at["LATE", "settlement_exclusion_reason"] == "no_forecast"
+    assert summary["target_coverage_status"] == "target_coverage_partial"
 
 
 def test_full_lifecycle_separate_history_idempotence_and_readonly_report(project, monkeypatch):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ import pandas as pd
 
 from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig
 from f1_prediction.dashboard.export import export_dashboard_artifacts
+from f1_prediction.data.fia_entry_list import refresh_fia_entry_list
 from f1_prediction.data.ingest import ingest_event
 from f1_prediction.data.monitoring_onboarding import (
     add_monitoring_targets,
@@ -33,6 +35,8 @@ from f1_prediction.data.monitoring_onboarding import (
 from f1_prediction.data.qualifying_entry_list import (
     QualifyingRosterError,
     audit_qualifying_entry_list,
+    local_entry_list_candidate_paths,
+    local_race_roster_candidate_paths,
     qualifying_entry_list_artifact_paths,
 )
 from f1_prediction.data.raw_session_identity import (
@@ -762,6 +766,17 @@ def _resolve_entry_list(
     event: str,
     event_order: int,
 ) -> dict[str, Any]:
+    overrides = (
+        *local_race_roster_candidate_paths(config, season, event),
+        *local_entry_list_candidate_paths(config, season, event),
+    )
+    if config.session_data_source == "openf1" and not any(path.is_file() for path in overrides):
+        from f1_prediction.modeling.fp3_production_policy import qualifying_deadline
+
+        now = datetime.now(timezone.utc)
+        deadline = datetime.fromisoformat(qualifying_deadline(season, slugify(event)))
+        if now < deadline:
+            refresh_fia_entry_list(config, season=season, event=event, cutoff=now)
     audit = audit_qualifying_entry_list(
         config,
         season=season,

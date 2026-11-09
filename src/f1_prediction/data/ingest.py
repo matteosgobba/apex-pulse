@@ -20,7 +20,8 @@ from f1_prediction.data.fastf1_loader import (
 )
 from f1_prediction.utils.paths import ensure_directory, slugify
 
-DEFAULT_EVENT_SESSIONS: tuple[str, ...] = ("FP1", "FP2", "FP3", "Q")
+PRACTICE_SESSIONS = ("FP1", "FP2", "FP3")
+DEFAULT_EVENT_SESSIONS: tuple[str, ...] = (*PRACTICE_SESSIONS, "Q")
 ProgressCallback = Callable[[str], None]
 IngestionStatus = Literal["success", "skipped", "failed"]
 
@@ -87,7 +88,15 @@ def ingest_event(
             session_identifier,
         )
 
-        if not force and _outputs_are_complete(laps_path, metadata_path):
+        complete = _outputs_are_complete(laps_path, metadata_path)
+        if (
+            complete
+            and not force
+            and config.session_data_source == "openf1"
+            and session_identifier in PRACTICE_SESSIONS
+        ):
+            complete = cached_practice_counts(config, season, event, session_identifier) is not None
+        if not force and complete:
             result = SessionIngestionResult(
                 session=session_identifier,
                 status="skipped",
@@ -299,6 +308,34 @@ def _outputs_are_complete(laps_path: Path, metadata_path: Path) -> bool:
     except (OSError, json.JSONDecodeError):
         return False
     return isinstance(metadata, dict) and metadata.get("status") == "success"
+
+
+def cached_practice_counts(
+    config: DataConfig, season: int, event: str, session: str
+) -> tuple[int, int] | None:
+    """Reuse completed practice only when its event, schema and counts agree."""
+    import pandas as pd
+
+    from f1_prediction.data.raw_session_identity import validate_raw_session_identity
+    from f1_prediction.data.schema import validate_lap_schema
+
+    if session not in PRACTICE_SESSIONS:
+        return None
+    identity = validate_raw_session_identity(config, season=season, event=event, session=session)
+    if not identity.identity_match or identity.blocking:
+        return None
+    try:
+        metadata = json.loads(identity.raw_metadata_path.read_text(encoding="utf-8"))
+        laps = pd.read_parquet(identity.raw_laps_path)
+        validate_lap_schema(laps)
+    except (OSError, ValueError):
+        return None
+    counts = (len(laps), laps["Driver"].nunique())
+    if metadata.get("status") != "success" or not all(counts):
+        return None
+    if counts != (metadata.get("n_laps"), metadata.get("n_drivers")):
+        return None
+    return counts
 
 
 def _report(progress: ProgressCallback | None, message: str) -> None:

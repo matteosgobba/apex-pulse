@@ -12,6 +12,7 @@ import pandas as pd
 
 from f1_prediction.config import DataConfig
 from f1_prediction.data.fastf1_loader import build_lap_output_path
+from f1_prediction.data.fia_entry_list import fia_roster_path
 from f1_prediction.data.identity import normalize_team_key
 from f1_prediction.data.ingest import build_metadata_output_path
 from f1_prediction.utils.paths import ensure_directory, slugify
@@ -24,6 +25,7 @@ ENTRY_LIST_PARITY_FAILED = "driver_set_parity_failed"
 LOCAL_PROCESSED_SOURCE = "processed_entry_list_artifact"
 LOCAL_RAW_SOURCE = "official_local_entry_list"
 AUTHORITATIVE_ROSTER_SOURCE = "authoritative_race_driver_roster"
+FIA_ROSTER_SOURCE = "fia_pre_qualifying_entry_list"
 LOCAL_Q_METADATA_SOURCE = "local_q_metadata"
 LATEST_PRE_Q_SOURCE_PREFIX = "latest_completed_pre_qualifying_session"
 FASTF1_Q_RESULTS_SOURCE = "fastf1_q_results"
@@ -74,6 +76,7 @@ def audit_qualifying_entry_list(
     forecast_rows: pd.DataFrame | None = None,
     allow_fastf1: bool = True,
     allow_post_qualifying_sources: bool = False,
+    allow_earlier_practice: bool = False,
 ) -> QualifyingEntryListAudit:
     """Resolve and validate the qualifying-eligible forecast universe for one event."""
     event_slug = slugify(event)
@@ -139,7 +142,7 @@ def audit_qualifying_entry_list(
         )
     missing_features = _missing_driver_keys(drivers, features) if feature_rows is not None else []
     missing_checkpoint_features = (
-        _missing_latest_checkpoint_feature_keys(drivers, features)
+        _missing_latest_checkpoint_feature_keys(drivers, features, allow_earlier_practice)
         if feature_rows is not None
         else []
     )
@@ -227,6 +230,10 @@ def audit_qualifying_entry_list(
         "entry_list_resolution_status": resolution_status,
         "driver_set_parity_status": parity_status,
         "resolution_source": resolution.source,
+        "official_document_url": resolution.metadata.get("official_document_url"),
+        "official_document_published_at_utc": resolution.metadata.get(
+            "official_document_published_at_utc"
+        ),
         "resolution_source_path": _project_relative(resolution.source_path, config.project_root)
         if resolution.source_path
         else "",
@@ -275,14 +282,10 @@ def audit_qualifying_entry_list(
         "forecast_eligible_drivers": sorted(drivers["driver"].astype(str).unique().tolist())
         if not drivers.empty
         else [],
-        "practice_evidence_drivers": sorted(
-            practice["driver"].astype(str).unique().tolist()
-        )
+        "practice_evidence_drivers": sorted(practice["driver"].astype(str).unique().tolist())
         if not practice.empty
         else [],
-        "excluded_practice_only_drivers": sorted(
-            exclusions["driver"].astype(str).unique().tolist()
-        )
+        "excluded_practice_only_drivers": sorted(exclusions["driver"].astype(str).unique().tolist())
         if not exclusions.empty
         else [],
         "roster_validation": resolution.metadata.get("roster_validation", {}),
@@ -326,6 +329,7 @@ def constrain_features_to_entry_list(
     event_order: int | None,
     feature_rows: pd.DataFrame,
     allow_fastf1: bool = True,
+    allow_earlier_practice: bool = False,
 ) -> tuple[pd.DataFrame, QualifyingEntryListAudit]:
     """Return feature rows constrained exactly to qualifying entrants."""
     audit = audit_qualifying_entry_list(
@@ -335,6 +339,7 @@ def constrain_features_to_entry_list(
         event_order=event_order,
         feature_rows=feature_rows,
         allow_fastf1=allow_fastf1,
+        allow_earlier_practice=allow_earlier_practice,
     )
     if not audit.forecast_allowed:
         reasons = "; ".join(audit.summary.get("blocking_reasons", []))
@@ -468,6 +473,43 @@ def _resolve_entry_drivers(
                 "",
                 _resolution_metadata(q_status=q_status, q_required=False, trace=trace),
             )
+    fia_path = fia_roster_path(config, season, event)
+    if fia_path.is_file():
+        payload = json.loads(fia_path.read_text(encoding="utf-8"))
+        if (
+            payload.get("season") != season
+            or payload.get("event_slug") != slugify(event)
+            or pd.Timestamp(payload["published_at_utc"]) > pd.Timestamp(_utc_now())
+        ):
+            raise QualifyingRosterError(
+                "Cached FIA entry list has invalid event identity or publication time",
+                error_code="fia_roster_invalid",
+                retryable=True,
+            )
+        rows = pd.DataFrame(payload["drivers"])
+        practice = _practice_participants(config, season, event)
+        observed_teams = practice.loc[
+            practice["team"].ne(""), ["team", "team_key"]
+        ].drop_duplicates()
+        observed_labels = observed_teams["team"].map(lambda name: f"-{slugify(name)}-")
+        for team in rows["team"].unique():
+            official_team = f"-{slugify(team)}-"
+            matches = observed_labels.map(lambda label, team=official_team: label in team)
+            matched = observed_teams.loc[matches.astype(bool)]
+            if matched["team_key"].nunique() == 1:
+                rows.loc[rows["team"].eq(team), "team"] = matched["team"].iloc[0]
+        trace.append(_trace(FIA_ROSTER_SOURCE, "selected", payload["document_url"]))
+        return EntryDriverResolution(
+            _normalize_entry_rows(rows, season, event, FIA_ROSTER_SOURCE),
+            FIA_ROSTER_SOURCE,
+            fia_path,
+            "",
+            {
+                **_resolution_metadata(q_status=q_status, q_required=False, trace=trace),
+                "official_document_url": payload["document_url"],
+                "official_document_published_at_utc": payload["published_at_utc"],
+            },
+        )
     latest = _resolve_latest_pre_qualifying_session(
         config,
         season=season,
@@ -1255,12 +1297,8 @@ def _practice_evidence_rows(
                 "driver_key": str(driver_key),
                 "observed_sessions": ",".join(sorted(set(group["session"].astype(str)))),
                 "observed_session_count": int(group["session"].nunique()),
-                "observed_teams": ",".join(
-                    sorted(set(group["team"].dropna().astype(str)))
-                ),
-                "observed_team_keys": ",".join(
-                    sorted(set(group["team_key"].dropna().astype(str)))
-                ),
+                "observed_teams": ",".join(sorted(set(group["team"].dropna().astype(str)))),
+                "observed_team_keys": ",".join(sorted(set(group["team_key"].dropna().astype(str)))),
                 "weekend_team": current["team"] if current else latest.get("team", ""),
                 "weekend_team_key": (
                     current["team_key"] if current else latest.get("team_key", "")
@@ -1293,6 +1331,7 @@ def _extra_driver_keys(observed: pd.DataFrame, expected: pd.DataFrame) -> list[s
 def _missing_latest_checkpoint_feature_keys(
     expected: pd.DataFrame,
     features: pd.DataFrame,
+    allow_earlier_practice: bool,
 ) -> list[str]:
     if expected.empty or features.empty or "checkpoint" not in features:
         return []
@@ -1309,6 +1348,13 @@ def _missing_latest_checkpoint_feature_keys(
     ]
     if not latest_columns:
         return []
+    if allow_earlier_practice:
+        sessions = [f"fp{number}_" for number in range(1, int(latest_prefix[2]) + 1)]
+        latest_columns = [
+            column
+            for column in features
+            if column.startswith(tuple(sessions)) and column.endswith("lap_time_sec")
+        ]
     missing: list[str] = []
     by_key = features.groupby("driver_key", sort=False)
     for _, row in expected.iterrows():

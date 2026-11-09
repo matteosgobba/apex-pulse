@@ -18,8 +18,10 @@ from f1_prediction.data.monitoring_onboarding import (
     register_monitoring_event,
     target_artifact_path,
     target_coverage_path,
+    validate_target_artifact,
     validate_target_key_integrity,
 )
+from f1_prediction.modeling import fp3_production_policy as fp3
 from f1_prediction.modeling.prospective_monitoring import (
     create_prospective_monitoring_forecast,
     create_prospective_monitoring_protocol,
@@ -145,6 +147,41 @@ def test_extra_target_rows_still_fail_alignment(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="without matching feature"):
         add_monitoring_targets(config, season=2026, event="Bahrain")
+
+
+def test_target_onboarding_uses_frozen_roster_with_late_driver_change(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    _write_practice_raw(config, 2026, "Bahrain")
+    _write_q_raw(config, 2026, "Bahrain", drivers=("VER", "NOR", "NEW", "LATE"))
+    prepare_monitoring_event(config, _features(), season=2026, event="Bahrain")
+    registered = feature_artifact_path(config, 2026, "Bahrain")
+    original = registered.read_bytes()
+    entrant_features = pd.read_parquet(registered)
+    entrant_features.loc[entrant_features.driver.eq("LEC"), ["driver", "driver_key"]] = [
+        "NEW",
+        "new",
+    ]
+    config.metrics_output_dir.mkdir(parents=True, exist_ok=True)
+    (config.metrics_output_dir / "prospective_monitoring_protocol.json").write_text(
+        json.dumps({"protocol_name": "season_2026_v1"})
+    )
+    snapshot = fp3.snapshot_path(config, "season_2026_v1", "bahrain")
+    snapshot.parent.mkdir(parents=True)
+    inputs_path = snapshot.with_name("target_features.parquet")
+    entrant_features.to_parquet(inputs_path, index=False)
+    snapshot.write_text(
+        json.dumps(
+            {"qualifying_roster": {}, "target_features_file_sha256": fp3.file_hash(inputs_path)}
+        )
+    )
+
+    assert add_monitoring_targets(config, season=2026, event="Bahrain").status == "targets_added"
+    assert validate_target_artifact(config, 2026, "Bahrain") == (True, "")
+    coverage = pd.read_csv(target_coverage_path(config, 2026, "Bahrain")).set_index("driver")
+    assert coverage.at["NEW", "included_in_settlement_metrics"]
+    assert coverage.at["LATE", "settlement_exclusion_reason"] == "no_forecast"
+    assert coverage.at["HAM", "settlement_exclusion_reason"] == "no_qualifying_lap_rows"
+    assert registered.read_bytes() == original
 
 
 def test_identifier_conflicts_still_fail() -> None:

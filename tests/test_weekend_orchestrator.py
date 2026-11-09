@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,10 @@ import pytest
 from fastf1.exceptions import DataNotLoadedError
 
 from f1_prediction.config import DataConfig, load_feature_config, load_model_config
+from f1_prediction.data.fastf1_loader import build_lap_output_path
+from f1_prediction.data.ingest import build_metadata_output_path
 from f1_prediction.data.qualifying_entry_list import QualifyingRosterError
+from f1_prediction.data.schema import REQUIRED_LAP_COLUMNS
 from f1_prediction.modeling.monitoring_operations import MonitoringWorkflowSummary
 from f1_prediction.modeling.weekend_orchestrator import (
     AUTOPILOT_ENABLED_ENV,
@@ -206,6 +210,39 @@ def test_readiness_missing_timing_explains_session_and_retries(monkeypatch, tmp_
     assert result.retryable
     assert "FP3 after Session.load" in result.reason
     assert "/static/example/Practice_3/" in result.reason
+
+
+def test_openf1_readiness_reuses_verified_practice_when_upstream_is_unavailable(
+    monkeypatch, tmp_path
+):
+    config = replace(_data_config(tmp_path), session_data_source="openf1")
+    event = _event()
+    path = build_lap_output_path(config.lap_output_dir, event.season, event.event, "FP3")
+    pd.DataFrame([{**dict.fromkeys(REQUIRED_LAP_COLUMNS), "Driver": "AAA"}]).to_parquet(path)
+    metadata = build_metadata_output_path(
+        config.session_metadata_output_dir, event.season, event.event, "FP3"
+    )
+    payload = {
+        "season": event.season,
+        "event_input": event.event,
+        "event_name": event.event,
+        "event_slug": event.event_slug,
+        "session_input": "FP3",
+        "session_slug": "fp3",
+        "n_laps": 1,
+        "n_drivers": 1,
+        "status": "success",
+    }
+    metadata.write_text(json.dumps(payload))
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("OpenF1 HTTP 401")
+
+    monkeypatch.setattr("f1_prediction.data.openf1_loader.load_openf1_session_data", unavailable)
+    provider = FastF1ReadinessProvider(config)
+    assert provider.probe(event, "FP3").status == ProbeStatus.READY
+    metadata.write_text(json.dumps({**payload, "n_drivers": 2}))
+    assert provider.probe(event, "FP3").status != ProbeStatus.READY
 
 
 @pytest.mark.parametrize(

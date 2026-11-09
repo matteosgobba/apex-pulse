@@ -23,6 +23,7 @@ from fastf1.exceptions import DataNotLoadedError
 
 from f1_prediction.config import DataConfig, FeatureConfig, ModelConfig
 from f1_prediction.data.cache import initialize_fastf1_cache
+from f1_prediction.data.ingest import cached_practice_counts
 from f1_prediction.modeling.monitoring_operations import (
     DEFAULT_PROTOCOL_NAME,
     MonitoringWorkflowSummary,
@@ -284,6 +285,16 @@ class FastF1ReadinessProvider:
             if self.data_config.session_data_source == "openf1":
                 from f1_prediction.data.openf1_loader import load_openf1_session_data
 
+                cached = cached_practice_counts(
+                    self.data_config, event.season, event.event, session_code
+                )
+                if cached is not None:
+                    return ReadinessProbeResult(
+                        ProbeStatus.READY,
+                        f"Verified local {session_code} practice laps are available.",
+                        lap_count=cached[0],
+                        driver_count=cached[1],
+                    )
                 loaded = load_openf1_session_data(
                     event.season,
                     event.event,

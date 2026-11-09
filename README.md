@@ -131,17 +131,20 @@ The pre-qualifying workflow keeps two event-scoped populations separate:
 * `forecast_eligible_drivers` is the authoritative weekend roster that receives predictions;
 * `practice_evidence_drivers` contains everyone who produced usable FP1/FP2/FP3 data.
 
-On a conventional weekend the latest complete, internally valid pre-qualifying session normally
-defines the roster (FP3, with FP2 as a fallback when FP3 is not yet available). An FP1-only test or
-substitute driver is excluded from the forecast ranking without invalidating that roster. Their lap
-times remain available to session-and-team aggregates, which are joined to eligible drivers through
-the current weekend `team_key`; direct driver features remain missing when the eligible driver did
-not take part in that session.
+On a conventional weekend the live workflow checks the latest pre-qualifying FIA entry list,
+including revisions. An explicit event roster takes precedence. The latest completed practice
+session supplies the roster when an official list is unavailable. When the FIA announces a driver
+change and its revised list is pending, the scheduler retries the roster check.
 
-Audit outputs record the selected roster source, all practice participants and observed sessions,
-safe pre-qualifying exclusions, current weekend team mapping, and retryable or blocking ambiguity.
-No qualifying data is used to create a pre-qualifying forecast, and a missed forecast window is never
-backfilled retrospectively.
+All practice participants contribute to the pace aggregates for their team and session. The scoring
+rows cover only the entrants. A confirmed replacement with no personal laps can receive a prediction
+from usable practice pace for their team. Personal lap, sector and tyre features are populated only
+from that driver's own running for the team. A team-based estimate has less driver-specific evidence.
+
+The immutable forecast records the roster, source and scoring inputs available at publication.
+Changes announced afterward appear as partial coverage when qualifying results arrive. Evaluation
+uses the drivers with matching predictions and outcomes. A missed publication window stays recorded
+as missed.
 
 ### Model and policy governance
 
